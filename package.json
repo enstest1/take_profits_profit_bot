@@ -1,6 +1,7 @@
 {
-  "name": "autotrack-bot",
+  "name": "take-profits-bot",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -12,7 +13,6 @@
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5",
     "node-cron": "^3.0.3",
-    "moralis": "^2.26.1",
     "node-fetch": "^3.3.2"
   }
 }
