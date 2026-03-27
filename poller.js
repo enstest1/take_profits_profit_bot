@@ -18,9 +18,9 @@ function saveDB(db) {
 function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
   const num = Number(n);
-  if (num >= 1_000_000_000) return '$' + (num / 1e9).toFixed(2) + 'B';
-  if (num >= 1_000_000) return '$' + (num / 1e6).toFixed(2) + 'M';
-  if (num >= 1_000) return '$' + (num / 1e3).toFixed(1) + 'K';
+  if (num >= 1000000000) return '$' + (num / 1e9).toFixed(2) + 'B';
+  if (num >= 1000000) return '$' + (num / 1e6).toFixed(2) + 'M';
+  if (num >= 1000) return '$' + (num / 1e3).toFixed(1) + 'K';
   return '$' + num.toFixed(4);
 }
 
@@ -30,7 +30,6 @@ function fmtTime(ms) {
   const m = Math.floor(diff / 60000);
   const h = Math.floor(m / 60);
   const d = Math.floor(h / 24);
-  if (d >= 365) return Math.floor(d / 365) + 'y ago';
   if (d > 0) return d + 'd ago';
   if (h > 0) return h + 'h ago';
   if (m > 0) return m + 'm ago';
@@ -40,31 +39,44 @@ function fmtTime(ms) {
 // In-memory lock — prevents double-processing same token
 const pollingLock = new Set();
 
-async function fetchTokenDex(address) {
+// Birdeye — single call gets everything we need
+async function fetchBirdeye(address) {
+  if (!process.env.BIRDEYE_API_KEY) return null;
   try {
-    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
-      signal: AbortSignal.timeout(8000)
-    });
+    const res = await fetch(
+      'https://public-api.birdeye.so/defi/token_overview?address=' + address,
+      {
+        headers: {
+          'X-API-KEY': process.env.BIRDEYE_API_KEY,
+          'x-chain': 'solana',
+          'accept': 'application/json'
+        },
+        signal: AbortSignal.timeout(8000)
+      }
+    );
     if (!res.ok) return null;
-    const data = await res.json();
-    const pair = data.pairs && data.pairs[0];
-    if (!pair) return null;
+    const json = await res.json();
+    const d = json && json.data;
+    if (!d) return null;
     return {
-      price: pair.priceUsd,
-      marketCap: pair.marketCap,
-      volume24h: (pair.volume && pair.volume.h24) || 0,
-      buys24h: (pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0,
-      sells24h: (pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0,
-      liquidity: (pair.liquidity && pair.liquidity.usd) || 0,
-      dexUrl: pair.url
+      price: d.price || null,
+      marketCap: d.mc || d.marketCap || null,
+      volume24h: d.v24hUSD || d.v24h || null,
+      volume1h: d.v1hUSD || d.v1h || null,
+      priceChange1h: d.priceChange1hPercent || null,
+      priceChange24h: d.priceChange24hPercent || null,
+      buys24h: d.buy24h || null,
+      sells24h: d.sell24h || null,
+      liquidity: d.liquidity || null,
     };
   } catch (e) {
-    console.error('[dex] fetch failed for ' + address + ':', e.message);
+    console.error('[birdeye] poll failed for ' + address + ':', e.message);
     return null;
   }
 }
 
-async function fetchPumpFunToken(address) {
+// Pump.fun for pre-graduation tokens
+async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
       signal: AbortSignal.timeout(8000)
@@ -74,7 +86,7 @@ async function fetchPumpFunToken(address) {
     if (!d || !d.mint) return null;
     return d;
   } catch (e) {
-    console.error('[pumpfun] fetch failed for ' + address + ':', e.message);
+    console.error('[pumpfun] poll failed for ' + address + ':', e.message);
     return null;
   }
 }
@@ -122,7 +134,7 @@ export async function pollTokens(client) {
 
   for (const address of addresses) {
     if (pollingLock.has(address)) {
-      console.log('[poll] Skipping ' + address + ' — already locked');
+      console.log('[poll] Skipping ' + address + ' — locked');
       continue;
     }
     pollingLock.add(address);
@@ -153,12 +165,13 @@ async function processToken(client, address, db, solPriceUsd) {
   let liveVolume = null;
   let liveBuyPct = null;
   let liveSellPct = null;
-  let dexUrl = entry.dexUrl || null;
+  let liveLiquidity = null;
+  let priceChange1h = null;
 
-  const platform = entry.platform || 'dexscreener';
+  const platform = entry.platform || 'birdeye';
 
   if (platform === 'pumpfun' && !graduationAlertFired) {
-    const pumpData = await fetchPumpFunToken(address);
+    const pumpData = await fetchPumpFun(address);
     if (!pumpData) return;
 
     if (pumpData.complete === true && !graduationAlertFired) {
@@ -168,7 +181,7 @@ async function processToken(client, address, db, solPriceUsd) {
         .setDescription(
           '**' + entry.name + '** completed its bonding curve and is now trading on Raydium.\n\n' +
           'Posted by **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + '\n' +
-          'Entry: $' + entry.priceAtCall
+          'Entry MCap: ' + fmtUsd(entry.mcapAtCall)
         )
         .addFields(
           { name: 'Final MCap', value: fmtUsd(pumpData.usd_market_cap), inline: true },
@@ -178,13 +191,14 @@ async function processToken(client, address, db, solPriceUsd) {
         .setTimestamp();
 
       await sendEmbed(client, entry.alertChannelId, embed);
-      db.tokens[address].platform = 'dexscreener';
+      db.tokens[address].platform = 'birdeye';
       db.tokens[address].graduationAlertFired = true;
       saveDB(db);
-      console.log('[graduation] ' + entry.name + ' graduated');
+      console.log('[graduation] ' + entry.name + ' graduated — switching to Birdeye');
       return;
     }
 
+    // Still on bonding curve — use pump.fun price
     if (solPriceUsd) {
       livePrice = calcPumpFunPrice(pumpData, solPriceUsd);
     }
@@ -216,13 +230,15 @@ async function processToken(client, address, db, solPriceUsd) {
     }
 
   } else {
-    const live = await fetchTokenDex(address);
+    // Use Birdeye for graduated tokens — much better data quality
+    const live = await fetchBirdeye(address);
     if (!live) return;
 
-    livePrice = live.price ? Number(live.price) : null;
+    livePrice = live.price || null;
     liveMcap = live.marketCap;
     liveVolume = live.volume24h;
-    dexUrl = live.dexUrl || dexUrl;
+    liveLiquidity = live.liquidity;
+    priceChange1h = live.priceChange1h;
 
     const totalTxns = (live.buys24h || 0) + (live.sells24h || 0);
     if (totalTxns > 0) {
@@ -236,7 +252,7 @@ async function processToken(client, address, db, solPriceUsd) {
     return;
   }
 
-  const currentMultiple = livePrice / Number(entry.priceAtCall);
+  const currentMultiple = Number(livePrice) / Number(entry.priceAtCall);
   const buyPctStr = liveBuyPct !== null ? liveBuyPct + '%' : '—';
   const sellPctStr = liveSellPct !== null ? liveSellPct + '%' : '—';
 
@@ -252,25 +268,26 @@ async function processToken(client, address, db, solPriceUsd) {
     }
   }
 
-  const curMilestones = db.tokens[address].milestonesFired || [];
-  const curTakeProfit = db.tokens[address].takeProfitFired || false;
   const curGainAlert = db.tokens[address].gainAlertFired || false;
+  const curTakeProfit = db.tokens[address].takeProfitFired || false;
 
   // Check A: +75% gain alert
   if (currentMultiple >= 1.75 && !curGainAlert) {
+    const desc = '**' + entry.name + '** is up 75% from entry.\n\n' +
+      'Now: $' + Number(livePrice).toFixed(8) + '\n' +
+      'Entry: $' + entry.priceAtCall + ' · **' + entry.postedBy + '**\n\n' +
+      'Buy pressure: ' + buyPctStr +
+      (liveLiquidity ? '\n💧 Liquidity: ' + fmtUsd(liveLiquidity) : '') +
+      (priceChange1h ? '\n1h change: ' + (priceChange1h > 0 ? '+' : '') + priceChange1h.toFixed(1) + '%' : '') +
+      '\n\n*Not financial advice.*';
+
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
       .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% from entry')
-      .setDescription(
-        '**' + entry.name + '** is up 75% from entry.\n\n' +
-        'Now: $' + livePrice.toFixed(8) + '\n' +
-        'Entry: $' + entry.priceAtCall + ' · **' + entry.postedBy + '**\n\n' +
-        'Buy pressure: ' + buyPctStr + '\n\n' +
-        '*Not financial advice.*'
-      )
+      .setDescription(desc)
       .addFields(
         { name: 'MCap', value: fmtUsd(liveMcap), inline: true },
-        { name: 'Chain', value: (entry.chain || 'SOL').toUpperCase(), inline: true }
+        { name: 'Chain', value: 'SOLANA', inline: true }
       )
       .setFooter({ text: entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
       .setTimestamp();
@@ -292,8 +309,10 @@ async function processToken(client, address, db, solPriceUsd) {
         .setDescription(
           '**' + entry.name + '** just hit **' + milestone + 'x** from entry.\n\n' +
           '**' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + '\n' +
-          'Entry: $' + entry.priceAtCall + ' → Now: $' + livePrice.toFixed(8) + '\n\n' +
-          'Buy pressure: ' + buyPctStr
+          'Entry: $' + entry.priceAtCall + '\n' +
+          'Now: $' + Number(livePrice).toFixed(8) + ' · MCap: ' + fmtUsd(liveMcap) + '\n\n' +
+          'Buy pressure: ' + buyPctStr +
+          (liveLiquidity ? '\n💧 Liquidity: ' + fmtUsd(liveLiquidity) : '')
         )
         .setFooter({ text: address })
         .setTimestamp();
@@ -314,7 +333,9 @@ async function processToken(client, address, db, solPriceUsd) {
       .setDescription(
         entry.name + ' has doubled from entry.\n\n' +
         '👀 Might be worth taking some off the table.\n\n' +
-        'Buy pressure: ' + buyPctStr + ' — Sell pressure: ' + sellPctStr + '\n\n' +
+        'Buy pressure: ' + buyPctStr + ' — Sell: ' + sellPctStr + '\n' +
+        'MCap: ' + fmtUsd(liveMcap) +
+        (liveLiquidity ? '\n💧 Liquidity: ' + fmtUsd(liveLiquidity) : '') + '\n\n' +
         '*Not financial advice — just a nudge.*'
       )
       .setFooter({ text: entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
@@ -328,9 +349,12 @@ async function processToken(client, address, db, solPriceUsd) {
 
   // Update tracking fields
   const newPeak = Math.max(entry.peakMultiple || 1, currentMultiple);
-  db.tokens[address].lastPrice = livePrice.toString();
+  db.tokens[address].lastPrice = String(livePrice);
   db.tokens[address].lastVolume = liveVolume || 0;
   db.tokens[address].lastChecked = Date.now();
   db.tokens[address].peakMultiple = newPeak;
-  if (dexUrl) db.tokens[address].dexUrl = dexUrl;
+  if (liveBuyPct !== null) {
+    db.tokens[address].buyPressure = liveBuyPct;
+    db.tokens[address].sellPressure = liveSellPct;
+  }
 }
