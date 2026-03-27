@@ -56,29 +56,22 @@ function fmtTime(ms) {
 }
 
 function getTokenAgeFlag(createdAtMs) {
-  if (!createdAtMs) return { flag: null, label: 'unknown age' };
+  if (!createdAtMs) return null;
   const ageHours = (Date.now() - createdAtMs) / 3600000;
-  if (ageHours < 1) return { flag: '🔥', label: '< 1h old' };
-  if (ageHours < 24) return { flag: '⚡', label: Math.floor(ageHours) + 'h old' };
-  return { flag: null, label: Math.floor(ageHours / 24) + 'd old' };
+  if (ageHours < 1) return '🔥 < 1h old';
+  if (ageHours < 24) return '⚡ ' + Math.floor(ageHours) + 'h old';
+  return Math.floor(ageHours / 24) + 'd old';
 }
 
 function extractAddresses(text) {
   const found = new Set();
-
   const evmMatches = text.match(/\b0x[a-fA-F0-9]{40}\b/g) || [];
-  for (const addr of evmMatches) {
-    found.add(addr.toLowerCase());
-  }
-
+  for (const addr of evmMatches) found.add(addr.toLowerCase());
   const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g) || [];
   for (const addr of solanaMatches) {
     if (addr.length < 32) continue;
-    if (/\d/.test(addr) && !/[0OIl]/.test(addr)) {
-      found.add(addr);
-    }
+    if (/\d/.test(addr) && !/[0OIl]/.test(addr)) found.add(addr);
   }
-
   return Array.from(found);
 }
 
@@ -103,14 +96,8 @@ async function fetchBirdeye(address) {
     return {
       price: d.price || null,
       marketCap: d.mc || d.marketCap || null,
-      fdv: d.fdv || null,
-      liquidity: d.liquidity || null,
-      volume24h: d.v24hUSD || d.v24h || null,
-      volume1h: d.v1hUSD || d.v1h || null,
-      priceChange1h: d.priceChange1hPercent || null,
       buys24h: d.buy24h || null,
       sells24h: d.sell24h || null,
-      uniqueWallets24h: d.uniqueWallet24h || null,
       createdAt: d.createdAt || null,
       name: d.name || null,
       symbol: d.symbol || null,
@@ -118,6 +105,21 @@ async function fetchBirdeye(address) {
     };
   } catch (e) {
     console.error('[birdeye] failed for ' + address + ':', e.message);
+    return null;
+  }
+}
+
+async function fetchDexScreener(address) {
+  try {
+    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const pair = data.pairs && data.pairs[0];
+    if (!pair) return null;
+    return { pairCreatedAt: pair.pairCreatedAt || null };
+  } catch {
     return null;
   }
 }
@@ -140,28 +142,33 @@ async function fetchPumpFun(address) {
 async function fetchTokenData(address) {
   const birdeye = await fetchBirdeye(address);
   if (birdeye && birdeye.price) {
+    // Birdeye found — get age from createdAt, fallback to DexScreener if missing
+    let pairCreatedAt = birdeye.createdAt ? birdeye.createdAt * 1000 : null;
+    if (!pairCreatedAt) {
+      const dex = await fetchDexScreener(address).catch(() => null);
+      if (dex && dex.pairCreatedAt) pairCreatedAt = dex.pairCreatedAt;
+    }
     return {
       platform: 'birdeye',
       name: birdeye.name,
       symbol: birdeye.symbol,
-      chain: 'solana',
       price: birdeye.price ? String(birdeye.price) : null,
       marketCap: birdeye.marketCap,
       buys24h: birdeye.buys24h,
       sells24h: birdeye.sells24h,
       dexUrl: 'https://birdeye.so/token/' + address + '?chain=solana',
       imageUrl: birdeye.logoURI || null,
-      pairCreatedAt: birdeye.createdAt ? birdeye.createdAt * 1000 : null,
+      pairCreatedAt: pairCreatedAt,
     };
   }
 
+  // Fallback to pump.fun
   const pump = await fetchPumpFun(address);
   if (pump) {
     return {
       platform: 'pumpfun',
       name: pump.name,
       symbol: pump.symbol,
-      chain: 'solana',
       price: null,
       marketCap: pump.usd_market_cap || 0,
       buys24h: null,
@@ -190,7 +197,7 @@ async function autoTrack(address, message) {
         embeds: [{
           color: 0xffaa00,
           description: '👀 Already tracking **' + existing.name + ' (' + existing.symbol + ')** — first posted by **' + existing.postedBy + '** ' + fmtTime(existing.postedAt) + ' in <#' + existing.alertChannelId + '>',
-          footer: { text: address }
+          footer: { text: 'SOLANA' }
         }]
       });
     }
@@ -200,11 +207,14 @@ async function autoTrack(address, message) {
   const token = await fetchTokenData(address);
   if (!token) return;
 
-  const ageFlag = getTokenAgeFlag(token.pairCreatedAt);
+  // Age — only show if we have it
+  const ageStr = getTokenAgeFlag(token.pairCreatedAt);
+  const posterLine = ageStr
+    ? 'Posted by **' + message.author.username + '** · ' + ageStr
+    : 'Posted by **' + message.author.username + '**';
 
-  // ── Simplified tracking card — just poster, age, mcap, link ──
   const descParts = [
-    'Posted by **' + message.author.username + '** · ' + (ageFlag.flag ? ageFlag.flag + ' ' : '') + ageFlag.label,
+    posterLine,
     'MCap: **' + fmtUsd(token.marketCap) + '**',
   ];
 
@@ -212,15 +222,11 @@ async function autoTrack(address, message) {
     descParts.push('⏳ Bonding curve: **' + (token.bondingProgress ? token.bondingProgress.toFixed(0) : 0) + '%** to Raydium');
   }
 
-  if (token.platform === 'pumpfun') {
-    descParts.push('[pump.fun](' + token.dexUrl + ')');
-  }
-
   const embed = new EmbedBuilder()
     .setColor(0x00ccff)
     .setAuthor({ name: '📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')' })
     .setDescription(descParts.join('\n'))
-    .setFooter({ text: address + ' · SOLANA' })
+    .setFooter({ text: 'SOLANA' })
     .setTimestamp();
 
   if (token.imageUrl) embed.setThumbnail(token.imageUrl);
@@ -229,9 +235,7 @@ async function autoTrack(address, message) {
 
   const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
   let buyPressurePct = null;
-  if (totalTxns > 0) {
-    buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
-  }
+  if (totalTxns > 0) buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
 
   db.tokens[address] = {
     address,
@@ -257,7 +261,7 @@ async function autoTrack(address, message) {
     bondingProgress: token.bondingProgress || 0,
     graduationAlertFired: false,
     bondingAlertFired: false,
-    tokenAge: (ageFlag.flag ? ageFlag.flag + ' ' : '') + ageFlag.label,
+    tokenAge: ageStr || 'unknown',
     dexUrl: token.dexUrl,
     devWallet: token.creator || null,
     devHoldingAtCall: 0,
@@ -274,12 +278,9 @@ async function autoTrack(address, message) {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
-
   const addresses = extractAddresses(message.content);
   if (addresses.length === 0) return;
-
-  console.log('[detect] Found ' + addresses.length + ' address(es) from ' + message.author.username + ': ' + addresses.join(', '));
-
+  console.log('[detect] Found ' + addresses.length + ' address(es) from ' + message.author.username);
   for (const address of addresses) {
     await autoTrack(address, message).catch(e =>
       console.error('[autotrack] Error for ' + address + ':', e.message)
@@ -313,15 +314,12 @@ async function handleCalls(interaction) {
   await interaction.deferReply();
   const db = loadDB();
   const entries = Object.values(db.tokens || {});
-
   if (entries.length === 0) {
     return interaction.editReply('Nothing tracked yet — drop a contract address in chat.');
   }
-
   const liveData = await Promise.allSettled(
     entries.map(e => fetchTokenData(e.address).catch(() => null))
   );
-
   const lines = entries.map((entry, i) => {
     const live = liveData[i].status === 'fulfilled' ? liveData[i].value : null;
     const livePrice = live && live.price ? Number(live.price) : null;
@@ -329,35 +327,26 @@ async function handleCalls(interaction) {
     let multipleStr = '—';
     if (livePrice && priceAtCall && priceAtCall > 0) {
       const mult = livePrice / priceAtCall;
-      multipleStr = mult >= 2
-        ? '🚀 **' + mult.toFixed(2) + 'x**'
-        : mult >= 1
-          ? '📈 ' + mult.toFixed(2) + 'x'
-          : '📉 ' + mult.toFixed(2) + 'x';
+      multipleStr = mult >= 2 ? '🚀 **' + mult.toFixed(2) + 'x**' : mult >= 1 ? '📈 ' + mult.toFixed(2) + 'x' : '📉 ' + mult.toFixed(2) + 'x';
     }
-    const mcap = live ? live.marketCap : null;
     return '**' + entry.name + ' (' + entry.symbol + ')** — ' + multipleStr + '\n' +
-           '└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + ' · MCap: ' + fmtUsd(mcap);
+           '└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + ' · MCap: ' + fmtUsd(live ? live.marketCap : null);
   });
-
   const embed = new EmbedBuilder()
     .setColor(0x7c3aed)
     .setTitle('Tracked Tokens')
     .setDescription(lines.join('\n\n').slice(0, 4000))
     .setFooter({ text: entries.length + ' token' + (entries.length !== 1 ? 's' : '') + ' being watched' })
     .setTimestamp();
-
   await interaction.editReply({ embeds: [embed] });
 }
 
 async function handleRemove(interaction) {
   const address = interaction.options.getString('address').trim();
   const db = loadDB();
-
   if (!db.tokens[address]) {
     return interaction.reply({ content: 'Not tracking ' + address, ephemeral: true });
   }
-
   const name = db.tokens[address].name;
   const symbol = db.tokens[address].symbol;
   delete db.tokens[address];
@@ -373,17 +362,13 @@ client.on('interactionCreate', async (interaction) => {
   } catch (e) {
     console.error('[interaction] error:', e);
     const msg = { content: 'Error: ' + e.message, ephemeral: true };
-    if (interaction.deferred || interaction.replied) {
-      interaction.editReply(msg).catch(() => null);
-    } else {
-      interaction.reply(msg).catch(() => null);
-    }
+    if (interaction.deferred || interaction.replied) interaction.editReply(msg).catch(() => null);
+    else interaction.reply(msg).catch(() => null);
   }
 });
 
 client.once('ready', () => {
   console.log('Bot online as ' + client.user.tag);
-  console.log('Watching all channels for contract addresses');
   pollTokens(client);
   setInterval(() => pollTokens(client), 3 * 60 * 1000);
 });
