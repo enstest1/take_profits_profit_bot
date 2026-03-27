@@ -21,7 +21,6 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
-// DB
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 
@@ -35,7 +34,6 @@ function saveDB(db) {
   catch (e) { console.error('[DB] saveDB failed:', e.message); }
 }
 
-// Format helpers
 function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
   const num = Number(n);
@@ -65,7 +63,6 @@ function getTokenAgeFlag(createdAtMs) {
   return { flag: null, label: Math.floor(ageHours / 24) + 'd old' };
 }
 
-// Extract and deduplicate addresses from message text
 function extractAddresses(text) {
   const found = new Set();
 
@@ -85,7 +82,6 @@ function extractAddresses(text) {
   return Array.from(found);
 }
 
-// Birdeye token overview — single call gives price, mcap, volume, liquidity, age, buys/sells
 async function fetchBirdeye(address) {
   if (!process.env.BIRDEYE_API_KEY) return null;
   try {
@@ -111,7 +107,6 @@ async function fetchBirdeye(address) {
       liquidity: d.liquidity || null,
       volume24h: d.v24hUSD || d.v24h || null,
       volume1h: d.v1hUSD || d.v1h || null,
-      priceChange24h: d.priceChange24hPercent || null,
       priceChange1h: d.priceChange1hPercent || null,
       buys24h: d.buy24h || null,
       sells24h: d.sell24h || null,
@@ -120,7 +115,6 @@ async function fetchBirdeye(address) {
       name: d.name || null,
       symbol: d.symbol || null,
       logoURI: d.logoURI || null,
-      extensions: d.extensions || null,
     };
   } catch (e) {
     console.error('[birdeye] failed for ' + address + ':', e.message);
@@ -128,7 +122,6 @@ async function fetchBirdeye(address) {
   }
 }
 
-// Pump.fun for pre-graduation tokens
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -144,10 +137,7 @@ async function fetchPumpFun(address) {
   }
 }
 
-// Fetch token data — Birdeye first, fallback to pump.fun
 async function fetchTokenData(address) {
-
-  // Try Birdeye first — covers both graduated and many pre-graduation tokens
   const birdeye = await fetchBirdeye(address);
   if (birdeye && birdeye.price) {
     return {
@@ -157,22 +147,14 @@ async function fetchTokenData(address) {
       chain: 'solana',
       price: birdeye.price ? String(birdeye.price) : null,
       marketCap: birdeye.marketCap,
-      fdv: birdeye.fdv,
-      liquidity: birdeye.liquidity,
-      volume24h: birdeye.volume24h,
-      volume1h: birdeye.volume1h,
-      priceChange1h: birdeye.priceChange1h,
-      priceChange24h: birdeye.priceChange24h,
       buys24h: birdeye.buys24h,
       sells24h: birdeye.sells24h,
-      uniqueWallets24h: birdeye.uniqueWallets24h,
       dexUrl: 'https://birdeye.so/token/' + address + '?chain=solana',
       imageUrl: birdeye.logoURI || null,
       pairCreatedAt: birdeye.createdAt ? birdeye.createdAt * 1000 : null,
     };
   }
 
-  // Fallback to pump.fun for pre-graduation tokens Birdeye doesn't have yet
   const pump = await fetchPumpFun(address);
   if (pump) {
     return {
@@ -182,15 +164,8 @@ async function fetchTokenData(address) {
       chain: 'solana',
       price: null,
       marketCap: pump.usd_market_cap || 0,
-      fdv: null,
-      liquidity: null,
-      volume24h: null,
-      volume1h: null,
-      priceChange1h: null,
-      priceChange24h: null,
       buys24h: null,
       sells24h: null,
-      uniqueWallets24h: null,
       dexUrl: 'https://pump.fun/' + address,
       imageUrl: pump.image_uri || null,
       pairCreatedAt: pump.created_timestamp || null,
@@ -205,7 +180,6 @@ async function fetchTokenData(address) {
   return null;
 }
 
-// Auto-track a detected address
 async function autoTrack(address, message) {
   const db = loadDB();
 
@@ -228,42 +202,19 @@ async function autoTrack(address, message) {
 
   const ageFlag = getTokenAgeFlag(token.pairCreatedAt);
 
-  // Buy/sell pressure
-  const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
-  let buyPressurePct = null;
-  if (totalTxns > 0) {
-    buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
-  }
-  const pressureIndicator = buyPressurePct !== null
-    ? buyPressurePct >= 60 ? '🟢' : buyPressurePct <= 40 ? '🔴' : '🟡'
-    : '🟡';
-
+  // ── Simplified tracking card — just poster, age, mcap, link ──
   const descParts = [
     'Posted by **' + message.author.username + '** · ' + (ageFlag.flag ? ageFlag.flag + ' ' : '') + ageFlag.label,
-    'Entry: **' + (token.price ? '$' + Number(token.price).toFixed(8) : 'Bonding curve') + '** · MCap: **' + fmtUsd(token.marketCap) + '**',
+    'MCap: **' + fmtUsd(token.marketCap) + '**',
   ];
-
-  if (token.liquidity) {
-    descParts.push('💧 Liquidity: **' + fmtUsd(token.liquidity) + '**');
-  }
-
-  if (token.volume1h) {
-    descParts.push('📊 Vol 1h: **' + fmtUsd(token.volume1h) + '**' + (token.priceChange1h ? ' · 1h: **' + (token.priceChange1h > 0 ? '+' : '') + token.priceChange1h.toFixed(1) + '%**' : ''));
-  }
-
-  if (buyPressurePct !== null) {
-    descParts.push(pressureIndicator + ' Buy pressure: **' + buyPressurePct + '%** buys / ' + (100 - buyPressurePct) + '% sells');
-  }
-
-  if (token.uniqueWallets24h) {
-    descParts.push('👥 Unique wallets 24h: **' + token.uniqueWallets24h.toLocaleString() + '**');
-  }
 
   if (token.platform === 'pumpfun' && !token.complete) {
     descParts.push('⏳ Bonding curve: **' + (token.bondingProgress ? token.bondingProgress.toFixed(0) : 0) + '%** to Raydium');
   }
 
-  descParts.push('[' + (token.platform === 'pumpfun' ? 'pump.fun' : 'Birdeye') + '](' + token.dexUrl + ')');
+  if (token.platform === 'pumpfun') {
+    descParts.push('[pump.fun](' + token.dexUrl + ')');
+  }
 
   const embed = new EmbedBuilder()
     .setColor(0x00ccff)
@@ -275,6 +226,12 @@ async function autoTrack(address, message) {
   if (token.imageUrl) embed.setThumbnail(token.imageUrl);
 
   await message.channel.send({ embeds: [embed] });
+
+  const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
+  let buyPressurePct = null;
+  if (totalTxns > 0) {
+    buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
+  }
 
   db.tokens[address] = {
     address,
@@ -289,9 +246,9 @@ async function autoTrack(address, message) {
     alertChannelId: message.channelId,
     priceAtCall: token.price || null,
     mcapAtCall: token.marketCap || null,
-    volumeAtCall: token.volume24h || 0,
+    volumeAtCall: 0,
     lastPrice: token.price || null,
-    lastVolume: token.volume24h || 0,
+    lastVolume: 0,
     lastChecked: Date.now(),
     peakMultiple: 1.0,
     milestonesFired: [],
@@ -314,7 +271,6 @@ async function autoTrack(address, message) {
   console.log('[tracked] ' + token.name + ' (' + token.symbol + ') — posted by ' + message.author.username);
 }
 
-// Message listener
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
@@ -331,7 +287,6 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// Slash commands
 const commands = [
   new SlashCommandBuilder()
     .setName('calls')
@@ -380,10 +335,9 @@ async function handleCalls(interaction) {
           ? '📈 ' + mult.toFixed(2) + 'x'
           : '📉 ' + mult.toFixed(2) + 'x';
     }
-    const buyPct = entry.buyPressure || 0;
     const mcap = live ? live.marketCap : null;
     return '**' + entry.name + ' (' + entry.symbol + ')** — ' + multipleStr + '\n' +
-           '└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + ' · MCap: ' + fmtUsd(mcap) + ' · ' + buyPct + '% buys';
+           '└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + ' · MCap: ' + fmtUsd(mcap);
   });
 
   const embed = new EmbedBuilder()
