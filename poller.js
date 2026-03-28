@@ -5,6 +5,8 @@ import { EmbedBuilder } from 'discord.js';
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 
+const SUMMARY_CHANNEL_ID = '1452152164699869298';
+
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
   catch { return { tokens: {}, watchlist: {} }; }
@@ -36,10 +38,14 @@ function fmtTime(ms) {
   return 'just now';
 }
 
-// In-memory lock — prevents double-processing same token
+// In-memory lock
 const pollingLock = new Set();
 
-// Birdeye — single call gets everything we need
+// Track if daily summary has fired today
+let lastSummaryDate = null;
+
+// ── API fetchers ────────────────────────────────────────────────────────────
+
 async function fetchBirdeye(address) {
   if (!process.env.BIRDEYE_API_KEY) return null;
   try {
@@ -64,7 +70,6 @@ async function fetchBirdeye(address) {
       volume24h: d.v24hUSD || d.v24h || null,
       volume1h: d.v1hUSD || d.v1h || null,
       priceChange1h: d.priceChange1hPercent || null,
-      priceChange24h: d.priceChange24hPercent || null,
       buys24h: d.buy24h || null,
       sells24h: d.sell24h || null,
       liquidity: d.liquidity || null,
@@ -75,7 +80,30 @@ async function fetchBirdeye(address) {
   }
 }
 
-// Pump.fun for pre-graduation tokens
+async function fetchDexScreener(address) {
+  try {
+    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const pair = data.pairs && data.pairs[0];
+    if (!pair) return null;
+    return {
+      price: pair.priceUsd || null,
+      marketCap: pair.marketCap || null,
+      volume24h: (pair.volume && pair.volume.h24) || null,
+      buys24h: (pair.txns && pair.txns.h24 && pair.txns.h24.buys) || null,
+      sells24h: (pair.txns && pair.txns.h24 && pair.txns.h24.sells) || null,
+      liquidity: (pair.liquidity && pair.liquidity.usd) || null,
+      priceChange1h: (pair.priceChange && pair.priceChange.h1) || null,
+    };
+  } catch (e) {
+    console.error('[dexscreener] poll failed for ' + address + ':', e.message);
+    return null;
+  }
+}
+
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -115,6 +143,61 @@ function calcPumpFunPrice(pumpData, solPrice) {
   }
 }
 
+// Fetch live price — Birdeye first, DexScreener fallback, pump.fun for bonding curve
+async function fetchLiveData(address, platform, solPriceUsd) {
+  // Always try Birdeye first
+  const birdeye = await fetchBirdeye(address);
+  if (birdeye && birdeye.price) {
+    const totalTxns = (birdeye.buys24h || 0) + (birdeye.sells24h || 0);
+    return {
+      price: birdeye.price,
+      marketCap: birdeye.marketCap,
+      volume24h: birdeye.volume24h,
+      liquidity: birdeye.liquidity,
+      priceChange1h: birdeye.priceChange1h,
+      buyPct: totalTxns > 0 ? Math.round((birdeye.buys24h / totalTxns) * 100) : null,
+      source: 'birdeye'
+    };
+  }
+
+  // Fallback to DexScreener
+  const dex = await fetchDexScreener(address);
+  if (dex && dex.price) {
+    const totalTxns = (dex.buys24h || 0) + (dex.sells24h || 0);
+    return {
+      price: Number(dex.price),
+      marketCap: dex.marketCap,
+      volume24h: dex.volume24h,
+      liquidity: dex.liquidity,
+      priceChange1h: dex.priceChange1h,
+      buyPct: totalTxns > 0 ? Math.round((dex.buys24h / totalTxns) * 100) : null,
+      source: 'dexscreener'
+    };
+  }
+
+  // Fallback to pump.fun (bonding curve tokens)
+  if (platform === 'pumpfun' && solPriceUsd) {
+    const pump = await fetchPumpFun(address);
+    if (pump) {
+      const price = calcPumpFunPrice(pump, solPriceUsd);
+      return {
+        price: price,
+        marketCap: pump.usd_market_cap || null,
+        volume24h: null,
+        liquidity: null,
+        priceChange1h: null,
+        buyPct: null,
+        bondingProgress: pump.bonding_curve_progress || 0,
+        complete: pump.complete || false,
+        source: 'pumpfun',
+        rawPump: pump
+      };
+    }
+  }
+
+  return null;
+}
+
 async function sendEmbed(client, channelId, embed) {
   try {
     const channel = await client.channels.fetch(channelId);
@@ -124,7 +207,133 @@ async function sendEmbed(client, channelId, embed) {
   }
 }
 
+// ── Daily Summary ───────────────────────────────────────────────────────────
+
+async function postDailySummary(client) {
+  const db = loadDB();
+  const entries = Object.values(db.tokens || {});
+
+  console.log('[summary] Posting daily summary — ' + entries.length + ' tokens');
+
+  if (entries.length === 0) {
+    try {
+      const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x5865f2)
+            .setTitle('📊 Daily Summary')
+            .setDescription('No tokens being tracked right now.')
+            .setTimestamp()
+        ]
+      });
+    } catch (e) {
+      console.error('[summary] failed to post empty summary:', e.message);
+    }
+    return;
+  }
+
+  const solPriceUsd = await fetchSolPrice();
+
+  // Fetch live data for all tokens
+  const results = await Promise.allSettled(
+    entries.map(e => fetchLiveData(e.address, e.platform, solPriceUsd))
+  );
+
+  const lines = [];
+  let bestCall = null;
+  let bestMultiple = 0;
+  let totalTracked = entries.length;
+  let winners = 0;
+  let losers = 0;
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const live = results[i].status === 'fulfilled' ? results[i].value : null;
+
+    const livePrice = live && live.price ? Number(live.price) : null;
+    const priceAtCall = entry.priceAtCall ? Number(entry.priceAtCall) : null;
+
+    let multipleStr = '—';
+    let mult = null;
+
+    if (livePrice && priceAtCall && priceAtCall > 0) {
+      mult = livePrice / priceAtCall;
+      const pctGain = ((mult - 1) * 100).toFixed(0);
+      const sign = mult >= 1 ? '+' : '';
+
+      if (mult >= 2) {
+        multipleStr = '🚀 ' + mult.toFixed(2) + 'x (' + sign + pctGain + '%)';
+        winners++;
+      } else if (mult >= 1) {
+        multipleStr = '📈 ' + mult.toFixed(2) + 'x (' + sign + pctGain + '%)';
+        winners++;
+      } else {
+        multipleStr = '📉 ' + mult.toFixed(2) + 'x (' + pctGain + '%)';
+        losers++;
+      }
+
+      if (mult > bestMultiple) {
+        bestMultiple = mult;
+        bestCall = entry;
+      }
+    }
+
+    const peakStr = entry.peakMultiple && entry.peakMultiple > 1
+      ? ' · Peak: ' + entry.peakMultiple.toFixed(2) + 'x'
+      : '';
+
+    lines.push(
+      '**' + entry.name + ' (' + entry.symbol + ')** — ' + multipleStr + '\n' +
+      '└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + ' · MCap: ' + fmtUsd(live ? live.marketCap : null) + peakStr
+    );
+  }
+
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+  let footerStr = totalTracked + ' token' + (totalTracked !== 1 ? 's' : '') + ' tracked';
+  if (bestCall) {
+    footerStr += ' · Best call: ' + bestCall.name + ' ' + bestMultiple.toFixed(2) + 'x by ' + bestCall.postedBy;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('📊 Daily Summary — ' + dateStr)
+    .setDescription(lines.join('\n\n').slice(0, 4000))
+    .setFooter({ text: footerStr })
+    .setTimestamp();
+
+  try {
+    const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
+    await channel.send({ embeds: [embed] });
+    console.log('[summary] Posted successfully');
+  } catch (e) {
+    console.error('[summary] Failed to post:', e.message);
+  }
+}
+
+// ── Check if daily summary should fire ─────────────────────────────────────
+// 4am PST = 12:00 UTC
+function checkDailySummary(client) {
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  const utcMinute = now.getUTCMinutes();
+  const todayStr = now.toISOString().slice(0, 10);
+
+  // Fire between 12:00 and 12:03 UTC (gives a 3-min window in case poll is slightly delayed)
+  if (utcHour === 12 && utcMinute < 3 && lastSummaryDate !== todayStr) {
+    lastSummaryDate = todayStr;
+    postDailySummary(client).catch(e => console.error('[summary] error:', e.message));
+  }
+}
+
+// ── Main poll loop ──────────────────────────────────────────────────────────
+
 export async function pollTokens(client) {
+  // Check if daily summary should fire
+  checkDailySummary(client);
+
   const db = loadDB();
   const addresses = Object.keys(db.tokens || {});
   if (addresses.length === 0) return;
@@ -150,36 +359,29 @@ export async function pollTokens(client) {
   saveDB(db);
 }
 
+// ── Process single token ────────────────────────────────────────────────────
+
 async function processToken(client, address, db, solPriceUsd) {
   const entry = db.tokens[address];
   if (!entry) return;
 
-  const milestonesFired = entry.milestonesFired || [];
-  const takeProfitFired = entry.takeProfitFired || false;
-  const gainAlertFired = entry.gainAlertFired || false;
   const graduationAlertFired = entry.graduationAlertFired || false;
   const bondingAlertFired = entry.bondingAlertFired || false;
 
-  let livePrice = null;
-  let liveMcap = null;
-  let liveVolume = null;
-  let liveBuyPct = null;
-  let liveSellPct = null;
-  let liveLiquidity = null;
-  let priceChange1h = null;
+  // Fetch live data using the waterfall
+  const live = await fetchLiveData(address, entry.platform || 'birdeye', solPriceUsd);
+  if (!live) return;
 
-  const platform = entry.platform || 'birdeye';
-
-  if (platform === 'pumpfun' && !graduationAlertFired) {
-    const pumpData = await fetchPumpFun(address);
-    if (!pumpData) return;
+  // Handle graduation for pump.fun tokens
+  if (live.source === 'pumpfun' && live.rawPump) {
+    const pumpData = live.rawPump;
 
     if (pumpData.complete === true && !graduationAlertFired) {
       const embed = new EmbedBuilder()
         .setColor(0x00ff88)
         .setTitle('🎓 ' + entry.name + ' (' + entry.symbol + ') graduated to Raydium!')
         .setDescription(
-          '**' + entry.name + '** completed its bonding curve and is now trading on Raydium.\n\n' +
+          '**' + entry.name + '** completed its bonding curve.\n\n' +
           'Posted by **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + '\n' +
           'Entry MCap: ' + fmtUsd(entry.mcapAtCall)
         )
@@ -194,15 +396,10 @@ async function processToken(client, address, db, solPriceUsd) {
       db.tokens[address].platform = 'birdeye';
       db.tokens[address].graduationAlertFired = true;
       saveDB(db);
-      console.log('[graduation] ' + entry.name + ' graduated — switching to Birdeye');
+      console.log('[graduation] ' + entry.name + ' graduated');
       return;
     }
 
-    // Still on bonding curve — use pump.fun price
-    if (solPriceUsd) {
-      livePrice = calcPumpFunPrice(pumpData, solPriceUsd);
-    }
-    liveMcap = pumpData.usd_market_cap;
     const newBonding = pumpData.bonding_curve_progress || 0;
     db.tokens[address].bondingProgress = newBonding;
 
@@ -212,9 +409,8 @@ async function processToken(client, address, db, solPriceUsd) {
         .setTitle('⚡ ' + entry.name + ' (' + entry.symbol + ') — ' + newBonding.toFixed(0) + '% to Raydium')
         .setDescription(
           '**' + entry.name + '** is ' + newBonding.toFixed(0) + '% through its bonding curve.\n\n' +
-          'Getting close to graduation!\n\n' +
           'Posted by **' + entry.postedBy + '**\n' +
-          'MCap now: ' + fmtUsd(liveMcap)
+          'MCap now: ' + fmtUsd(live.marketCap)
         )
         .setFooter({ text: address })
         .setTimestamp();
@@ -228,35 +424,23 @@ async function processToken(client, address, db, solPriceUsd) {
       db.tokens[address].bondingAlertFired = false;
       saveDB(db);
     }
-
-  } else {
-    // Use Birdeye for graduated tokens — much better data quality
-    const live = await fetchBirdeye(address);
-    if (!live) return;
-
-    livePrice = live.price || null;
-    liveMcap = live.marketCap;
-    liveVolume = live.volume24h;
-    liveLiquidity = live.liquidity;
-    priceChange1h = live.priceChange1h;
-
-    const totalTxns = (live.buys24h || 0) + (live.sells24h || 0);
-    if (totalTxns > 0) {
-      liveBuyPct = Math.round((live.buys24h / totalTxns) * 100);
-      liveSellPct = 100 - liveBuyPct;
-    }
   }
 
+  const livePrice = live.price ? Number(live.price) : null;
   if (!livePrice || !entry.priceAtCall) {
     db.tokens[address].lastChecked = Date.now();
     return;
   }
 
-  const currentMultiple = Number(livePrice) / Number(entry.priceAtCall);
-  const buyPctStr = liveBuyPct !== null ? liveBuyPct + '%' : '—';
-  const sellPctStr = liveSellPct !== null ? liveSellPct + '%' : '—';
+  const currentMultiple = livePrice / Number(entry.priceAtCall);
+  const buyPctStr = live.buyPct !== null && live.buyPct !== undefined ? live.buyPct + '%' : '—';
+  const sellPctStr = live.buyPct !== null && live.buyPct !== undefined ? (100 - live.buyPct) + '%' : '—';
 
   // RESET all alerts if dropped below 1.5x
+  const milestonesFired = db.tokens[address].milestonesFired || [];
+  const takeProfitFired = db.tokens[address].takeProfitFired || false;
+  const gainAlertFired = db.tokens[address].gainAlertFired || false;
+
   if (currentMultiple < 1.5) {
     const needsReset = milestonesFired.length > 0 || takeProfitFired || gainAlertFired;
     if (needsReset) {
@@ -269,26 +453,12 @@ async function processToken(client, address, db, solPriceUsd) {
   }
 
   const curGainAlert = db.tokens[address].gainAlertFired || false;
-  const curTakeProfit = db.tokens[address].takeProfitFired || false;
 
-  // Check A: +75% gain alert
+  // Check A: +75% gain alert — single line
   if (currentMultiple >= 1.75 && !curGainAlert) {
-    const desc = '**' + entry.name + '** is up 75% from entry.\n\n' +
-      'Now: $' + Number(livePrice).toFixed(8) + '\n' +
-      'Entry: $' + entry.priceAtCall + ' · **' + entry.postedBy + '**\n\n' +
-      'Buy pressure: ' + buyPctStr +
-      (liveLiquidity ? '\n💧 Liquidity: ' + fmtUsd(liveLiquidity) : '') +
-      (priceChange1h ? '\n1h change: ' + (priceChange1h > 0 ? '+' : '') + priceChange1h.toFixed(1) + '%' : '') +
-      '\n\n*Not financial advice.*';
-
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
-      .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% from entry')
-      .setDescription(desc)
-      .addFields(
-        { name: 'MCap', value: fmtUsd(liveMcap), inline: true },
-        { name: 'Chain', value: 'SOLANA', inline: true }
-      )
+      .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
       .setFooter({ text: entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
       .setTimestamp();
 
@@ -298,7 +468,7 @@ async function processToken(client, address, db, solPriceUsd) {
     console.log('[+75%] ' + entry.name + ' up 75% from entry');
   }
 
-  // Check B: Milestones 2x, 5x, 10x, 20x
+  // Check B: Milestones — combined with take profit message
   const milestones = [2, 5, 10, 20];
   for (const milestone of milestones) {
     const latest = db.tokens[address].milestonesFired || [];
@@ -306,55 +476,26 @@ async function processToken(client, address, db, solPriceUsd) {
       const embed = new EmbedBuilder()
         .setColor(0xffd700)
         .setTitle('🎯 ' + milestone + 'x — ' + entry.name + ' (' + entry.symbol + ')')
-        .setDescription(
-          '**' + entry.name + '** just hit **' + milestone + 'x** from entry.\n\n' +
-          '**' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + '\n' +
-          'Entry: $' + entry.priceAtCall + '\n' +
-          'Now: $' + Number(livePrice).toFixed(8) + ' · MCap: ' + fmtUsd(liveMcap) + '\n\n' +
-          'Buy pressure: ' + buyPctStr +
-          (liveLiquidity ? '\n💧 Liquidity: ' + fmtUsd(liveLiquidity) : '')
-        )
-        .setFooter({ text: address })
+        .setDescription('💰💰💰 Take Profit 💰💰💰')
+        .setFooter({ text: entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
         .setTimestamp();
 
       await sendEmbed(client, entry.alertChannelId, embed);
       db.tokens[address].milestonesFired = latest.concat([milestone]);
+      db.tokens[address].takeProfitFired = true;
       saveDB(db);
-      console.log('[' + milestone + 'x] ' + entry.name + ' hit ' + milestone + 'x');
+      console.log('[' + milestone + 'x] ' + entry.name);
     }
-  }
-
-  // Check C: Take profit at 2x
-  const latestTP = db.tokens[address].takeProfitFired || false;
-  if (currentMultiple >= 2.0 && !latestTP) {
-    const embed = new EmbedBuilder()
-      .setColor(0xff9900)
-      .setTitle('💰 ' + entry.name + ' (' + entry.symbol + ') is up ' + currentMultiple.toFixed(2) + 'x')
-      .setDescription(
-        entry.name + ' has doubled from entry.\n\n' +
-        '👀 Might be worth taking some off the table.\n\n' +
-        'Buy pressure: ' + buyPctStr + ' — Sell: ' + sellPctStr + '\n' +
-        'MCap: ' + fmtUsd(liveMcap) +
-        (liveLiquidity ? '\n💧 Liquidity: ' + fmtUsd(liveLiquidity) : '') + '\n\n' +
-        '*Not financial advice — just a nudge.*'
-      )
-      .setFooter({ text: entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
-      .setTimestamp();
-
-    await sendEmbed(client, entry.alertChannelId, embed);
-    db.tokens[address].takeProfitFired = true;
-    saveDB(db);
-    console.log('[take profit] ' + entry.name + ' nudge sent');
   }
 
   // Update tracking fields
   const newPeak = Math.max(entry.peakMultiple || 1, currentMultiple);
   db.tokens[address].lastPrice = String(livePrice);
-  db.tokens[address].lastVolume = liveVolume || 0;
+  db.tokens[address].lastVolume = live.volume24h || 0;
   db.tokens[address].lastChecked = Date.now();
   db.tokens[address].peakMultiple = newPeak;
-  if (liveBuyPct !== null) {
-    db.tokens[address].buyPressure = liveBuyPct;
-    db.tokens[address].sellPressure = liveSellPct;
+  if (live.buyPct !== null && live.buyPct !== undefined) {
+    db.tokens[address].buyPressure = live.buyPct;
+    db.tokens[address].sellPressure = 100 - live.buyPct;
   }
 }
