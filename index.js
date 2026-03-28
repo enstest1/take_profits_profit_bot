@@ -139,6 +139,30 @@ async function fetchPumpFun(address) {
   }
 }
 
+async function fetchSolPrice() {
+  try {
+    const res = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+      { signal: AbortSignal.timeout(6000) }
+    );
+    const data = await res.json();
+    return (data && data.solana && data.solana.usd) || null;
+  } catch {
+    return null;
+  }
+}
+
+function calcPumpFunPrice(pump, solPrice) {
+  try {
+    const solRes = Number(pump.virtual_sol_reserves);
+    const tokRes = Number(pump.virtual_token_reserves);
+    if (!tokRes) return null;
+    return (solRes / 1e9) / (tokRes / 1e6) * solPrice;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchTokenData(address) {
   const birdeye = await fetchBirdeye(address);
   if (birdeye && birdeye.price) {
@@ -162,14 +186,16 @@ async function fetchTokenData(address) {
     };
   }
 
-  // Fallback to pump.fun
+  // Fallback to pump.fun — fetch SOL price so we can calculate USD entry price
   const pump = await fetchPumpFun(address);
   if (pump) {
+    const solPrice = await fetchSolPrice();
+    const pumpPrice = solPrice ? calcPumpFunPrice(pump, solPrice) : null;
     return {
       platform: 'pumpfun',
       name: pump.name,
       symbol: pump.symbol,
-      price: null,
+      price: pumpPrice ? String(pumpPrice) : null,
       marketCap: pump.usd_market_cap || 0,
       buys24h: null,
       sells24h: null,
