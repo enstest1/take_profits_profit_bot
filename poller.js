@@ -454,37 +454,42 @@ async function processToken(client, address, db, solPriceUsd) {
 
   const curGainAlert = db.tokens[address].gainAlertFired || false;
 
-  // Check A: +75% gain alert — single line
-  if (currentMultiple >= 1.75 && !curGainAlert) {
+  // Check A: +75% gain alert
+  // Guard: currentMultiple < 2.0 prevents double-firing when token jumps straight to 2x
+  if (currentMultiple >= 1.75 && currentMultiple < 2.0 && !curGainAlert) {
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
       .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
-      .setFooter({ text: entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
+      .setFooter({ text: address + ' · ' + entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
       .setTimestamp();
 
     await sendEmbed(client, entry.alertChannelId, embed);
     db.tokens[address].gainAlertFired = true;
     saveDB(db);
-    console.log('[+75%] ' + entry.name + ' up 75% from entry');
+    console.log('[+75%] ' + entry.name);
   }
 
-  // Check B: Milestones — combined with take profit message
+  // Check B: Milestones
+  // Labels show GAIN: price 2x = 1x gain (+100%), price 5x = 4x gain (+400%) etc
   const milestones = [2, 5, 10, 20];
   for (const milestone of milestones) {
     const latest = db.tokens[address].milestonesFired || [];
     if (!latest.includes(milestone) && currentMultiple >= milestone) {
+      const gainX = milestone - 1;
+      const gainPct = gainX * 100;
       const embed = new EmbedBuilder()
         .setColor(0xffd700)
-        .setTitle('🎯 ' + milestone + 'x — ' + entry.name + ' (' + entry.symbol + ')')
+        .setTitle('🎯 ' + gainX + 'x (+' + gainPct + '%) — ' + entry.name + ' (' + entry.symbol + ')')
         .setDescription('💰💰💰 Take Profit 💰💰💰')
-        .setFooter({ text: entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
+        .setFooter({ text: address + ' · ' + entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
         .setTimestamp();
 
       await sendEmbed(client, entry.alertChannelId, embed);
       db.tokens[address].milestonesFired = latest.concat([milestone]);
+      db.tokens[address].gainAlertFired = true;
       db.tokens[address].takeProfitFired = true;
       saveDB(db);
-      console.log('[' + milestone + 'x] ' + entry.name);
+      console.log('[' + gainX + 'x +' + gainPct + '%] ' + entry.name);
     }
   }
 
