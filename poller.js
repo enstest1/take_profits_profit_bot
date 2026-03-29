@@ -38,48 +38,10 @@ function fmtTime(ms) {
   return 'just now';
 }
 
-// In-memory lock
 const pollingLock = new Set();
-
-// Track if daily summary has fired today
 let lastSummaryDate = null;
 
-// ── API fetchers ────────────────────────────────────────────────────────────
-
-async function fetchBirdeye(address) {
-  if (!process.env.BIRDEYE_API_KEY) return null;
-  try {
-    const res = await fetch(
-      'https://public-api.birdeye.so/defi/token_overview?address=' + address,
-      {
-        headers: {
-          'X-API-KEY': process.env.BIRDEYE_API_KEY,
-          'x-chain': 'solana',
-          'accept': 'application/json'
-        },
-        signal: AbortSignal.timeout(8000)
-      }
-    );
-    if (!res.ok) return null;
-    const json = await res.json();
-    const d = json && json.data;
-    if (!d) return null;
-    return {
-      price: d.price || null,
-      marketCap: d.mc || d.marketCap || null,
-      volume24h: d.v24hUSD || d.v24h || null,
-      volume1h: d.v1hUSD || d.v1h || null,
-      priceChange1h: d.priceChange1hPercent || null,
-      buys24h: d.buy24h || null,
-      sells24h: d.sell24h || null,
-      liquidity: d.liquidity || null,
-    };
-  } catch (e) {
-    console.error('[birdeye] poll failed for ' + address + ':', e.message);
-    return null;
-  }
-}
-
+// DexScreener — graduated tokens
 async function fetchDexScreener(address) {
   try {
     const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
@@ -89,21 +51,26 @@ async function fetchDexScreener(address) {
     const data = await res.json();
     const pair = data.pairs && data.pairs[0];
     if (!pair) return null;
+    const totalTxns = ((pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0) +
+                      ((pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0);
     return {
-      price: pair.priceUsd || null,
+      price: pair.priceUsd ? Number(pair.priceUsd) : null,
       marketCap: pair.marketCap || null,
       volume24h: (pair.volume && pair.volume.h24) || null,
-      buys24h: (pair.txns && pair.txns.h24 && pair.txns.h24.buys) || null,
-      sells24h: (pair.txns && pair.txns.h24 && pair.txns.h24.sells) || null,
       liquidity: (pair.liquidity && pair.liquidity.usd) || null,
       priceChange1h: (pair.priceChange && pair.priceChange.h1) || null,
+      buyPct: totalTxns > 0
+        ? Math.round(((pair.txns.h24.buys || 0) / totalTxns) * 100)
+        : null,
+      source: 'dexscreener'
     };
   } catch (e) {
-    console.error('[dexscreener] poll failed for ' + address + ':', e.message);
+    console.error('[dex] poll failed for ' + address + ':', e.message);
     return null;
   }
 }
 
+// pump.fun — bonding curve tokens
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -143,40 +110,14 @@ function calcPumpFunPrice(pumpData, solPrice) {
   }
 }
 
-// Fetch live price — Birdeye first, DexScreener fallback, pump.fun for bonding curve
+// Fetch live data — DexScreener first, pump.fun fallback for bonding curve
 async function fetchLiveData(address, platform, solPriceUsd) {
-  // Always try Birdeye first
-  const birdeye = await fetchBirdeye(address);
-  if (birdeye && birdeye.price) {
-    const totalTxns = (birdeye.buys24h || 0) + (birdeye.sells24h || 0);
-    return {
-      price: birdeye.price,
-      marketCap: birdeye.marketCap,
-      volume24h: birdeye.volume24h,
-      liquidity: birdeye.liquidity,
-      priceChange1h: birdeye.priceChange1h,
-      buyPct: totalTxns > 0 ? Math.round((birdeye.buys24h / totalTxns) * 100) : null,
-      source: 'birdeye'
-    };
-  }
-
-  // Fallback to DexScreener
+  // Always try DexScreener first
   const dex = await fetchDexScreener(address);
-  if (dex && dex.price) {
-    const totalTxns = (dex.buys24h || 0) + (dex.sells24h || 0);
-    return {
-      price: Number(dex.price),
-      marketCap: dex.marketCap,
-      volume24h: dex.volume24h,
-      liquidity: dex.liquidity,
-      priceChange1h: dex.priceChange1h,
-      buyPct: totalTxns > 0 ? Math.round((dex.buys24h / totalTxns) * 100) : null,
-      source: 'dexscreener'
-    };
-  }
+  if (dex && dex.price) return dex;
 
-  // Fallback to pump.fun (bonding curve tokens)
-  if (platform === 'pumpfun' && solPriceUsd) {
+  // Fallback to pump.fun for bonding curve tokens
+  if (solPriceUsd) {
     const pump = await fetchPumpFun(address);
     if (pump) {
       const price = calcPumpFunPrice(pump, solPriceUsd);
@@ -207,35 +148,27 @@ async function sendEmbed(client, channelId, embed) {
   }
 }
 
-// ── Daily Summary ───────────────────────────────────────────────────────────
-
+// Daily summary at 4am PST (12:00 UTC)
 async function postDailySummary(client) {
   const db = loadDB();
   const entries = Object.values(db.tokens || {});
-
   console.log('[summary] Posting daily summary — ' + entries.length + ' tokens');
 
   if (entries.length === 0) {
     try {
       const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
       await channel.send({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x5865f2)
-            .setTitle('📊 Daily Summary')
-            .setDescription('No tokens being tracked right now.')
-            .setTimestamp()
-        ]
+        embeds: [new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle('📊 Daily Summary')
+          .setDescription('No tokens being tracked right now.')
+          .setTimestamp()]
       });
-    } catch (e) {
-      console.error('[summary] failed to post empty summary:', e.message);
-    }
+    } catch (e) { console.error('[summary] failed:', e.message); }
     return;
   }
 
   const solPriceUsd = await fetchSolPrice();
-
-  // Fetch live data for all tokens
   const results = await Promise.allSettled(
     entries.map(e => fetchLiveData(e.address, e.platform, solPriceUsd))
   );
@@ -243,45 +176,27 @@ async function postDailySummary(client) {
   const lines = [];
   let bestCall = null;
   let bestMultiple = 0;
-  let totalTracked = entries.length;
-  let winners = 0;
-  let losers = 0;
 
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     const live = results[i].status === 'fulfilled' ? results[i].value : null;
-
     const livePrice = live && live.price ? Number(live.price) : null;
     const priceAtCall = entry.priceAtCall ? Number(entry.priceAtCall) : null;
 
     let multipleStr = '—';
     let mult = null;
-
     if (livePrice && priceAtCall && priceAtCall > 0) {
       mult = livePrice / priceAtCall;
-      const pctGain = ((mult - 1) * 100).toFixed(0);
+      const pct = ((mult - 1) * 100).toFixed(0);
       const sign = mult >= 1 ? '+' : '';
-
-      if (mult >= 2) {
-        multipleStr = '🚀 ' + mult.toFixed(2) + 'x (' + sign + pctGain + '%)';
-        winners++;
-      } else if (mult >= 1) {
-        multipleStr = '📈 ' + mult.toFixed(2) + 'x (' + sign + pctGain + '%)';
-        winners++;
-      } else {
-        multipleStr = '📉 ' + mult.toFixed(2) + 'x (' + pctGain + '%)';
-        losers++;
-      }
-
-      if (mult > bestMultiple) {
-        bestMultiple = mult;
-        bestCall = entry;
-      }
+      if (mult >= 2) multipleStr = '🚀 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
+      else if (mult >= 1) multipleStr = '📈 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
+      else multipleStr = '📉 ' + mult.toFixed(2) + 'x (' + pct + '%)';
+      if (mult > bestMultiple) { bestMultiple = mult; bestCall = entry; }
     }
 
     const peakStr = entry.peakMultiple && entry.peakMultiple > 1
-      ? ' · Peak: ' + entry.peakMultiple.toFixed(2) + 'x'
-      : '';
+      ? ' · Peak: ' + entry.peakMultiple.toFixed(2) + 'x' : '';
 
     lines.push(
       '**' + entry.name + ' (' + entry.symbol + ')** — ' + multipleStr + '\n' +
@@ -291,11 +206,8 @@ async function postDailySummary(client) {
 
   const now = new Date();
   const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-
-  let footerStr = totalTracked + ' token' + (totalTracked !== 1 ? 's' : '') + ' tracked';
-  if (bestCall) {
-    footerStr += ' · Best call: ' + bestCall.name + ' ' + bestMultiple.toFixed(2) + 'x by ' + bestCall.postedBy;
-  }
+  let footerStr = entries.length + ' token' + (entries.length !== 1 ? 's' : '') + ' tracked';
+  if (bestCall) footerStr += ' · Best: ' + bestCall.name + ' ' + bestMultiple.toFixed(2) + 'x by ' + bestCall.postedBy;
 
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
@@ -308,30 +220,21 @@ async function postDailySummary(client) {
     const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
     await channel.send({ embeds: [embed] });
     console.log('[summary] Posted successfully');
-  } catch (e) {
-    console.error('[summary] Failed to post:', e.message);
-  }
+  } catch (e) { console.error('[summary] Failed to post:', e.message); }
 }
 
-// ── Check if daily summary should fire ─────────────────────────────────────
-// 4am PST = 12:00 UTC
 function checkDailySummary(client) {
   const now = new Date();
   const utcHour = now.getUTCHours();
   const utcMinute = now.getUTCMinutes();
   const todayStr = now.toISOString().slice(0, 10);
-
-  // Fire between 12:00 and 12:03 UTC (gives a 3-min window in case poll is slightly delayed)
   if (utcHour === 12 && utcMinute < 3 && lastSummaryDate !== todayStr) {
     lastSummaryDate = todayStr;
     postDailySummary(client).catch(e => console.error('[summary] error:', e.message));
   }
 }
 
-// ── Main poll loop ──────────────────────────────────────────────────────────
-
 export async function pollTokens(client) {
-  // Check if daily summary should fire
   checkDailySummary(client);
 
   const db = loadDB();
@@ -342,10 +245,7 @@ export async function pollTokens(client) {
   console.log('[poll] Checking ' + addresses.length + ' tokens — SOL: $' + (solPriceUsd || '?'));
 
   for (const address of addresses) {
-    if (pollingLock.has(address)) {
-      console.log('[poll] Skipping ' + address + ' — locked');
-      continue;
-    }
+    if (pollingLock.has(address)) continue;
     pollingLock.add(address);
     try {
       await processToken(client, address, db, solPriceUsd);
@@ -359,8 +259,6 @@ export async function pollTokens(client) {
   saveDB(db);
 }
 
-// ── Process single token ────────────────────────────────────────────────────
-
 async function processToken(client, address, db, solPriceUsd) {
   const entry = db.tokens[address];
   if (!entry) return;
@@ -368,14 +266,12 @@ async function processToken(client, address, db, solPriceUsd) {
   const graduationAlertFired = entry.graduationAlertFired || false;
   const bondingAlertFired = entry.bondingAlertFired || false;
 
-  // Fetch live data using the waterfall
-  const live = await fetchLiveData(address, entry.platform || 'birdeye', solPriceUsd);
+  const live = await fetchLiveData(address, entry.platform || 'dexscreener', solPriceUsd);
   if (!live) return;
 
-  // Handle graduation for pump.fun tokens
+  // Graduation check for pump.fun tokens
   if (live.source === 'pumpfun' && live.rawPump) {
     const pumpData = live.rawPump;
-
     if (pumpData.complete === true && !graduationAlertFired) {
       const embed = new EmbedBuilder()
         .setColor(0x00ff88)
@@ -393,7 +289,7 @@ async function processToken(client, address, db, solPriceUsd) {
         .setTimestamp();
 
       await sendEmbed(client, entry.alertChannelId, embed);
-      db.tokens[address].platform = 'birdeye';
+      db.tokens[address].platform = 'dexscreener';
       db.tokens[address].graduationAlertFired = true;
       saveDB(db);
       console.log('[graduation] ' + entry.name + ' graduated');
@@ -436,32 +332,31 @@ async function processToken(client, address, db, solPriceUsd) {
   const buyPctStr = live.buyPct !== null && live.buyPct !== undefined ? live.buyPct + '%' : '—';
   const sellPctStr = live.buyPct !== null && live.buyPct !== undefined ? (100 - live.buyPct) + '%' : '—';
 
-  // RESET all alerts if dropped below 1.5x
+  // Reset all alerts below 1.5x
   const milestonesFired = db.tokens[address].milestonesFired || [];
   const takeProfitFired = db.tokens[address].takeProfitFired || false;
   const gainAlertFired = db.tokens[address].gainAlertFired || false;
 
   if (currentMultiple < 1.5) {
-    const needsReset = milestonesFired.length > 0 || takeProfitFired || gainAlertFired;
-    if (needsReset) {
+    if (milestonesFired.length > 0 || takeProfitFired || gainAlertFired) {
       db.tokens[address].milestonesFired = [];
       db.tokens[address].takeProfitFired = false;
       db.tokens[address].gainAlertFired = false;
       saveDB(db);
-      console.log('[reset] ' + entry.name + ' dropped below 1.5x — alerts reset');
+      console.log('[reset] ' + entry.name + ' dropped below 1.5x');
     }
   }
 
   const curGainAlert = db.tokens[address].gainAlertFired || false;
 
-  // Check A: +75% gain alert
-  // Guard: currentMultiple < 2.0 prevents double-firing when token jumps straight to 2x
+  // Check A: +75% alert — only fires between 1.75x and 2x to prevent double post
   if (currentMultiple >= 1.75 && currentMultiple < 2.0 && !curGainAlert) {
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
       .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
       .setFooter({ text: address + ' · ' + entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
       .setTimestamp();
+    if (entry.imageUrl) embed.setThumbnail(entry.imageUrl);
 
     await sendEmbed(client, entry.alertChannelId, embed);
     db.tokens[address].gainAlertFired = true;
@@ -469,20 +364,20 @@ async function processToken(client, address, db, solPriceUsd) {
     console.log('[+75%] ' + entry.name);
   }
 
-  // Check B: Milestones
-  // Labels show GAIN: price 2x = 1x gain (+100%), price 5x = 4x gain (+400%) etc
+  // Check B: Milestones 2x, 5x, 10x, 20x
+  // gainX label: price 2x = 1x gain (+100%), price 5x = 4x (+400%) etc
   const milestones = [2, 5, 10, 20];
   for (const milestone of milestones) {
     const latest = db.tokens[address].milestonesFired || [];
     if (!latest.includes(milestone) && currentMultiple >= milestone) {
       const gainX = milestone - 1;
-      const gainPct = gainX * 100;
       const embed = new EmbedBuilder()
         .setColor(0xffd700)
-        .setTitle('🎯 ' + gainX + 'x (+' + gainPct + '%) — ' + entry.name + ' (' + entry.symbol + ')')
+        .setTitle('🎯 ' + gainX + 'x — ' + entry.name + ' (' + entry.symbol + ')')
         .setDescription('💰💰💰 Take Profit 💰💰💰')
         .setFooter({ text: address + ' · ' + entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
         .setTimestamp();
+      if (entry.imageUrl) embed.setThumbnail(entry.imageUrl);
 
       await sendEmbed(client, entry.alertChannelId, embed);
       db.tokens[address].milestonesFired = latest.concat([milestone]);
