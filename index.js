@@ -63,57 +63,24 @@ function getTokenAgeFlag(createdAtMs) {
   return Math.floor(ageHours / 24) + 'd old';
 }
 
+// Deduplicate addresses — handles addresses with or without 'pump' suffix
 function extractAddresses(text) {
   const found = new Set();
+
+  // EVM
   const evmMatches = text.match(/\b0x[a-fA-F0-9]{40}\b/g) || [];
   for (const addr of evmMatches) found.add(addr.toLowerCase());
-  // Match up to 48 chars to catch addresses with 'pump' suffix appended
-  const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,48}\b/g) || [];
-  for (let addr of solanaMatches) {
-    // Strip 'pump' suffix — pump.fun copy-paste often appends it
-    if (addr.endsWith('pump') && addr.length > 44) {
-      addr = addr.slice(0, -4);
-    }
-    if (addr.length < 32 || addr.length > 44) continue;
+
+  // Solana — 32-44 base58 chars
+  const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g) || [];
+  for (const addr of solanaMatches) {
     if (/\d/.test(addr) && !/[0OIl]/.test(addr)) found.add(addr);
   }
+
   return Array.from(found);
 }
 
-async function fetchBirdeye(address) {
-  if (!process.env.BIRDEYE_API_KEY) return null;
-  try {
-    const res = await fetch(
-      'https://public-api.birdeye.so/defi/token_overview?address=' + address,
-      {
-        headers: {
-          'X-API-KEY': process.env.BIRDEYE_API_KEY,
-          'x-chain': 'solana',
-          'accept': 'application/json'
-        },
-        signal: AbortSignal.timeout(8000)
-      }
-    );
-    if (!res.ok) return null;
-    const json = await res.json();
-    const d = json && json.data;
-    if (!d) return null;
-    return {
-      price: d.price || null,
-      marketCap: d.mc || d.marketCap || null,
-      buys24h: d.buy24h || null,
-      sells24h: d.sell24h || null,
-      createdAt: d.createdAt || null,
-      name: d.name || null,
-      symbol: d.symbol || null,
-      logoURI: d.logoURI || null,
-    };
-  } catch (e) {
-    console.error('[birdeye] failed for ' + address + ':', e.message);
-    return null;
-  }
-}
-
+// DexScreener — graduated tokens on Raydium
 async function fetchDexScreener(address) {
   try {
     const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
@@ -123,12 +90,27 @@ async function fetchDexScreener(address) {
     const data = await res.json();
     const pair = data.pairs && data.pairs[0];
     if (!pair) return null;
-    return { pairCreatedAt: pair.pairCreatedAt || null };
-  } catch {
+    return {
+      platform: 'dexscreener',
+      name: pair.baseToken && pair.baseToken.name,
+      symbol: pair.baseToken && pair.baseToken.symbol,
+      price: pair.priceUsd || null,
+      marketCap: pair.marketCap || null,
+      volume24h: (pair.volume && pair.volume.h24) || 0,
+      liquidity: (pair.liquidity && pair.liquidity.usd) || 0,
+      buys24h: (pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0,
+      sells24h: (pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0,
+      dexUrl: pair.url || 'https://dexscreener.com/solana/' + address,
+      imageUrl: (pair.info && pair.info.imageUrl) || null,
+      pairCreatedAt: pair.pairCreatedAt || null,
+    };
+  } catch (e) {
+    console.error('[dex] failed for ' + address + ':', e.message);
     return null;
   }
 }
 
+// pump.fun — pre-graduation bonding curve tokens
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -168,30 +150,15 @@ function calcPumpFunPrice(pump, solPrice) {
   }
 }
 
+// Try DexScreener first (graduated), then pump.fun (bonding curve)
 async function fetchTokenData(address) {
-  const birdeye = await fetchBirdeye(address);
-  if (birdeye && birdeye.price) {
-    // Birdeye found — get age from createdAt, fallback to DexScreener if missing
-    let pairCreatedAt = birdeye.createdAt ? birdeye.createdAt * 1000 : null;
-    if (!pairCreatedAt) {
-      const dex = await fetchDexScreener(address).catch(() => null);
-      if (dex && dex.pairCreatedAt) pairCreatedAt = dex.pairCreatedAt;
-    }
-    return {
-      platform: 'birdeye',
-      name: birdeye.name,
-      symbol: birdeye.symbol,
-      price: birdeye.price ? String(birdeye.price) : null,
-      marketCap: birdeye.marketCap,
-      buys24h: birdeye.buys24h,
-      sells24h: birdeye.sells24h,
-      dexUrl: 'https://birdeye.so/token/' + address + '?chain=solana',
-      imageUrl: birdeye.logoURI || null,
-      pairCreatedAt: pairCreatedAt,
-    };
+  // DexScreener first — covers graduated tokens
+  const dex = await fetchDexScreener(address);
+  if (dex && dex.name) {
+    return dex;
   }
 
-  // Fallback to pump.fun — fetch SOL price so we can calculate USD entry price
+  // pump.fun fallback — covers pre-graduation tokens
   const pump = await fetchPumpFun(address);
   if (pump) {
     const solPrice = await fetchSolPrice();
@@ -202,8 +169,10 @@ async function fetchTokenData(address) {
       symbol: pump.symbol,
       price: pumpPrice ? String(pumpPrice) : null,
       marketCap: pump.usd_market_cap || 0,
-      buys24h: null,
-      sells24h: null,
+      volume24h: 0,
+      liquidity: 0,
+      buys24h: 0,
+      sells24h: 0,
       dexUrl: 'https://pump.fun/' + address,
       imageUrl: pump.image_uri || null,
       pairCreatedAt: pump.created_timestamp || null,
@@ -236,9 +205,11 @@ async function autoTrack(address, message) {
   }
 
   const token = await fetchTokenData(address);
-  if (!token) return;
+  if (!token) {
+    console.log('[skip] ' + address.slice(0, 8) + '... — not found on DexScreener or pump.fun');
+    return;
+  }
 
-  // Age — only show if we have it
   const ageStr = getTokenAgeFlag(token.pairCreatedAt);
   const posterLine = ageStr
     ? 'Posted by **' + message.author.username + '** · ' + ageStr
@@ -281,9 +252,9 @@ async function autoTrack(address, message) {
     alertChannelId: message.channelId,
     priceAtCall: token.price || null,
     mcapAtCall: token.marketCap || null,
-    volumeAtCall: 0,
+    volumeAtCall: token.volume24h || 0,
     lastPrice: token.price || null,
-    lastVolume: 0,
+    lastVolume: token.volume24h || 0,
     lastChecked: Date.now(),
     peakMultiple: 1.0,
     milestonesFired: [],
@@ -294,6 +265,7 @@ async function autoTrack(address, message) {
     bondingAlertFired: false,
     tokenAge: ageStr || 'unknown',
     dexUrl: token.dexUrl,
+    imageUrl: token.imageUrl || null,
     devWallet: token.creator || null,
     devHoldingAtCall: 0,
     devLastKnownHolding: 0,
