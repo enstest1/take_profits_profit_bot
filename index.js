@@ -67,9 +67,14 @@ function extractAddresses(text) {
   const found = new Set();
   const evmMatches = text.match(/\b0x[a-fA-F0-9]{40}\b/g) || [];
   for (const addr of evmMatches) found.add(addr.toLowerCase());
-  const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g) || [];
-  for (const addr of solanaMatches) {
-    if (addr.length < 32) continue;
+  // Match up to 48 chars to catch addresses with 'pump' suffix appended
+  const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,48}\b/g) || [];
+  for (let addr of solanaMatches) {
+    // Strip 'pump' suffix — pump.fun copy-paste often appends it
+    if (addr.endsWith('pump') && addr.length > 44) {
+      addr = addr.slice(0, -4);
+    }
+    if (addr.length < 32 || addr.length > 44) continue;
     if (/\d/.test(addr) && !/[0OIl]/.test(addr)) found.add(addr);
   }
   return Array.from(found);
