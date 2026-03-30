@@ -404,11 +404,11 @@ async function handleX(interaction) {
     (async () => {
       if (!process.env.RAPIDAPI_KEY) return null;
       const res = await fetch(
-        'https://twttrapi.p.rapidapi.com/get-user?username=' + encodeURIComponent(handle),
+        'https://twitter241.p.rapidapi.com/user?username=' + encodeURIComponent(handle),
         {
           headers: {
             'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-            'x-rapidapi-host': 'twttrapi.p.rapidapi.com'
+            'x-rapidapi-host': 'twitter241.p.rapidapi.com'
           },
           signal: AbortSignal.timeout(10000)
         }
@@ -429,11 +429,11 @@ async function handleX(interaction) {
     (async () => {
       if (!process.env.RAPIDAPI_KEY) return null;
       const res = await fetch(
-        'https://twttrapi.p.rapidapi.com/user-tweets?username=' + encodeURIComponent(handle),
+        'https://twitter241.p.rapidapi.com/user-tweets?username=' + encodeURIComponent(handle),
         {
           headers: {
             'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-            'x-rapidapi-host': 'twttrapi.p.rapidapi.com'
+            'x-rapidapi-host': 'twitter241.p.rapidapi.com'
           },
           signal: AbortSignal.timeout(12000)
         }
