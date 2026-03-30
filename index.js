@@ -402,19 +402,32 @@ async function handleX(interaction) {
   const [twttrResult, memoryResult, tweetsResult] = await Promise.allSettled([
     // Twttr API — profile info
     (async () => {
-      if (!process.env.RAPIDAPI_KEY) return null;
-      const res = await fetch(
-        'https://twitter241.p.rapidapi.com/user?username=' + encodeURIComponent(handle),
-        {
-          headers: {
-            'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-            'x-rapidapi-host': 'twitter241.p.rapidapi.com'
-          },
-          signal: AbortSignal.timeout(10000)
+      if (!process.env.RAPIDAPI_KEY) {
+        console.log('[/x] No RAPIDAPI_KEY set');
+        return null;
+      }
+      try {
+        const res = await fetch(
+          'https://twitter241.p.rapidapi.com/user?username=' + encodeURIComponent(handle),
+          {
+            headers: {
+              'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+              'x-rapidapi-host': 'twitter241.p.rapidapi.com'
+            },
+            signal: AbortSignal.timeout(10000)
+          }
+        );
+        console.log('[/x] profile status:', res.status);
+        if (!res.ok) {
+          const txt = await res.text();
+          console.log('[/x] profile error body:', txt.slice(0, 200));
+          return null;
         }
-      );
-      if (!res.ok) return null;
-      return res.json();
+        return res.json();
+      } catch (e) {
+        console.log('[/x] profile fetch threw:', e.message);
+        return null;
+      }
     })(),
     // memory.lol — name change history
     (async () => {
