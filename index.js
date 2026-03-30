@@ -447,6 +447,20 @@ async function handleX(interaction) {
   const memory = memoryResult.status === 'fulfilled' ? memoryResult.value : null;
   const tweetsData = tweetsResult.status === 'fulfilled' ? tweetsResult.value : null;
 
+  // Debug — log top level keys so we can see the structure
+  if (twttr) {
+    console.log('[/x] twttr top-level keys:', Object.keys(twttr).join(', '));
+    if (twttr.user) console.log('[/x] twttr.user keys:', Object.keys(twttr.user).join(', '));
+    if (twttr.data) console.log('[/x] twttr.data keys:', Object.keys(twttr.data).join(', '));
+  } else {
+    console.log('[/x] twttr is null — API call failed or no RAPIDAPI_KEY');
+  }
+  if (tweetsData) {
+    console.log('[/x] tweetsData top-level keys:', Object.keys(tweetsData).join(', '));
+  } else {
+    console.log('[/x] tweetsData is null');
+  }
+
   // If both failed
   if (!twttr && !memory) {
     return interaction.editReply('❌ Could not fetch data for **@' + handle + '** — try again.');
