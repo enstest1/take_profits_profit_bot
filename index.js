@@ -440,9 +440,11 @@ async function handleX(interaction) {
   let profilePic = null;
   let suspicious = false;
 
-  if (twttr && twttr.data && twttr.data.user && twttr.data.user.result) {
-    const u = twttr.data.user.result.legacy || twttr.data.user.result;
-    const core = twttr.data.user.result.legacy;
+  // Response structure: twttr.user.result.legacy (no .data wrapper)
+  const twttrUser = twttr && (twttr.user || (twttr.data && twttr.data.user));
+  if (twttrUser && twttrUser.result) {
+    const core = twttrUser.result.legacy;
+    const isBlueVerified = twttrUser.result.is_blue_verified || false;
 
     if (core) {
       const followers = core.followers_count || 0;
@@ -471,7 +473,7 @@ async function handleX(interaction) {
       ];
 
       // Verified status
-      if (core.verified || (twttr.data.user.result.is_blue_verified)) {
+      if (core.verified || isBlueVerified) {
         profileLines.push('✅ Verified');
       }
     }
