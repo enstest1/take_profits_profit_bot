@@ -301,6 +301,12 @@ const commands = [
     .addStringOption(opt =>
       opt.setName('address').setDescription('Contract address').setRequired(true)
     ),
+  new SlashCommandBuilder()
+    .setName('x')
+    .setDescription('Check X account name history for rug detection')
+    .addStringOption(opt =>
+      opt.setName('handle').setDescription('X handle (with or without @)').setRequired(true)
+    ),
 ].map(c => c.toJSON());
 
 async function registerCommands() {
@@ -357,11 +363,91 @@ async function handleRemove(interaction) {
   await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')**');
 }
 
+async function handleX(interaction) {
+  await interaction.deferReply();
+
+  // Strip @ if included
+  const raw = interaction.options.getString('handle').trim();
+  const handle = raw.startsWith('@') ? raw.slice(1) : raw;
+
+  try {
+    const res = await fetch('https://api.memory.lol/v1/tw/' + encodeURIComponent(handle), {
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (res.status === 404) {
+      return interaction.editReply('❌ **@' + handle + '** not found in memory.lol — account may be too new or never indexed.');
+    }
+    if (!res.ok) {
+      return interaction.editReply('❌ Could not fetch history for **@' + handle + '** — try again in a moment.');
+    }
+
+    const data = await res.json();
+    const accounts = data && data.accounts;
+    const accountData = accounts && Object.values(accounts)[0];
+
+    if (!accountData) {
+      return interaction.editReply('✅ **@' + handle + '** — no name changes found. Clean account.');
+    }
+
+    // Get all historical usernames (exclude current handle)
+    const historical = Object.keys(accountData)
+      .filter(name => name.toLowerCase() !== handle.toLowerCase());
+
+    if (historical.length === 0) {
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff88)
+        .setTitle('🐦 X Account History — @' + handle)
+        .setDescription('✅ No name changes detected — account has always used this handle.')
+        .setFooter({ text: 'Powered by memory.lol' })
+        .setTimestamp();
+      return interaction.editReply({ embeds: [embed] });
+    }
+
+    // Build timeline — get dates for each name
+    const nameList = historical.map(name => {
+      const dates = accountData[name];
+      const firstSeen = dates && dates[0] ? dates[0] : 'unknown date';
+      return '**@' + name + '** (seen ' + firstSeen + ')';
+    });
+
+    const isSuspicious = historical.length >= 2;
+    const color = historical.length >= 3 ? 0xff3333 : historical.length >= 2 ? 0xffaa00 : 0xffff00;
+
+    const description = [
+      (isSuspicious ? '⚠️ ' : '🟡 ') + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') + ' detected
+',
+      'Previous usernames:',
+      nameList.join('
+'),
+      '
+Current: **@' + handle + '**',
+      isSuspicious ? '
+⚠️ **Multiple rebrands — common pattern in serial ruggers**' : ''
+    ].join('
+');
+
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle('🐦 X Account History — @' + handle)
+      .setDescription(description.slice(0, 4000))
+      .setFooter({ text: 'Powered by memory.lol · ' + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') })
+      .setTimestamp();
+
+    return interaction.editReply({ embeds: [embed] });
+
+  } catch (e) {
+    console.error('[/x] failed for ' + handle + ':', e.message);
+    return interaction.editReply('❌ Failed to fetch history — try again in a moment.');
+  }
+}
+
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   try {
     if (interaction.commandName === 'calls') return handleCalls(interaction);
     if (interaction.commandName === 'remove') return handleRemove(interaction);
+    if (interaction.commandName === 'x') return handleX(interaction);
   } catch (e) {
     console.error('[interaction] error:', e);
     const msg = { content: 'Error: ' + e.message, ephemeral: true };
