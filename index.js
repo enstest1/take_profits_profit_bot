@@ -471,13 +471,16 @@ async function handleX(interaction) {
   let profilePic = null;
   let suspicious = false;
 
-  // Response structure: twttr.user.result.legacy (no .data wrapper)
-  const twttrUser = twttr && (twttr.user || (twttr.data && twttr.data.user));
-  if (twttrUser && twttrUser.result) {
-    const core = twttrUser.result.legacy;
-    const isBlueVerified = twttrUser.result.is_blue_verified || false;
-
-    if (core) {
+  // Response structure: twttr.result (single user object, fields at top level)
+  // e.g. twttr.result.followers_count, twttr.result.created_at etc
+  const core = twttr && (
+    twttr.result && !Array.isArray(twttr.result) ? twttr.result :
+    Array.isArray(twttr.result) ? twttr.result[0] :
+    twttr.user ? twttr.user :
+    null
+  );
+  const isBlueVerified = (core && core.is_blue_verified) || false;
+  if (core) {
       const followers = core.followers_count || 0;
       const following = core.friends_count || 0;
       const tweets = core.statuses_count || 0;
@@ -507,7 +510,6 @@ async function handleX(interaction) {
       if (core.verified || isBlueVerified) {
         profileLines.push('✅ Verified');
       }
-    }
   }
 
   // Parse memory.lol name changes
