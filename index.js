@@ -21,8 +21,6 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
-// Volume-safe DB path — /data is the Railway mounted volume
-// If /data exists we use it (persists across deploys), otherwise fall back to local
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 
@@ -38,7 +36,6 @@ function saveDB(db) {
   catch (e) { console.error('[DB] saveDB failed:', e.message); }
 }
 
-// Migrate old DB that doesnt have wallets key
 function ensureDBSchema(db) {
   if (!db.tokens) db.tokens = {};
   if (!db.watchlist) db.watchlist = {};
@@ -86,7 +83,6 @@ function extractAddresses(text) {
   return Array.from(found);
 }
 
-// DexScreener
 async function fetchDexScreener(address) {
   try {
     const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
@@ -116,7 +112,6 @@ async function fetchDexScreener(address) {
   }
 }
 
-// pump.fun
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -279,7 +274,6 @@ async function autoTrack(address, message) {
   console.log('[tracked] ' + token.name + ' (' + token.symbol + ') — posted by ' + message.author.username);
 }
 
-// Message listener
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
@@ -293,8 +287,6 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// Commands — registered as GUILD commands for instant appearance
-// Global commands take up to 1 hour — guild commands are instant
 const commands = [
   new SlashCommandBuilder()
     .setName('calls')
@@ -307,7 +299,7 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('x')
-    .setDescription('Check X account name history for rug detection')
+    .setDescription('Check X account profile, history and rug signals')
     .addStringOption(opt =>
       opt.setName('handle').setDescription('X handle (with or without @)').setRequired(true)
     ),
@@ -340,7 +332,6 @@ const commands = [
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
-    // Use guild commands — appear instantly vs global which take up to 1 hour
     const guildId = process.env.GUILD_ID;
     if (guildId) {
       await rest.put(
@@ -349,7 +340,6 @@ async function registerCommands() {
       );
       console.log('Slash commands registered (guild — instant)');
     } else {
-      // Fallback to global if no GUILD_ID set
       await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
       console.log('Slash commands registered (global — up to 1hr to appear)');
     }
@@ -358,7 +348,6 @@ async function registerCommands() {
   }
 }
 
-// /calls handler
 async function handleCalls(interaction) {
   await interaction.deferReply();
   const db = ensureDBSchema(loadDB());
@@ -390,7 +379,6 @@ async function handleCalls(interaction) {
   await interaction.editReply({ embeds: [embed] });
 }
 
-// /remove handler
 async function handleRemove(interaction) {
   const address = interaction.options.getString('address').trim();
   const db = ensureDBSchema(loadDB());
@@ -404,81 +392,152 @@ async function handleRemove(interaction) {
   await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')**');
 }
 
-// /x handler — checks X account name history via memory.lol
+// /x handler — Twttr API (RapidAPI) for profile data + memory.lol for name changes
 async function handleX(interaction) {
   await interaction.deferReply();
   const raw = interaction.options.getString('handle').trim();
   const handle = raw.startsWith('@') ? raw.slice(1) : raw;
 
-  try {
-    const res = await fetch('https://api.memory.lol/v1/tw/' + encodeURIComponent(handle), {
-      signal: AbortSignal.timeout(8000)
-    });
+  // Run both API calls in parallel
+  const [twttrResult, memoryResult] = await Promise.allSettled([
+    // Twttr API — profile info + recent tweets for CA scan
+    (async () => {
+      if (!process.env.RAPIDAPI_KEY) return null;
+      const res = await fetch(
+        'https://twttrapi.p.rapidapi.com/get-user?username=' + encodeURIComponent(handle),
+        {
+          headers: {
+            'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+            'x-rapidapi-host': 'twttrapi.p.rapidapi.com'
+          },
+          signal: AbortSignal.timeout(10000)
+        }
+      );
+      if (!res.ok) return null;
+      return res.json();
+    })(),
+    // memory.lol — name change history
+    (async () => {
+      const res = await fetch(
+        'https://api.memory.lol/v1/tw/' + encodeURIComponent(handle),
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (!res.ok) return null;
+      return res.json();
+    })()
+  ]);
 
-    if (res.status === 404) {
-      return interaction.editReply('❌ **@' + handle + '** not found — account may be too new or never indexed.');
-    }
-    if (!res.ok) {
-      return interaction.editReply('❌ Could not fetch history for **@' + handle + '** — try again.');
-    }
+  const twttr = twttrResult.status === 'fulfilled' ? twttrResult.value : null;
+  const memory = memoryResult.status === 'fulfilled' ? memoryResult.value : null;
 
-    const data = await res.json();
-    const accounts = data && data.accounts;
-    const accountData = accounts && Object.values(accounts)[0];
-
-    if (!accountData) {
-      const embed = new EmbedBuilder()
-        .setColor(0x00ff88)
-        .setTitle('🐦 X Account History — @' + handle)
-        .setDescription('✅ No name changes found — clean account.')
-        .setFooter({ text: 'Powered by memory.lol' })
-        .setTimestamp();
-      return interaction.editReply({ embeds: [embed] });
-    }
-
-    const historical = Object.keys(accountData)
-      .filter(name => name.toLowerCase() !== handle.toLowerCase());
-
-    if (historical.length === 0) {
-      const embed = new EmbedBuilder()
-        .setColor(0x00ff88)
-        .setTitle('🐦 X Account History — @' + handle)
-        .setDescription('✅ No name changes detected — account has always used this handle.')
-        .setFooter({ text: 'Powered by memory.lol' })
-        .setTimestamp();
-      return interaction.editReply({ embeds: [embed] });
-    }
-
-    const nameList = historical.map(name => {
-      const dates = accountData[name];
-      const firstSeen = dates && dates[0] ? dates[0] : 'unknown';
-      return '**@' + name + '** · seen ' + firstSeen;
-    });
-
-    const color = historical.length >= 3 ? 0xff3333 : historical.length >= 2 ? 0xffaa00 : 0xffff00;
-
-    const desc = [
-      (historical.length >= 2 ? '⚠️ ' : '🟡 ') + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') + ' detected\n',
-      'Previous usernames:\n' + nameList.join('\n'),
-      '\nCurrent: **@' + handle + '**',
-      historical.length >= 2 ? '\n⚠️ **Multiple rebrands — common pattern in serial ruggers**' : ''
-    ].join('\n');
-
-    const embed = new EmbedBuilder()
-      .setColor(color)
-      .setTitle('🐦 X Account History — @' + handle)
-      .setDescription(desc.slice(0, 4000))
-      .setFooter({ text: 'memory.lol · ' + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') })
-      .setTimestamp();
-
-    return interaction.editReply({ embeds: [embed] });
-  } catch (e) {
-    console.error('[/x] failed for ' + handle + ':', e.message);
-    return interaction.editReply('❌ Failed — try again in a moment.');
+  // If both failed
+  if (!twttr && !memory) {
+    return interaction.editReply('❌ Could not fetch data for **@' + handle + '** — try again.');
   }
+
+  // Parse Twttr API profile data
+  let profileLines = [];
+  let profilePic = null;
+  let suspicious = false;
+
+  if (twttr && twttr.data && twttr.data.user && twttr.data.user.result) {
+    const u = twttr.data.user.result.legacy || twttr.data.user.result;
+    const core = twttr.data.user.result.legacy;
+
+    if (core) {
+      const followers = core.followers_count || 0;
+      const following = core.friends_count || 0;
+      const tweets = core.statuses_count || 0;
+      const createdAt = core.created_at ? new Date(core.created_at) : null;
+      const accountAgeDays = createdAt ? Math.floor((Date.now() - createdAt.getTime()) / 86400000) : null;
+      const ageStr = accountAgeDays !== null
+        ? accountAgeDays > 365
+          ? Math.floor(accountAgeDays / 365) + 'y ' + Math.floor((accountAgeDays % 365) / 30) + 'm old'
+          : accountAgeDays + 'd old'
+        : '—';
+
+      profilePic = core.profile_image_url_https || null;
+
+      // Suspicious signals
+      const ffRatio = following > 0 ? (followers / following).toFixed(2) : null;
+      const isNew = accountAgeDays !== null && accountAgeDays < 30;
+      const isLowFollowers = followers < 100;
+      if (isNew || isLowFollowers) suspicious = true;
+
+      profileLines = [
+        '📅 **' + ageStr + '**' + (isNew ? ' ⚠️ Very new account' : ''),
+        '👥 **' + followers.toLocaleString() + '** followers · **' + following.toLocaleString() + '** following' + (ffRatio ? ' · ratio: ' + ffRatio : ''),
+        '🐦 **' + tweets.toLocaleString() + '** tweets',
+      ];
+
+      // Verified status
+      if (core.verified || (twttr.data.user.result.is_blue_verified)) {
+        profileLines.push('✅ Verified');
+      }
+    }
+  }
+
+  // Parse memory.lol name changes
+  let nameLines = [];
+  let nameChangeCount = 0;
+
+  if (memory && memory.accounts) {
+    const accountData = Object.values(memory.accounts)[0];
+    if (accountData) {
+      const historical = Object.keys(accountData)
+        .filter(n => n.toLowerCase() !== handle.toLowerCase());
+      nameChangeCount = historical.length;
+      if (historical.length > 0) {
+        nameLines = historical.map(n => {
+          const dates = accountData[n];
+          const firstSeen = dates && dates[0] ? dates[0] : 'unknown';
+          return '**@' + n + '** · ' + firstSeen;
+        });
+        if (historical.length >= 2) suspicious = true;
+      }
+    }
+  }
+
+  // Build embed
+  const color = suspicious
+    ? (nameChangeCount >= 3 ? 0xff3333 : 0xffaa00)
+    : 0x00ff88;
+
+  const descParts = [];
+
+  if (profileLines.length > 0) {
+    descParts.push(profileLines.join('\n'));
+  }
+
+  if (nameChangeCount > 0) {
+    descParts.push(
+      '\n🔄 **' + nameChangeCount + ' name change' + (nameChangeCount !== 1 ? 's' : '') + ' detected**\n' +
+      nameLines.join('\n') +
+      '\nCurrent: **@' + handle + '**'
+    );
+    if (nameChangeCount >= 2) {
+      descParts.push('\n⚠️ **Multiple rebrands — common pattern in serial ruggers**');
+    }
+  } else if (memory) {
+    descParts.push('\n✅ No name changes detected');
+  }
+
+  if (descParts.length === 0) {
+    descParts.push('No data available for this account.');
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle('🐦 X Profile — @' + handle)
+    .setDescription(descParts.join('\n').slice(0, 4000))
+    .setFooter({ text: 'Twttr API + memory.lol' })
+    .setTimestamp();
+
+  if (profilePic) embed.setThumbnail(profilePic);
+
+  return interaction.editReply({ embeds: [embed] });
 }
 
-// /wallet handlers
 async function handleWalletAdd(interaction) {
   await interaction.deferReply({ ephemeral: true });
   const address = interaction.options.getString('address').trim();
@@ -556,7 +615,6 @@ async function handleWalletList(interaction) {
   return interaction.editReply({ embeds: [embed] });
 }
 
-// Interaction router
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   try {
@@ -577,7 +635,6 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Boot
 client.once('ready', () => {
   console.log('Bot online as ' + client.user.tag);
   console.log('Data directory: ' + DATA_DIR);
