@@ -398,9 +398,9 @@ async function handleX(interaction) {
   const raw = interaction.options.getString('handle').trim();
   const handle = raw.startsWith('@') ? raw.slice(1) : raw;
 
-  // Run both API calls in parallel
-  const [twttrResult, memoryResult] = await Promise.allSettled([
-    // Twttr API — profile info + recent tweets for CA scan
+  // Run all API calls in parallel
+  const [twttrResult, memoryResult, tweetsResult] = await Promise.allSettled([
+    // Twttr API — profile info
     (async () => {
       if (!process.env.RAPIDAPI_KEY) return null;
       const res = await fetch(
@@ -424,11 +424,28 @@ async function handleX(interaction) {
       );
       if (!res.ok) return null;
       return res.json();
+    })(),
+    // Twttr API — last 200 tweets for CA graveyard
+    (async () => {
+      if (!process.env.RAPIDAPI_KEY) return null;
+      const res = await fetch(
+        'https://twttrapi.p.rapidapi.com/user-tweets?username=' + encodeURIComponent(handle),
+        {
+          headers: {
+            'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+            'x-rapidapi-host': 'twttrapi.p.rapidapi.com'
+          },
+          signal: AbortSignal.timeout(12000)
+        }
+      );
+      if (!res.ok) return null;
+      return res.json();
     })()
   ]);
 
   const twttr = twttrResult.status === 'fulfilled' ? twttrResult.value : null;
   const memory = memoryResult.status === 'fulfilled' ? memoryResult.value : null;
+  const tweetsData = tweetsResult.status === 'fulfilled' ? tweetsResult.value : null;
 
   // If both failed
   if (!twttr && !memory) {
@@ -500,6 +517,52 @@ async function handleX(interaction) {
     }
   }
 
+  // CA Graveyard — extract Solana addresses from tweets, check pump.fun
+  let graveyardLine = null;
+  if (tweetsData) {
+    try {
+      // Extract all tweet text from response
+      const allText = JSON.stringify(tweetsData);
+      const solanaMatches = [...new Set(
+        (allText.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g) || [])
+          .filter(a => /\d/.test(a) && !/[0OIl]/.test(a) && a.length >= 32 && a.length <= 44)
+      )];
+
+      if (solanaMatches.length > 0) {
+        // Check each CA on pump.fun — limit to 20 to avoid timeout
+        const toCheck = solanaMatches.slice(0, 20);
+        const results = await Promise.allSettled(
+          toCheck.map(async (addr) => {
+            const r = await fetch('https://frontend-api.pump.fun/coins/' + addr, {
+              signal: AbortSignal.timeout(4000)
+            });
+            if (!r.ok) return { addr, alive: false };
+            const d = await r.json();
+            return { addr, alive: !!(d && d.mint && d.name) };
+          })
+        );
+
+        const checked = results
+          .filter(r => r.status === 'fulfilled')
+          .map(r => r.value);
+        const alive = checked.filter(r => r.alive).length;
+        const dead = checked.filter(r => !r.alive).length;
+        const total = alive + dead;
+
+        if (total > 0) {
+          const deadPct = Math.round((dead / total) * 100);
+          const rugSignal = deadPct >= 70 ? ' ⚠️ High rug association' : deadPct >= 40 ? ' 🟡 Mixed history' : ' ✅ Mostly clean';
+          graveyardLine = '🔍 **CA Graveyard** (last ~200 tweets)\n' +
+            '🟢 ' + alive + ' alive · 🔴 ' + dead + ' dead of ' + total + ' posted\n' +
+            deadPct + '% dead rate —' + rugSignal;
+          if (deadPct >= 70) suspicious = true;
+        }
+      }
+    } catch (e) {
+      console.error('[/x] graveyard check failed:', e.message);
+    }
+  }
+
   // Build embed
   const color = suspicious
     ? (nameChangeCount >= 3 ? 0xff3333 : 0xffaa00)
@@ -522,6 +585,10 @@ async function handleX(interaction) {
     }
   } else if (memory) {
     descParts.push('\n✅ No name changes detected');
+  }
+
+  if (graveyardLine) {
+    descParts.push('\n' + graveyardLine);
   }
 
   if (descParts.length === 0) {
