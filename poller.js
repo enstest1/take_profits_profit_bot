@@ -9,12 +9,19 @@ const SUMMARY_CHANNEL_ID = '1452152164699869298';
 
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
-  catch { return { tokens: {}, watchlist: {} }; }
+  catch { return { tokens: {}, watchlist: {}, wallets: {} }; }
 }
 
 function saveDB(db) {
   try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); }
   catch (e) { console.error('[DB] saveDB failed:', e.message); }
+}
+
+function ensureDBSchema(db) {
+  if (!db.tokens) db.tokens = {};
+  if (!db.watchlist) db.watchlist = {};
+  if (!db.wallets) db.wallets = {};
+  return db;
 }
 
 function fmtUsd(n) {
@@ -41,7 +48,7 @@ function fmtTime(ms) {
 const pollingLock = new Set();
 let lastSummaryDate = null;
 
-// DexScreener — graduated tokens
+// DexScreener
 async function fetchDexScreener(address) {
   try {
     const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
@@ -59,9 +66,7 @@ async function fetchDexScreener(address) {
       volume24h: (pair.volume && pair.volume.h24) || null,
       liquidity: (pair.liquidity && pair.liquidity.usd) || null,
       priceChange1h: (pair.priceChange && pair.priceChange.h1) || null,
-      buyPct: totalTxns > 0
-        ? Math.round(((pair.txns.h24.buys || 0) / totalTxns) * 100)
-        : null,
+      buyPct: totalTxns > 0 ? Math.round(((pair.txns.h24.buys || 0) / totalTxns) * 100) : null,
       source: 'dexscreener'
     };
   } catch (e) {
@@ -70,7 +75,7 @@ async function fetchDexScreener(address) {
   }
 }
 
-// pump.fun — bonding curve tokens
+// pump.fun
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -110,19 +115,17 @@ function calcPumpFunPrice(pumpData, solPrice) {
   }
 }
 
-// Fetch live data — DexScreener first, pump.fun fallback for bonding curve
+// Fetch live price — DexScreener first, pump.fun fallback
 async function fetchLiveData(address, platform, solPriceUsd) {
-  // Always try DexScreener first
   const dex = await fetchDexScreener(address);
   if (dex && dex.price) return dex;
 
-  // Fallback to pump.fun for bonding curve tokens
   if (solPriceUsd) {
     const pump = await fetchPumpFun(address);
     if (pump) {
       const price = calcPumpFunPrice(pump, solPriceUsd);
       return {
-        price: price,
+        price,
         marketCap: pump.usd_market_cap || null,
         volume24h: null,
         liquidity: null,
@@ -148,9 +151,77 @@ async function sendEmbed(client, channelId, embed) {
   }
 }
 
+// Wallet watcher — polls Moralis for recent swaps on watched wallets
+async function pollWallets(client) {
+  if (!process.env.MORALIS_API_KEY) return;
+  const db = ensureDBSchema(loadDB());
+  const wallets = Object.values(db.wallets || {});
+  if (wallets.length === 0) return;
+
+  for (const wallet of wallets) {
+    try {
+      const res = await fetch(
+        'https://solana-gateway.moralis.io/account/mainnet/' + wallet.address + '/swaps?limit=5&order=DESC',
+        {
+          headers: { 'Authorization': 'Bearer ' + process.env.MORALIS_API_KEY },
+          signal: AbortSignal.timeout(8000)
+        }
+      );
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const swaps = data.result || data.swaps || [];
+      if (!swaps.length) continue;
+
+      const latest = swaps[0];
+      const txHash = latest.transactionHash || latest.transaction_hash || latest.hash;
+
+      // Skip if already seen this tx
+      if (!txHash || txHash === wallet.lastSeenTx) continue;
+
+      // Update last seen immediately to prevent double alerts
+      db.wallets[wallet.address].lastSeenTx = txHash;
+      saveDB(db);
+
+      const txType = (latest.transactionType || latest.type || '').toLowerCase();
+      const isBuy = txType === 'buy';
+      const isSell = txType === 'sell';
+      if (!isBuy && !isSell) continue;
+
+      const tokenOut = latest.tokenOut || latest.bought || {};
+      const tokenIn = latest.tokenIn || latest.sold || {};
+      const tokenName = isBuy ? (tokenOut.name || tokenOut.symbol || 'Unknown') : (tokenIn.name || tokenIn.symbol || 'Unknown');
+      const tokenSymbol = isBuy ? (tokenOut.symbol || '?') : (tokenIn.symbol || '?');
+      const amountUsd = latest.totalValueUsd || latest.usdValue || null;
+
+      const embed = new EmbedBuilder()
+        .setColor(isBuy ? 0x00ff88 : 0xff3333)
+        .setTitle((isBuy ? '🟢 Smart Wallet Buy' : '🔴 Smart Wallet Sell') + ' — ' + wallet.label)
+        .setDescription(
+          '**' + wallet.label + '** just ' + (isBuy ? 'bought' : 'sold') + ' **' + tokenName + ' (' + tokenSymbol + ')**' +
+          (amountUsd ? '\nValue: **$' + Number(amountUsd).toLocaleString() + '**' : '') +
+          '\n\nAdded by ' + wallet.addedBy
+        )
+        .setFooter({ text: wallet.address })
+        .setTimestamp();
+
+      try {
+        const channel = await client.channels.fetch(wallet.alertChannelId);
+        await channel.send({ embeds: [embed] });
+        console.log('[wallet] ' + wallet.label + ' ' + (isBuy ? 'bought' : 'sold') + ' ' + tokenSymbol);
+      } catch (e) {
+        console.error('[wallet] send failed:', e.message);
+      }
+
+    } catch (e) {
+      console.error('[wallet] poll error for ' + wallet.label + ':', e.message);
+    }
+  }
+}
+
 // Daily summary at 4am PST (12:00 UTC)
 async function postDailySummary(client) {
-  const db = loadDB();
+  const db = ensureDBSchema(loadDB());
   const entries = Object.values(db.tokens || {});
   console.log('[summary] Posting daily summary — ' + entries.length + ' tokens');
 
@@ -237,7 +308,10 @@ function checkDailySummary(client) {
 export async function pollTokens(client) {
   checkDailySummary(client);
 
-  const db = loadDB();
+  // Poll smart wallets
+  pollWallets(client).catch(e => console.error('[walletPoll] error:', e.message));
+
+  const db = ensureDBSchema(loadDB());
   const addresses = Object.keys(db.tokens || {});
   if (addresses.length === 0) return;
 
@@ -269,7 +343,7 @@ async function processToken(client, address, db, solPriceUsd) {
   const live = await fetchLiveData(address, entry.platform || 'dexscreener', solPriceUsd);
   if (!live) return;
 
-  // Graduation check for pump.fun tokens
+  // Graduation check
   if (live.source === 'pumpfun' && live.rawPump) {
     const pumpData = live.rawPump;
     if (pumpData.complete === true && !graduationAlertFired) {
@@ -330,7 +404,6 @@ async function processToken(client, address, db, solPriceUsd) {
 
   const currentMultiple = livePrice / Number(entry.priceAtCall);
   const buyPctStr = live.buyPct !== null && live.buyPct !== undefined ? live.buyPct + '%' : '—';
-  const sellPctStr = live.buyPct !== null && live.buyPct !== undefined ? (100 - live.buyPct) + '%' : '—';
 
   // Reset all alerts below 1.5x
   const milestonesFired = db.tokens[address].milestonesFired || [];
@@ -349,7 +422,7 @@ async function processToken(client, address, db, solPriceUsd) {
 
   const curGainAlert = db.tokens[address].gainAlertFired || false;
 
-  // Check A: +75% alert — only fires between 1.75x and 2x to prevent double post
+  // Check A: +75% — only fires between 1.75x and 2x to prevent double post
   if (currentMultiple >= 1.75 && currentMultiple < 2.0 && !curGainAlert) {
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
@@ -365,7 +438,6 @@ async function processToken(client, address, db, solPriceUsd) {
   }
 
   // Check B: Milestones 2x, 5x, 10x, 20x
-  // gainX label: price 2x = 1x gain (+100%), price 5x = 4x (+400%) etc
   const milestones = [2, 5, 10, 20];
   for (const milestone of milestones) {
     const latest = db.tokens[address].milestonesFired || [];
@@ -384,7 +456,7 @@ async function processToken(client, address, db, solPriceUsd) {
       db.tokens[address].gainAlertFired = true;
       db.tokens[address].takeProfitFired = true;
       saveDB(db);
-      console.log('[' + gainX + 'x +' + gainPct + '%] ' + entry.name);
+      console.log('[' + gainX + 'x] ' + entry.name);
     }
   }
 
