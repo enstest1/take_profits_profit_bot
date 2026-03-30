@@ -21,17 +21,29 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
+// Volume-safe DB path — /data is the Railway mounted volume
+// If /data exists we use it (persists across deploys), otherwise fall back to local
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 
+console.log('[boot] Using data dir: ' + DATA_DIR);
+
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
-  catch { return { tokens: {}, watchlist: {} }; }
+  catch { return { tokens: {}, watchlist: {}, wallets: {} }; }
 }
 
 function saveDB(db) {
   try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); }
   catch (e) { console.error('[DB] saveDB failed:', e.message); }
+}
+
+// Migrate old DB that doesnt have wallets key
+function ensureDBSchema(db) {
+  if (!db.tokens) db.tokens = {};
+  if (!db.watchlist) db.watchlist = {};
+  if (!db.wallets) db.wallets = {};
+  return db;
 }
 
 function fmtUsd(n) {
@@ -63,24 +75,18 @@ function getTokenAgeFlag(createdAtMs) {
   return Math.floor(ageHours / 24) + 'd old';
 }
 
-// Deduplicate addresses — handles addresses with or without 'pump' suffix
 function extractAddresses(text) {
   const found = new Set();
-
-  // EVM
   const evmMatches = text.match(/\b0x[a-fA-F0-9]{40}\b/g) || [];
   for (const addr of evmMatches) found.add(addr.toLowerCase());
-
-  // Solana — 32-44 base58 chars
   const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g) || [];
   for (const addr of solanaMatches) {
     if (/\d/.test(addr) && !/[0OIl]/.test(addr)) found.add(addr);
   }
-
   return Array.from(found);
 }
 
-// DexScreener — graduated tokens on Raydium
+// DexScreener
 async function fetchDexScreener(address) {
   try {
     const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
@@ -110,7 +116,7 @@ async function fetchDexScreener(address) {
   }
 }
 
-// pump.fun — pre-graduation bonding curve tokens
+// pump.fun
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -150,15 +156,10 @@ function calcPumpFunPrice(pump, solPrice) {
   }
 }
 
-// Try DexScreener first (graduated), then pump.fun (bonding curve)
 async function fetchTokenData(address) {
-  // DexScreener first — covers graduated tokens
   const dex = await fetchDexScreener(address);
-  if (dex && dex.name) {
-    return dex;
-  }
+  if (dex && dex.name) return dex;
 
-  // pump.fun fallback — covers pre-graduation tokens
   const pump = await fetchPumpFun(address);
   if (pump) {
     const solPrice = await fetchSolPrice();
@@ -188,7 +189,7 @@ async function fetchTokenData(address) {
 }
 
 async function autoTrack(address, message) {
-  const db = loadDB();
+  const db = ensureDBSchema(loadDB());
 
   if (db.tokens[address]) {
     const existing = db.tokens[address];
@@ -206,7 +207,7 @@ async function autoTrack(address, message) {
 
   const token = await fetchTokenData(address);
   if (!token) {
-    console.log('[skip] ' + address.slice(0, 8) + '... — not found on DexScreener or pump.fun');
+    console.log('[skip] ' + address.slice(0, 8) + '... — not found');
     return;
   }
 
@@ -278,6 +279,7 @@ async function autoTrack(address, message) {
   console.log('[tracked] ' + token.name + ' (' + token.symbol + ') — posted by ' + message.author.username);
 }
 
+// Message listener
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
@@ -291,6 +293,8 @@ client.on('messageCreate', async (message) => {
   }
 });
 
+// Commands — registered as GUILD commands for instant appearance
+// Global commands take up to 1 hour — guild commands are instant
 const commands = [
   new SlashCommandBuilder()
     .setName('calls')
@@ -307,21 +311,57 @@ const commands = [
     .addStringOption(opt =>
       opt.setName('handle').setDescription('X handle (with or without @)').setRequired(true)
     ),
+  new SlashCommandBuilder()
+    .setName('wallet')
+    .setDescription('Manage smart wallet watchlist')
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('Watch a wallet and get alerts when it trades')
+        .addStringOption(opt =>
+          opt.setName('address').setDescription('Solana wallet address').setRequired(true)
+        )
+        .addStringOption(opt =>
+          opt.setName('label').setDescription('Label for this wallet e.g. "whale1"').setRequired(false)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('remove')
+        .setDescription('Stop watching a wallet')
+        .addStringOption(opt =>
+          opt.setName('address').setDescription('Solana wallet address').setRequired(true)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('Show all watched wallets')
+    ),
 ].map(c => c.toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-    console.log('Slash commands registered');
+    // Use guild commands — appear instantly vs global which take up to 1 hour
+    const guildId = process.env.GUILD_ID;
+    if (guildId) {
+      await rest.put(
+        Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId),
+        { body: commands }
+      );
+      console.log('Slash commands registered (guild — instant)');
+    } else {
+      // Fallback to global if no GUILD_ID set
+      await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+      console.log('Slash commands registered (global — up to 1hr to appear)');
+    }
   } catch (e) {
     console.error('Failed to register commands:', e.message);
   }
 }
 
+// /calls handler
 async function handleCalls(interaction) {
   await interaction.deferReply();
-  const db = loadDB();
+  const db = ensureDBSchema(loadDB());
   const entries = Object.values(db.tokens || {});
   if (entries.length === 0) {
     return interaction.editReply('Nothing tracked yet — drop a contract address in chat.');
@@ -350,9 +390,10 @@ async function handleCalls(interaction) {
   await interaction.editReply({ embeds: [embed] });
 }
 
+// /remove handler
 async function handleRemove(interaction) {
   const address = interaction.options.getString('address').trim();
-  const db = loadDB();
+  const db = ensureDBSchema(loadDB());
   if (!db.tokens[address]) {
     return interaction.reply({ content: 'Not tracking ' + address, ephemeral: true });
   }
@@ -363,10 +404,9 @@ async function handleRemove(interaction) {
   await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')**');
 }
 
+// /x handler — checks X account name history via memory.lol
 async function handleX(interaction) {
   await interaction.deferReply();
-
-  // Strip @ if included
   const raw = interaction.options.getString('handle').trim();
   const handle = raw.startsWith('@') ? raw.slice(1) : raw;
 
@@ -376,10 +416,10 @@ async function handleX(interaction) {
     });
 
     if (res.status === 404) {
-      return interaction.editReply('❌ **@' + handle + '** not found in memory.lol — account may be too new or never indexed.');
+      return interaction.editReply('❌ **@' + handle + '** not found — account may be too new or never indexed.');
     }
     if (!res.ok) {
-      return interaction.editReply('❌ Could not fetch history for **@' + handle + '** — try again in a moment.');
+      return interaction.editReply('❌ Could not fetch history for **@' + handle + '** — try again.');
     }
 
     const data = await res.json();
@@ -387,10 +427,15 @@ async function handleX(interaction) {
     const accountData = accounts && Object.values(accounts)[0];
 
     if (!accountData) {
-      return interaction.editReply('✅ **@' + handle + '** — no name changes found. Clean account.');
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff88)
+        .setTitle('🐦 X Account History — @' + handle)
+        .setDescription('✅ No name changes found — clean account.')
+        .setFooter({ text: 'Powered by memory.lol' })
+        .setTimestamp();
+      return interaction.editReply({ embeds: [embed] });
     }
 
-    // Get all historical usernames (exclude current handle)
     const historical = Object.keys(accountData)
       .filter(name => name.toLowerCase() !== handle.toLowerCase());
 
@@ -404,50 +449,126 @@ async function handleX(interaction) {
       return interaction.editReply({ embeds: [embed] });
     }
 
-    // Build timeline — get dates for each name
     const nameList = historical.map(name => {
       const dates = accountData[name];
-      const firstSeen = dates && dates[0] ? dates[0] : 'unknown date';
-      return '**@' + name + '** (seen ' + firstSeen + ')';
+      const firstSeen = dates && dates[0] ? dates[0] : 'unknown';
+      return '**@' + name + '** · seen ' + firstSeen;
     });
 
-    const isSuspicious = historical.length >= 2;
     const color = historical.length >= 3 ? 0xff3333 : historical.length >= 2 ? 0xffaa00 : 0xffff00;
 
-    const description = [
-      (isSuspicious ? '⚠️ ' : '🟡 ') + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') + ' detected
-',
-      'Previous usernames:',
-      nameList.join('
-'),
-      '
-Current: **@' + handle + '**',
-      isSuspicious ? '
-⚠️ **Multiple rebrands — common pattern in serial ruggers**' : ''
-    ].join('
-');
+    const desc = [
+      (historical.length >= 2 ? '⚠️ ' : '🟡 ') + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') + ' detected\n',
+      'Previous usernames:\n' + nameList.join('\n'),
+      '\nCurrent: **@' + handle + '**',
+      historical.length >= 2 ? '\n⚠️ **Multiple rebrands — common pattern in serial ruggers**' : ''
+    ].join('\n');
 
     const embed = new EmbedBuilder()
       .setColor(color)
       .setTitle('🐦 X Account History — @' + handle)
-      .setDescription(description.slice(0, 4000))
-      .setFooter({ text: 'Powered by memory.lol · ' + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') })
+      .setDescription(desc.slice(0, 4000))
+      .setFooter({ text: 'memory.lol · ' + historical.length + ' name change' + (historical.length !== 1 ? 's' : '') })
       .setTimestamp();
 
     return interaction.editReply({ embeds: [embed] });
-
   } catch (e) {
     console.error('[/x] failed for ' + handle + ':', e.message);
-    return interaction.editReply('❌ Failed to fetch history — try again in a moment.');
+    return interaction.editReply('❌ Failed — try again in a moment.');
   }
 }
 
+// /wallet handlers
+async function handleWalletAdd(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const address = interaction.options.getString('address').trim();
+  const label = interaction.options.getString('label') || address.slice(0, 8) + '...';
+
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
+    return interaction.editReply('❌ Invalid Solana address.');
+  }
+
+  const db = ensureDBSchema(loadDB());
+  if (db.wallets[address]) {
+    return interaction.editReply('👀 Already watching **' + db.wallets[address].label + '**');
+  }
+
+  db.wallets[address] = {
+    address,
+    label,
+    addedBy: interaction.user.username,
+    addedAt: Date.now(),
+    alertChannelId: interaction.channelId,
+    lastSeenTx: null,
+  };
+
+  saveDB(db);
+  console.log('[wallet] Added ' + label + ' (' + address + ')');
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00ccff)
+    .setTitle('👛 Watching wallet: ' + label)
+    .setDescription(
+      'Added by **' + interaction.user.username + '**\n' +
+      '`' + address + '`\n\n' +
+      'You\'ll be pinged when this wallet buys or sells something.'
+    )
+    .setTimestamp();
+
+  return interaction.editReply({ embeds: [embed] });
+}
+
+async function handleWalletRemove(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const address = interaction.options.getString('address').trim();
+  const db = ensureDBSchema(loadDB());
+
+  if (!db.wallets[address]) {
+    return interaction.editReply('❌ Not watching that wallet.');
+  }
+
+  const label = db.wallets[address].label;
+  delete db.wallets[address];
+  saveDB(db);
+  return interaction.editReply('✅ Stopped watching **' + label + '**');
+}
+
+async function handleWalletList(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const db = ensureDBSchema(loadDB());
+  const wallets = Object.values(db.wallets || {});
+
+  if (wallets.length === 0) {
+    return interaction.editReply('📭 No wallets being watched. Use `/wallet add <address>` to add one.');
+  }
+
+  const lines = wallets.map((w, i) =>
+    (i + 1) + '. **' + w.label + '**\n   `' + w.address + '`\n   Added by ' + w.addedBy + ' · ' + fmtTime(w.addedAt)
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(0x7c3aed)
+    .setTitle('👛 Watched Wallets')
+    .setDescription(lines.join('\n\n').slice(0, 4000))
+    .setFooter({ text: wallets.length + ' wallet' + (wallets.length !== 1 ? 's' : '') + ' being watched' })
+    .setTimestamp();
+
+  return interaction.editReply({ embeds: [embed] });
+}
+
+// Interaction router
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   try {
     if (interaction.commandName === 'calls') return handleCalls(interaction);
     if (interaction.commandName === 'remove') return handleRemove(interaction);
     if (interaction.commandName === 'x') return handleX(interaction);
+    if (interaction.commandName === 'wallet') {
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'add') return handleWalletAdd(interaction);
+      if (sub === 'remove') return handleWalletRemove(interaction);
+      if (sub === 'list') return handleWalletList(interaction);
+    }
   } catch (e) {
     console.error('[interaction] error:', e);
     const msg = { content: 'Error: ' + e.message, ephemeral: true };
@@ -456,8 +577,10 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
+// Boot
 client.once('ready', () => {
   console.log('Bot online as ' + client.user.tag);
+  console.log('Data directory: ' + DATA_DIR);
   pollTokens(client);
   setInterval(() => pollTokens(client), 3 * 60 * 1000);
 });
