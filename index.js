@@ -485,9 +485,9 @@ async function handleX(interaction) {
   let suspicious = false;
 
   // Response structure: twttr.user.result.legacy (confirmed from API test)
-  const twttrResult = twttr && twttr.user && twttr.user.result;
-  const core = twttrResult && twttrResult.legacy;
-  const isBlueVerified = (twttrResult && twttrResult.is_blue_verified) || false;
+  const userResult = twttr && twttr.user && twttr.user.result;
+  const core = userResult && userResult.legacy;
+  const isBlueVerified = (userResult && userResult.is_blue_verified) || false;
   if (core) {
       const followers = core.followers_count || 0;
       const following = core.friends_count || 0;
