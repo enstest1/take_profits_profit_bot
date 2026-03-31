@@ -484,8 +484,14 @@ async function handleX(interaction) {
   let profilePic = null;
   let suspicious = false;
 
-  // Response structure: twttr.user.result.legacy (confirmed from API test)
-  const userResult = twttr && twttr.user && twttr.user.result;
+  // Handle both response structures:
+  // twttr.user.result.legacy (from RapidAPI test)
+  // twttr.result.legacy (from actual bot call)
+  const userResult = twttr && (
+    (twttr.user && twttr.user.result) ||
+    twttr.result ||
+    null
+  );
   const core = userResult && userResult.legacy;
   const isBlueVerified = (userResult && userResult.is_blue_verified) || false;
   if (core) {
