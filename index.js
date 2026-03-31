@@ -484,15 +484,10 @@ async function handleX(interaction) {
   let profilePic = null;
   let suspicious = false;
 
-  // Response structure: twttr.result (single user object, fields at top level)
-  // e.g. twttr.result.followers_count, twttr.result.created_at etc
-  const core = twttr && (
-    twttr.result && !Array.isArray(twttr.result) ? twttr.result :
-    Array.isArray(twttr.result) ? twttr.result[0] :
-    twttr.user ? twttr.user :
-    null
-  );
-  const isBlueVerified = (core && core.is_blue_verified) || false;
+  // Response structure: twttr.user.result.legacy (confirmed from API test)
+  const twttrResult = twttr && twttr.user && twttr.user.result;
+  const core = twttrResult && twttrResult.legacy;
+  const isBlueVerified = (twttrResult && twttrResult.is_blue_verified) || false;
   if (core) {
       const followers = core.followers_count || 0;
       const following = core.friends_count || 0;
