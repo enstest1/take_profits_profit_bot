@@ -397,15 +397,13 @@ async function handleX(interaction) {
   await interaction.deferReply();
   const raw = interaction.options.getString('handle').trim();
   const handle = raw.startsWith('@') ? raw.slice(1) : raw;
+  const SOL_CA_REGEX = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
 
-  // Run all API calls in parallel
-  const [twttrResult, memoryResult, tweetsResult] = await Promise.allSettled([
+  // Fetch profile + memory first (tweets endpoint needs numeric user id / rest_id)
+  const [twttrResult, memoryResult] = await Promise.allSettled([
     // Twttr API — profile info
     (async () => {
-      if (!process.env.RAPIDAPI_KEY) {
-        console.log('[/x] No RAPIDAPI_KEY set');
-        return null;
-      }
+      if (!process.env.RAPIDAPI_KEY) return null;
       try {
         const res = await fetch(
           'https://twitter241.p.rapidapi.com/user?username=' + encodeURIComponent(handle),
@@ -417,15 +415,11 @@ async function handleX(interaction) {
             signal: AbortSignal.timeout(10000)
           }
         );
-        console.log('[/x] profile status:', res.status);
         if (!res.ok) {
-          const txt = await res.text();
-          console.log('[/x] profile error body:', txt.slice(0, 200));
           return null;
         }
         return res.json();
       } catch (e) {
-        console.log('[/x] profile fetch threw:', e.message);
         return null;
       }
     })(),
@@ -437,42 +431,11 @@ async function handleX(interaction) {
       );
       if (!res.ok) return null;
       return res.json();
-    })(),
-    // Twttr API — last 200 tweets for CA graveyard
-    (async () => {
-      if (!process.env.RAPIDAPI_KEY) return null;
-      const res = await fetch(
-        'https://twitter241.p.rapidapi.com/user-tweets?username=' + encodeURIComponent(handle),
-        {
-          headers: {
-            'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-            'x-rapidapi-host': 'twitter241.p.rapidapi.com'
-          },
-          signal: AbortSignal.timeout(12000)
-        }
-      );
-      if (!res.ok) return null;
-      return res.json();
     })()
   ]);
 
   const twttr = twttrResult.status === 'fulfilled' ? twttrResult.value : null;
   const memory = memoryResult.status === 'fulfilled' ? memoryResult.value : null;
-  const tweetsData = tweetsResult.status === 'fulfilled' ? tweetsResult.value : null;
-
-  // Debug — log top level keys so we can see the structure
-  if (twttr) {
-    console.log('[/x] twttr top-level keys:', Object.keys(twttr).join(', '));
-    if (twttr.user) console.log('[/x] twttr.user keys:', Object.keys(twttr.user).join(', '));
-    if (twttr.data) console.log('[/x] twttr.data keys:', Object.keys(twttr.data).join(', '));
-  } else {
-    console.log('[/x] twttr is null — API call failed or no RAPIDAPI_KEY');
-  }
-  if (tweetsData) {
-    console.log('[/x] tweetsData top-level keys:', Object.keys(tweetsData).join(', '));
-  } else {
-    console.log('[/x] tweetsData is null');
-  }
 
   // If both failed
   if (!twttr && !memory) {
@@ -484,21 +447,23 @@ async function handleX(interaction) {
   let profilePic = null;
   let suspicious = false;
 
-  // Handle both response structures:
-  // twttr.user.result.legacy (from RapidAPI test)
-  // twttr.result.legacy (from actual bot call)
-  const userResult = twttr && (
-    (twttr.user && twttr.user.result) ||
-    twttr.result ||
-    null
-  );
-  const core = userResult && userResult.legacy;
-  const isBlueVerified = (userResult && userResult.is_blue_verified) || false;
+  // Live twitter241 structure:
+  // twttr.result.data.user.result.legacy + twttr.result.data.user.result.is_blue_verified
+  const userResult =
+    twttr?.result?.data?.user?.result ||
+    twttr?.result ||
+    twttr?.user?.result ||
+    null;
+  const core = userResult?.legacy || null;
+  const userCore = userResult?.core || null;
+  const isBlueVerified = userResult?.is_blue_verified || false;
+  const profileUserId = userResult?.rest_id || userResult?.legacy?.id_str || null;
   if (core) {
       const followers = core.followers_count || 0;
       const following = core.friends_count || 0;
       const tweets = core.statuses_count || 0;
-      const createdAt = core.created_at ? new Date(core.created_at) : null;
+      const createdAtRaw = core.created_at || userCore?.created_at || null;
+      const createdAt = createdAtRaw ? new Date(createdAtRaw) : null;
       const accountAgeDays = createdAt ? Math.floor((Date.now() - createdAt.getTime()) / 86400000) : null;
       const ageStr = accountAgeDays !== null
         ? accountAgeDays > 365
@@ -506,7 +471,7 @@ async function handleX(interaction) {
           : accountAgeDays + 'd old'
         : '—';
 
-      profilePic = core.profile_image_url_https || null;
+      profilePic = core.profile_image_url_https || userResult?.avatar?.image_url || null;
 
       // Suspicious signals
       const ffRatio = following > 0 ? (followers / following).toFixed(2) : null;
@@ -524,6 +489,30 @@ async function handleX(interaction) {
       if (core.verified || isBlueVerified) {
         profileLines.push('✅ Verified');
       }
+  }
+
+  // Twttr API — last ~200 tweets for CA graveyard (requires numeric user id)
+  let tweetsData = null;
+  if (process.env.RAPIDAPI_KEY && profileUserId) {
+    try {
+      const headers = {
+        'x-rapidapi-key': process.env.RAPIDAPI_KEY,
+        'x-rapidapi-host': 'twitter241.p.rapidapi.com'
+      };
+      const candidates = [
+        'https://twitter241.p.rapidapi.com/user-tweets?user=' + encodeURIComponent(profileUserId) + '&count=200',
+        'https://twitter241.p.rapidapi.com/user-tweets?user=' + encodeURIComponent(profileUserId)
+      ];
+      for (const url of candidates) {
+        const res = await fetch(url, { headers, signal: AbortSignal.timeout(12000) });
+        if (res.ok) {
+          tweetsData = await res.json();
+          break;
+        }
+      }
+    } catch (_) {
+      tweetsData = null;
+    }
   }
 
   // Parse memory.lol name changes
@@ -551,16 +540,36 @@ async function handleX(interaction) {
   let graveyardLine = null;
   if (tweetsData) {
     try {
-      // Extract all tweet text from response
-      const allText = JSON.stringify(tweetsData);
+      // Recursively gather tweet text fields from API payload.
+      const tweetTexts = [];
+      const walk = (node) => {
+        if (!node) return;
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (typeof node !== 'object') return;
+
+        if (typeof node.full_text === 'string') tweetTexts.push(node.full_text);
+        if (typeof node.text === 'string') tweetTexts.push(node.text);
+        if (node.note_tweet?.note_tweet_results?.result?.text) {
+          tweetTexts.push(node.note_tweet.note_tweet_results.result.text);
+        }
+
+        for (const value of Object.values(node)) walk(value);
+      };
+      walk(tweetsData);
+
+      // Parse CAs from tweet text only (avoid random JSON field matches).
       const solanaMatches = [...new Set(
-        (allText.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g) || [])
-          .filter(a => /\d/.test(a) && !/[0OIl]/.test(a) && a.length >= 32 && a.length <= 44)
+        tweetTexts
+          .flatMap((t) => t.match(SOL_CA_REGEX) || [])
+          .filter((a) => /\d/.test(a))
       )];
 
       if (solanaMatches.length > 0) {
-        // Check each CA on pump.fun — limit to 20 to avoid timeout
-        const toCheck = solanaMatches.slice(0, 20);
+        // Check each CA on pump.fun (cap requests to keep slash response fast).
+        const toCheck = solanaMatches.slice(0, 60);
         const results = await Promise.allSettled(
           toCheck.map(async (addr) => {
             const r = await fetch('https://frontend-api.pump.fun/coins/' + addr, {
@@ -589,7 +598,7 @@ async function handleX(interaction) {
         }
       }
     } catch (e) {
-      console.error('[/x] graveyard check failed:', e.message);
+      // Do not fail command on graveyard subcheck.
     }
   }
 
