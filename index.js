@@ -745,9 +745,13 @@ async function handleX(interaction) {
 
 async function handleRug(interaction) {
   await interaction.deferReply();
-  const mint = interaction.options.getString('mint').trim();
+  const rawMint =
+    interaction.options.getString('mint') ||
+    interaction.options.getString('address') ||
+    '';
+  const mint = rawMint.trim();
 
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
+  if (!mint || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
     return interaction.editReply('❌ Invalid Solana mint address.');
   }
 
