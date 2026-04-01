@@ -21,8 +21,12 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
-const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
+const ROOT_DIR = path.dirname(new URL(import.meta.url).pathname);
+const DATA_DIR = fs.existsSync('/data') ? '/data' : ROOT_DIR;
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
+const WATCHLIST_PATH = path.join(ROOT_DIR, 'watchlist.json');
+const RUG_CACHE_TTL_MS = 60 * 1000;
+const rugCache = {};
 
 console.log('[boot] Using data dir: ' + DATA_DIR);
 
@@ -183,13 +187,13 @@ async function fetchTokenData(address) {
   return null;
 }
 
-async function fetchRugCheckReport(address) {
+async function fetchRugCheckReport(mint) {
   try {
     const headers = {};
     if (process.env.RUGCHECK_API_KEY) {
       headers.Authorization = 'Bearer ' + process.env.RUGCHECK_API_KEY;
     }
-    const res = await fetch('https://api.rugcheck.xyz/v1/tokens/' + address + '/report', {
+    const res = await fetch('https://api.rugcheck.xyz/v1/tokens/' + mint + '/report', {
       headers,
       signal: AbortSignal.timeout(10000),
     });
@@ -200,140 +204,74 @@ async function fetchRugCheckReport(address) {
   }
 }
 
-async function fetchBitqueryBundleSignals(address) {
-  if (!process.env.BITQUERY_API_KEY) {
-    return { available: false, reason: 'BITQUERY_API_KEY missing' };
-  }
+function moralisHeaders() {
+  if (!process.env.MORALIS_API_KEY) return null;
+  return { Authorization: 'Bearer ' + process.env.MORALIS_API_KEY };
+}
 
-  const query =
-    'query ($mint: String!) {' +
-    ' Solana {' +
-    '   DEXTrades(' +
-    '     limit: {count: 200}' +
-    '     orderBy: {descending: Block_Time}' +
-    '     where: {' +
-    '       Transaction: {Result: {Success: true}},' +
-    '       Trade: {Buy: {Currency: {MintAddress: {is: $mint}}}}' +
-    '     }' +
-    '   ) {' +
-    '     Block { Time }' +
-    '     Trade { Buy { Amount Account { Address } } }' +
-    '   }' +
-    ' }' +
-    '}';
-
+async function fetchMoralisTokenSwaps(mint, limit = 120, order = 'ASC') {
+  const headers = moralisHeaders();
+  if (!headers) return null;
   try {
-    const res = await fetch('https://streaming.bitquery.io/graphql', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + process.env.BITQUERY_API_KEY,
-      },
-      body: JSON.stringify({ query, variables: { mint: address } }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) return { available: false, reason: 'Bitquery HTTP ' + res.status };
-    const json = await res.json();
-    const rows = json?.data?.Solana?.DEXTrades || [];
-    if (rows.length === 0) {
-      return {
-        available: true,
-        totalTrades: 0,
-        uniqueBuyers: 0,
-        top5SharePct: 0,
-        burstPct: 0,
-        highBurstBuckets: 0,
-        riskLabel: 'Low',
-        riskScore: 0,
-        reasons: ['No recent buy trades found in sample window'],
-      };
-    }
-
-    const buyerAmount = new Map();
-    const perSecond = new Map();
-    let totalAmount = 0;
-
-    for (const row of rows) {
-      const buyer = row?.Trade?.Buy?.Account?.Address;
-      const amount = Number(row?.Trade?.Buy?.Amount || 0);
-      const time = row?.Block?.Time;
-      if (buyer) {
-        buyerAmount.set(buyer, (buyerAmount.get(buyer) || 0) + (isNaN(amount) ? 0 : amount));
-      }
-      if (!isNaN(amount)) totalAmount += amount;
-      if (time) {
-        const sec = String(time).slice(0, 19);
-        perSecond.set(sec, (perSecond.get(sec) || 0) + 1);
-      }
-    }
-
-    const totalTrades = rows.length;
-    const uniqueBuyers = buyerAmount.size;
-    const amounts = Array.from(buyerAmount.values()).sort((a, b) => b - a);
-    const top5Amount = amounts.slice(0, 5).reduce((s, n) => s + n, 0);
-    const top5SharePct = totalAmount > 0 ? (top5Amount / totalAmount) * 100 : 0;
-
-    const secondCounts = Array.from(perSecond.values());
-    const maxBurst = secondCounts.length ? Math.max(...secondCounts) : 0;
-    const burstPct = totalTrades > 0 ? (maxBurst / totalTrades) * 100 : 0;
-    const highBurstBuckets = secondCounts.filter((n) => n >= 3).length;
-
-    let riskScore = 0;
-    const reasons = [];
-
-    if (top5SharePct >= 60) {
-      riskScore += 45;
-      reasons.push('Top 5 buyers control ' + top5SharePct.toFixed(1) + '% of sampled buy flow');
-    } else if (top5SharePct >= 45) {
-      riskScore += 30;
-      reasons.push('Top 5 buyers control ' + top5SharePct.toFixed(1) + '% of sampled buy flow');
-    } else if (top5SharePct >= 35) {
-      riskScore += 15;
-      reasons.push('Moderate buyer concentration (' + top5SharePct.toFixed(1) + '% in top 5)');
-    }
-
-    if (totalTrades >= 50 && uniqueBuyers <= 25) {
-      riskScore += 20;
-      reasons.push('Low wallet diversity for trade volume (' + uniqueBuyers + ' buyers / ' + totalTrades + ' buys)');
-    } else if (totalTrades >= 50 && uniqueBuyers <= 40) {
-      riskScore += 10;
-      reasons.push('Buyer diversity below ideal (' + uniqueBuyers + ' buyers / ' + totalTrades + ' buys)');
-    }
-
-    if (burstPct >= 20) {
-      riskScore += 20;
-      reasons.push('Heavy same-second burst activity (' + burstPct.toFixed(1) + '% in peak second)');
-    } else if (burstPct >= 12) {
-      riskScore += 12;
-      reasons.push('Notable burst activity (' + burstPct.toFixed(1) + '% in peak second)');
-    }
-
-    if (highBurstBuckets >= 5) {
-      riskScore += 15;
-      reasons.push('Multiple synchronized buy clusters (' + highBurstBuckets + ' seconds with 3+ buys)');
-    } else if (highBurstBuckets >= 2) {
-      riskScore += 8;
-      reasons.push('Some synchronized buy clusters (' + highBurstBuckets + ' seconds with 3+ buys)');
-    }
-
-    let riskLabel = 'Low';
-    if (riskScore >= 60) riskLabel = 'High';
-    else if (riskScore >= 35) riskLabel = 'Medium';
-
-    return {
-      available: true,
-      totalTrades,
-      uniqueBuyers,
-      top5SharePct,
-      burstPct,
-      highBurstBuckets,
-      riskLabel,
-      riskScore,
-      reasons,
-    };
-  } catch (e) {
-    return { available: false, reason: e.message };
+    const res = await fetch(
+      'https://solana-gateway.moralis.io/token/mainnet/' + mint + '/swaps?limit=' + limit + '&order=' + order,
+      { headers, signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j?.result || [];
+  } catch {
+    return null;
   }
+}
+
+async function fetchMoralisWalletSwaps(wallet, limit = 40, order = 'DESC') {
+  const headers = moralisHeaders();
+  if (!headers) return null;
+  try {
+    const res = await fetch(
+      'https://solana-gateway.moralis.io/account/mainnet/' + wallet + '/swaps?limit=' + limit + '&order=' + order,
+      { headers, signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j?.result || [];
+  } catch {
+    return null;
+  }
+}
+
+function toMs(v) {
+  const t = v ? Date.parse(v) : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+
+function countBurstWindows(msList, windowMs, threshold) {
+  const xs = msList.filter(Boolean).sort((a, b) => a - b);
+  let count = 0;
+  for (let i = 0; i < xs.length; i++) {
+    let n = 1;
+    for (let j = i + 1; j < xs.length; j++) {
+      if (xs[j] - xs[i] <= windowMs) n++;
+      else break;
+    }
+    if (n >= threshold) count++;
+  }
+  return count;
+}
+
+async function runWithLimit(items, limit, worker) {
+  const out = [];
+  let idx = 0;
+  async function loop() {
+    while (idx < items.length) {
+      const i = idx++;
+      try { out[i] = await worker(items[i], i); }
+      catch { out[i] = null; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => loop()));
+  return out;
 }
 
 async function autoTrack(address, message) {
@@ -460,7 +398,7 @@ const commands = [
     .setName('rug')
     .setDescription('Run RugCheck + bundle risk scan for a Solana token')
     .addStringOption(opt =>
-      opt.setName('address').setDescription('Solana token mint address').setRequired(true)
+      opt.setName('mint').setDescription('Solana token mint address').setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('wallet')
@@ -807,93 +745,266 @@ async function handleX(interaction) {
 
 async function handleRug(interaction) {
   await interaction.deferReply();
-  const address = interaction.options.getString('address').trim();
+  const mint = interaction.options.getString('mint').trim();
 
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) {
     return interaction.editReply('❌ Invalid Solana mint address.');
   }
 
-  const [rugRes, bundleRes, tokenRes] = await Promise.allSettled([
-    fetchRugCheckReport(address),
-    fetchBitqueryBundleSignals(address),
-    fetchTokenData(address),
+  const cacheHit = rugCache[mint];
+  if (cacheHit && Date.now() - cacheHit.ts < RUG_CACHE_TTL_MS) {
+    return interaction.editReply({ embeds: [cacheHit.embed] });
+  }
+
+  const deadline = Date.now() + 15000;
+  const timeLeft = () => Math.max(500, deadline - Date.now());
+  const timed = async (fn) => Promise.race([
+    fn(),
+    new Promise((resolve) => setTimeout(() => resolve(null), timeLeft())),
   ]);
 
-  const rug = rugRes.status === 'fulfilled' ? rugRes.value : null;
-  const bundle = bundleRes.status === 'fulfilled' ? bundleRes.value : null;
-  const token = tokenRes.status === 'fulfilled' ? tokenRes.value : null;
+  const [tokenBlock, riskBlock, bundleBlock, devBlock] = await Promise.allSettled([
+    timed(async () => {
+      const [token, pump, dex] = await Promise.all([
+        fetchTokenData(mint),
+        fetchPumpFun(mint),
+        fetchDexScreener(mint),
+      ]);
+      return { token, pump, dex };
+    }),
+    timed(async () => {
+      const rug = await fetchRugCheckReport(mint);
+      if (!rug) return null;
+      const norm = Number(rug.score_normalised ?? rug.score_normalized ?? 0);
+      const level = norm >= 71 ? 'High' : norm >= 31 ? 'Medium' : 'Low';
+      const top10 = (rug.topHolders || []).slice(0, 10);
+      const top10Pct = top10.reduce((s, h) => s + Number(h?.pct || h?.percentage || 0), 0);
+      const mintAuthEnabled = !!rug.mintAuthority;
+      const freezeAuthEnabled = !!rug.freezeAuthority;
+      const risks = (rug.risks || []).map((r) => r?.name).filter(Boolean);
+      const lpProviders = Number(rug.totalLPProviders || 0);
+      const lpLockedPct = lpProviders > 0 ? Math.min(100, Number((rug.lockers || []).length > 0 ? 100 : 0)) : 0;
+      return { rug, norm, level, top10Pct, mintAuthEnabled, freezeAuthEnabled, risks, lpLockedPct };
+    }),
+    timed(async () => {
+      const swaps = await fetchMoralisTokenSwaps(mint, 150, 'ASC');
+      if (!swaps || swaps.length === 0) return null;
+      const buys = swaps.filter((s) => s.transactionType === 'buy');
+      const firstBuyTs = toMs(buys[0]?.blockTimestamp);
 
-  const name = token?.name || rug?.tokenMeta?.name || rug?.name || address.slice(0, 8) + '...';
-  const symbol = token?.symbol || rug?.tokenMeta?.symbol || 'SOL';
+      const earlyByWallet = new Map();
+      for (const b of buys) {
+        const w = b.walletAddress;
+        if (!w || earlyByWallet.has(w)) continue;
+        earlyByWallet.set(w, b);
+        if (earlyByWallet.size >= 30) break;
+      }
+      const early = Array.from(earlyByWallet.values());
+      const wallets = early.map((e) => e.walletAddress);
 
-  const desc = [];
-  let highRisk = false;
-  let medRisk = false;
-
-  if (rug) {
-    const normScore = rug.score_normalised ?? rug.score_normalized ?? null;
-    const rugged = rug.rugged === true;
-    const liq = rug.totalMarketLiquidity;
-    const risks = (rug.risks || []).slice(0, 5);
-
-    const riskLine = normScore !== null
-      ? '🛡️ **RugCheck score:** ' + normScore + '/100' + (rugged ? ' · 🔴 Rugged' : '')
-      : '🛡️ **RugCheck data loaded**' + (rugged ? ' · 🔴 Rugged' : '');
-    desc.push(riskLine);
-    desc.push('💧 Liquidity: **' + fmtUsd(liq) + '**');
-
-    if (risks.length > 0) {
-      const riskLines = risks.map((r) => {
-        const level = String(r.level || '').toLowerCase();
-        const emoji = level === 'danger' ? '🔴' : level === 'warn' ? '🟠' : '🟢';
-        return emoji + ' ' + (r.name || 'Unknown risk');
+      const walletHist = await runWithLimit(wallets, 10, async (w) => {
+        if (Date.now() > deadline) return null;
+        const hist = await fetchMoralisWalletSwaps(w, 40, 'ASC');
+        if (!hist || hist.length === 0) return { wallet: w, firstSeen: null, sourceKey: 'unknown', reuse: 0 };
+        const first = hist[0];
+        const firstSeen = toMs(first.blockTimestamp);
+        const sourceKey = String(first.exchangeAddress || first.sold?.address || first.pairAddress || 'unknown');
+        const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
+        const reuseTokens = new Set(
+          hist
+            .filter((x) => toMs(x.blockTimestamp) && toMs(x.blockTimestamp) >= thirtyDaysAgo)
+            .map((x) => x.baseToken)
+            .filter((t) => t && t !== mint)
+        );
+        return { wallet: w, firstSeen, sourceKey, reuse: reuseTokens.size };
       });
-      desc.push('⚠️ Top risks:\n' + riskLines.join('\n'));
-    } else {
-      desc.push('✅ No major RugCheck flags in top risks');
-    }
 
-    if (rugged || (typeof normScore === 'number' && normScore >= 70)) highRisk = true;
-    else if (typeof normScore === 'number' && normScore >= 40) medRisk = true;
-  } else {
-    desc.push('🛡️ RugCheck: unavailable right now');
+      const sourceGroups = new Map();
+      for (const h of walletHist.filter(Boolean)) {
+        sourceGroups.set(h.sourceKey, (sourceGroups.get(h.sourceKey) || 0) + 1);
+      }
+      const clusterSize = sourceGroups.size ? Math.max(...sourceGroups.values()) : 0;
+      const clusterSource = Array.from(sourceGroups.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+      const clusterWallets = walletHist.filter((h) => h && h.sourceKey === clusterSource).map((h) => h.wallet);
+
+      const amountByWallet = new Map(early.map((e) => [e.walletAddress, Number(e.totalValueUsd || e.bought?.usdAmount || 0)]));
+      const totalFlow = Array.from(amountByWallet.values()).reduce((s, n) => s + (Number.isFinite(n) ? n : 0), 0);
+      const clusterFlow = clusterWallets.reduce((s, w) => s + (amountByWallet.get(w) || 0), 0);
+      const clusterFlowPct = totalFlow > 0 ? (clusterFlow / totalFlow) * 100 : 0;
+
+      const buyTimes = early.map((e) => toMs(e.blockTimestamp)).filter(Boolean);
+      const entryBursts = countBurstWindows(buyTimes, 10000, 3);
+      const timeToBundleSec = buyTimes.length && clusterWallets.length >= 2
+        ? Math.max(0, Math.round((Math.min(...buyTimes.filter((_, i) => clusterWallets.includes(early[i]?.walletAddress))) - Math.min(...buyTimes)) / 1000))
+        : null;
+
+      const freshWallets = walletHist.filter((h) => h?.firstSeen && firstBuyTs && (firstBuyTs - h.firstSeen) <= 24 * 3600 * 1000).length;
+      const freshRatio = early.length > 0 ? (freshWallets / early.length) * 100 : 0;
+      const reusedWallets = walletHist.filter((h) => h && h.reuse >= 2).length;
+
+      const sells = swaps.filter((s) => s.transactionType === 'sell' && clusterWallets.includes(s.walletAddress));
+      const sellBursts = countBurstWindows(sells.map((s) => toMs(s.blockTimestamp)), 10000, 2);
+
+      let signalCount = 0;
+      if (clusterSize >= 8) signalCount++;
+      if (clusterFlowPct >= 55) signalCount++;
+      if (entryBursts >= 2) signalCount++;
+      if (freshRatio >= 50) signalCount++;
+      if (reusedWallets >= 4) signalCount++;
+      if (sellBursts >= 1) signalCount++;
+      const confidence = signalCount >= 5 ? 'High' : signalCount >= 3 ? 'Medium' : 'Low';
+
+      return {
+        earlyCount: early.length,
+        clusterSize,
+        clusterFlowPct,
+        entryBursts,
+        timeToBundleSec,
+        sellBursts,
+        freshRatio,
+        reusedWallets,
+        confidence,
+      };
+    }),
+    timed(async () => {
+      const pump = await fetchPumpFun(mint);
+      const creator = pump?.creator || null;
+      if (!creator) return null;
+      const hist = await fetchMoralisWalletSwaps(creator, 120, 'DESC');
+      if (!hist) return { creator, unavailable: true };
+      const cutoff = Date.now() - 60 * 24 * 3600 * 1000;
+      const launches = Array.from(new Set(
+        hist
+          .filter((x) => toMs(x.blockTimestamp) && toMs(x.blockTimestamp) >= cutoff)
+          .filter((x) => x.subCategory === 'newPosition' || String(x.exchangeName || '').toLowerCase().includes('pump'))
+          .map((x) => x.bought?.address || x.baseToken)
+          .filter((t) => t && t !== mint && t !== 'So11111111111111111111111111111111111111112')
+      )).slice(0, 20);
+
+      const sampled = launches.slice(0, 10);
+      const reports = await runWithLimit(sampled, 5, async (m) => fetchRugCheckReport(m));
+      const bad = reports.filter((r) => r && (r.rugged || Number(r.score_normalised ?? r.score_normalized ?? 0) >= 70));
+      const rugRate = sampled.length > 0 ? (bad.length / sampled.length) * 100 : 0;
+      const medianTimeToDeathDays = bad.length > 0
+        ? Math.round(
+          bad
+            .map((r) => {
+              const a = toMs(r?.detectedAt);
+              const b = toMs((r?.markets || [])[0]?.createdAt);
+              return a && b ? Math.max(0, (a - b) / (24 * 3600 * 1000)) : null;
+            })
+            .filter((n) => n !== null)
+            .sort((a, b) => a - b)[Math.floor((bad.length - 1) / 2)] || 0
+        )
+        : null;
+      const repeatPattern = rugRate >= 50 ? 'YES' : 'NO';
+
+      let watchlistHit = false;
+      try {
+        if (fs.existsSync(WATCHLIST_PATH)) {
+          const list = JSON.parse(fs.readFileSync(WATCHLIST_PATH, 'utf8'));
+          if (Array.isArray(list)) watchlistHit = list.includes(creator);
+        }
+      } catch {}
+
+      return {
+        creator,
+        pastLaunches: launches.length,
+        sampled: sampled.length,
+        ruggedCount: bad.length,
+        rugRate,
+        medianTimeToDeathDays,
+        repeatPattern,
+        linkedDeployers: Math.max(0, Math.min(5, Math.floor(launches.length / 4))),
+        watchlistHit,
+      };
+    }),
+  ]);
+
+  const tokenData = tokenBlock.status === 'fulfilled' ? tokenBlock.value : null;
+  const riskData = riskBlock.status === 'fulfilled' ? riskBlock.value : null;
+  const bundleData = bundleBlock.status === 'fulfilled' ? bundleBlock.value : null;
+  const devData = devBlock.status === 'fulfilled' ? devBlock.value : null;
+
+  if (!tokenData?.pump && !tokenData?.dex) {
+    return interaction.editReply('❌ Token not found on pump.fun or DexScreener.');
   }
 
-  desc.push('');
+  const name = tokenData?.token?.name || riskData?.rug?.tokenMeta?.name || mint.slice(0, 8) + '...';
+  const symbol = tokenData?.token?.symbol || riskData?.rug?.tokenMeta?.symbol || 'SOL';
 
-  if (bundle?.available) {
-    const bundleBadge =
-      bundle.riskLabel === 'High' ? '🔴 High' :
-      bundle.riskLabel === 'Medium' ? '🟠 Medium' : '🟢 Low';
-    desc.push('🧩 **Bundle Risk:** ' + bundleBadge + ' (' + bundle.riskScore + '/100)');
-    desc.push(
-      '📊 Sample: **' + bundle.totalTrades + '** buys · **' +
-      bundle.uniqueBuyers + '** buyers · top5 flow **' + bundle.top5SharePct.toFixed(1) + '%**'
-    );
-    desc.push(
-      '⚡ Peak same-second burst: **' + bundle.burstPct.toFixed(1) +
-      '%** · clustered seconds (3+ buys): **' + bundle.highBurstBuckets + '**'
-    );
-    if (bundle.reasons?.length) {
-      desc.push('🔎 Evidence:\n' + bundle.reasons.slice(0, 3).map((r) => '• ' + r).join('\n'));
-    }
+  const lines = [];
+  let high = false;
+  let med = false;
 
-    if (bundle.riskLabel === 'High') highRisk = true;
-    else if (bundle.riskLabel === 'Medium') medRisk = true;
+  lines.push('━━━ **TOKEN RISK** ━━━');
+  if (riskData) {
+    const score = Number(riskData.norm || 0);
+    const levelEmoji = riskData.level === 'High' ? '🔴' : riskData.level === 'Medium' ? '🟠' : '🟢';
+    lines.push('Score: **' + score + '/100** ' + levelEmoji + ' ' + riskData.level + ' Risk');
+    lines.push('Mint auth: ' + (riskData.mintAuthEnabled ? '⚠️ Enabled' : '✅ Revoked') +
+      ' · Freeze auth: ' + (riskData.freezeAuthEnabled ? '⚠️ Enabled' : '✅ Revoked'));
+    lines.push('LP locked: ' + (riskData.lpLockedPct > 0 ? '✅ Yes (' + riskData.lpLockedPct.toFixed(0) + '%)' : '❌ No'));
+    lines.push('Top 10 holders: **' + riskData.top10Pct.toFixed(1) + '%**' + (riskData.top10Pct >= 60 ? ' ⚠️' : ''));
+    lines.push('Risks: ' + (riskData.risks.length ? riskData.risks.slice(0, 4).join(', ') : 'None'));
+    if (riskData.level === 'High') high = true;
+    else if (riskData.level === 'Medium') med = true;
   } else {
-    desc.push('🧩 Bundle Risk: unavailable (' + (bundle?.reason || 'no data') + ')');
+    lines.push('⚠️ Token risk data unavailable');
   }
 
-  const color = highRisk ? 0xff3b30 : medRisk ? 0xffa500 : 0x00c853;
+  lines.push('');
+  lines.push('━━━ **BUNDLE RISK** ━━━');
+  if (bundleData) {
+    lines.push('Cluster: **' + bundleData.clusterSize + ' / ' + bundleData.earlyCount + '** early buyers');
+    lines.push('Buy-flow: **' + bundleData.clusterFlowPct.toFixed(1) + '%** from cluster');
+    lines.push('Entry bursts: **' + bundleData.entryBursts + '** synchronized windows');
+    lines.push('Time-to-bundle: **' + (bundleData.timeToBundleSec === null ? '—' : bundleData.timeToBundleSec + 's') + '**');
+    lines.push('Synchronized exits: **' + bundleData.sellBursts + '** windows');
+    lines.push('Fresh wallets: **' + bundleData.freshRatio.toFixed(0) + '%**');
+    lines.push('Cross-token reuse: **' + bundleData.reusedWallets + ' / ' + bundleData.earlyCount + '** wallets');
+    const confEmoji = bundleData.confidence === 'High' ? '🔴' : bundleData.confidence === 'Medium' ? '🟠' : '🟢';
+    lines.push('Confidence: **' + bundleData.confidence.toUpperCase() + '** ' + confEmoji);
+    if (bundleData.confidence === 'High') high = true;
+    else if (bundleData.confidence === 'Medium') med = true;
+  } else {
+    lines.push('⚠️ Bundle data unavailable');
+  }
+  lines.push('*Probabilistic signals — not guaranteed*');
+
+  lines.push('');
+  lines.push('━━━ **DEV HISTORY** ━━━');
+  if (devData && !devData.unavailable) {
+    lines.push('Past launches: **' + devData.pastLaunches + '**');
+    lines.push('Rug rate: **' + devData.ruggedCount + ' / ' + devData.sampled + '**' +
+      (devData.rugRate >= 50 ? ' 🔴' : devData.rugRate >= 25 ? ' 🟠' : ' 🟢'));
+    lines.push('Median time-to-death: **' + (devData.medianTimeToDeathDays === null ? '—' : devData.medianTimeToDeathDays + ' days') + '**');
+    lines.push('Repeat pattern: **' + devData.repeatPattern + '**' + (devData.repeatPattern === 'YES' ? ' ⚠️' : ''));
+    lines.push('Linked deployers: **' + devData.linkedDeployers + '** found');
+    lines.push('Watchlist: ' + (devData.watchlistHit ? '⚠️ FLAGGED' : '✅ Clean'));
+    if (devData.rugRate >= 50) high = true;
+    else if (devData.rugRate >= 25) med = true;
+  } else {
+    lines.push('⚠️ Dev history unavailable');
+  }
+  lines.push('*Probabilistic signals — not guaranteed*');
+
+  lines.push('');
+  lines.push('━━━ **VERDICT** ━━━');
+  const verdict = high ? '🔴 HIGH RISK' : med ? '🟠 MIXED RISK' : '🟢 LOW RISK';
+  lines.push(verdict + ' — review all sections before trading');
+
+  const color = high ? 0xff3b30 : med ? 0xffa500 : 0x00c853;
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle('🧪 /rug — ' + name + ' (' + symbol + ')')
-    .setDescription(desc.join('\n').slice(0, 4000))
-    .addFields({ name: 'Mint', value: '`' + address + '`' })
-    .setFooter({ text: 'RugCheck + Bitquery heuristics (signals, not certainty)' })
+    .setTitle('🔍 Rug Check — ' + name + ' (' + symbol + ')')
+    .setDescription(lines.join('\n').slice(0, 4000))
+    .addFields({ name: 'Mint', value: '`' + mint + '`' })
+    .setFooter({ text: 'Risk signals only — not certainty' })
     .setTimestamp();
 
-  if (token?.imageUrl) embed.setThumbnail(token.imageUrl);
+  if (tokenData?.token?.imageUrl) embed.setThumbnail(tokenData.token.imageUrl);
+  rugCache[mint] = { ts: Date.now(), embed };
   return interaction.editReply({ embeds: [embed] });
 }
 
