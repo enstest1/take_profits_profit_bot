@@ -183,6 +183,159 @@ async function fetchTokenData(address) {
   return null;
 }
 
+async function fetchRugCheckReport(address) {
+  try {
+    const headers = {};
+    if (process.env.RUGCHECK_API_KEY) {
+      headers.Authorization = 'Bearer ' + process.env.RUGCHECK_API_KEY;
+    }
+    const res = await fetch('https://api.rugcheck.xyz/v1/tokens/' + address + '/report', {
+      headers,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBitqueryBundleSignals(address) {
+  if (!process.env.BITQUERY_API_KEY) {
+    return { available: false, reason: 'BITQUERY_API_KEY missing' };
+  }
+
+  const query =
+    'query ($mint: String!) {' +
+    ' Solana {' +
+    '   DEXTrades(' +
+    '     limit: {count: 200}' +
+    '     orderBy: {descending: Block_Time}' +
+    '     where: {' +
+    '       Transaction: {Result: {Success: true}},' +
+    '       Trade: {Buy: {Currency: {MintAddress: {is: $mint}}}}' +
+    '     }' +
+    '   ) {' +
+    '     Block { Time }' +
+    '     Trade { Buy { Amount Account { Address } } }' +
+    '   }' +
+    ' }' +
+    '}';
+
+  try {
+    const res = await fetch('https://streaming.bitquery.io/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + process.env.BITQUERY_API_KEY,
+      },
+      body: JSON.stringify({ query, variables: { mint: address } }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return { available: false, reason: 'Bitquery HTTP ' + res.status };
+    const json = await res.json();
+    const rows = json?.data?.Solana?.DEXTrades || [];
+    if (rows.length === 0) {
+      return {
+        available: true,
+        totalTrades: 0,
+        uniqueBuyers: 0,
+        top5SharePct: 0,
+        burstPct: 0,
+        highBurstBuckets: 0,
+        riskLabel: 'Low',
+        riskScore: 0,
+        reasons: ['No recent buy trades found in sample window'],
+      };
+    }
+
+    const buyerAmount = new Map();
+    const perSecond = new Map();
+    let totalAmount = 0;
+
+    for (const row of rows) {
+      const buyer = row?.Trade?.Buy?.Account?.Address;
+      const amount = Number(row?.Trade?.Buy?.Amount || 0);
+      const time = row?.Block?.Time;
+      if (buyer) {
+        buyerAmount.set(buyer, (buyerAmount.get(buyer) || 0) + (isNaN(amount) ? 0 : amount));
+      }
+      if (!isNaN(amount)) totalAmount += amount;
+      if (time) {
+        const sec = String(time).slice(0, 19);
+        perSecond.set(sec, (perSecond.get(sec) || 0) + 1);
+      }
+    }
+
+    const totalTrades = rows.length;
+    const uniqueBuyers = buyerAmount.size;
+    const amounts = Array.from(buyerAmount.values()).sort((a, b) => b - a);
+    const top5Amount = amounts.slice(0, 5).reduce((s, n) => s + n, 0);
+    const top5SharePct = totalAmount > 0 ? (top5Amount / totalAmount) * 100 : 0;
+
+    const secondCounts = Array.from(perSecond.values());
+    const maxBurst = secondCounts.length ? Math.max(...secondCounts) : 0;
+    const burstPct = totalTrades > 0 ? (maxBurst / totalTrades) * 100 : 0;
+    const highBurstBuckets = secondCounts.filter((n) => n >= 3).length;
+
+    let riskScore = 0;
+    const reasons = [];
+
+    if (top5SharePct >= 60) {
+      riskScore += 45;
+      reasons.push('Top 5 buyers control ' + top5SharePct.toFixed(1) + '% of sampled buy flow');
+    } else if (top5SharePct >= 45) {
+      riskScore += 30;
+      reasons.push('Top 5 buyers control ' + top5SharePct.toFixed(1) + '% of sampled buy flow');
+    } else if (top5SharePct >= 35) {
+      riskScore += 15;
+      reasons.push('Moderate buyer concentration (' + top5SharePct.toFixed(1) + '% in top 5)');
+    }
+
+    if (totalTrades >= 50 && uniqueBuyers <= 25) {
+      riskScore += 20;
+      reasons.push('Low wallet diversity for trade volume (' + uniqueBuyers + ' buyers / ' + totalTrades + ' buys)');
+    } else if (totalTrades >= 50 && uniqueBuyers <= 40) {
+      riskScore += 10;
+      reasons.push('Buyer diversity below ideal (' + uniqueBuyers + ' buyers / ' + totalTrades + ' buys)');
+    }
+
+    if (burstPct >= 20) {
+      riskScore += 20;
+      reasons.push('Heavy same-second burst activity (' + burstPct.toFixed(1) + '% in peak second)');
+    } else if (burstPct >= 12) {
+      riskScore += 12;
+      reasons.push('Notable burst activity (' + burstPct.toFixed(1) + '% in peak second)');
+    }
+
+    if (highBurstBuckets >= 5) {
+      riskScore += 15;
+      reasons.push('Multiple synchronized buy clusters (' + highBurstBuckets + ' seconds with 3+ buys)');
+    } else if (highBurstBuckets >= 2) {
+      riskScore += 8;
+      reasons.push('Some synchronized buy clusters (' + highBurstBuckets + ' seconds with 3+ buys)');
+    }
+
+    let riskLabel = 'Low';
+    if (riskScore >= 60) riskLabel = 'High';
+    else if (riskScore >= 35) riskLabel = 'Medium';
+
+    return {
+      available: true,
+      totalTrades,
+      uniqueBuyers,
+      top5SharePct,
+      burstPct,
+      highBurstBuckets,
+      riskLabel,
+      riskScore,
+      reasons,
+    };
+  } catch (e) {
+    return { available: false, reason: e.message };
+  }
+}
+
 async function autoTrack(address, message) {
   const db = ensureDBSchema(loadDB());
 
@@ -302,6 +455,12 @@ const commands = [
     .setDescription('Check X account profile, history and rug signals')
     .addStringOption(opt =>
       opt.setName('handle').setDescription('X handle (with or without @)').setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('rug')
+    .setDescription('Run RugCheck + bundle risk scan for a Solana token')
+    .addStringOption(opt =>
+      opt.setName('address').setDescription('Solana token mint address').setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('wallet')
@@ -646,6 +805,98 @@ async function handleX(interaction) {
   return interaction.editReply({ embeds: [embed] });
 }
 
+async function handleRug(interaction) {
+  await interaction.deferReply();
+  const address = interaction.options.getString('address').trim();
+
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
+    return interaction.editReply('❌ Invalid Solana mint address.');
+  }
+
+  const [rugRes, bundleRes, tokenRes] = await Promise.allSettled([
+    fetchRugCheckReport(address),
+    fetchBitqueryBundleSignals(address),
+    fetchTokenData(address),
+  ]);
+
+  const rug = rugRes.status === 'fulfilled' ? rugRes.value : null;
+  const bundle = bundleRes.status === 'fulfilled' ? bundleRes.value : null;
+  const token = tokenRes.status === 'fulfilled' ? tokenRes.value : null;
+
+  const name = token?.name || rug?.tokenMeta?.name || rug?.name || address.slice(0, 8) + '...';
+  const symbol = token?.symbol || rug?.tokenMeta?.symbol || 'SOL';
+
+  const desc = [];
+  let highRisk = false;
+  let medRisk = false;
+
+  if (rug) {
+    const normScore = rug.score_normalised ?? rug.score_normalized ?? null;
+    const rugged = rug.rugged === true;
+    const liq = rug.totalMarketLiquidity;
+    const risks = (rug.risks || []).slice(0, 5);
+
+    const riskLine = normScore !== null
+      ? '🛡️ **RugCheck score:** ' + normScore + '/100' + (rugged ? ' · 🔴 Rugged' : '')
+      : '🛡️ **RugCheck data loaded**' + (rugged ? ' · 🔴 Rugged' : '');
+    desc.push(riskLine);
+    desc.push('💧 Liquidity: **' + fmtUsd(liq) + '**');
+
+    if (risks.length > 0) {
+      const riskLines = risks.map((r) => {
+        const level = String(r.level || '').toLowerCase();
+        const emoji = level === 'danger' ? '🔴' : level === 'warn' ? '🟠' : '🟢';
+        return emoji + ' ' + (r.name || 'Unknown risk');
+      });
+      desc.push('⚠️ Top risks:\n' + riskLines.join('\n'));
+    } else {
+      desc.push('✅ No major RugCheck flags in top risks');
+    }
+
+    if (rugged || (typeof normScore === 'number' && normScore >= 70)) highRisk = true;
+    else if (typeof normScore === 'number' && normScore >= 40) medRisk = true;
+  } else {
+    desc.push('🛡️ RugCheck: unavailable right now');
+  }
+
+  desc.push('');
+
+  if (bundle?.available) {
+    const bundleBadge =
+      bundle.riskLabel === 'High' ? '🔴 High' :
+      bundle.riskLabel === 'Medium' ? '🟠 Medium' : '🟢 Low';
+    desc.push('🧩 **Bundle Risk:** ' + bundleBadge + ' (' + bundle.riskScore + '/100)');
+    desc.push(
+      '📊 Sample: **' + bundle.totalTrades + '** buys · **' +
+      bundle.uniqueBuyers + '** buyers · top5 flow **' + bundle.top5SharePct.toFixed(1) + '%**'
+    );
+    desc.push(
+      '⚡ Peak same-second burst: **' + bundle.burstPct.toFixed(1) +
+      '%** · clustered seconds (3+ buys): **' + bundle.highBurstBuckets + '**'
+    );
+    if (bundle.reasons?.length) {
+      desc.push('🔎 Evidence:\n' + bundle.reasons.slice(0, 3).map((r) => '• ' + r).join('\n'));
+    }
+
+    if (bundle.riskLabel === 'High') highRisk = true;
+    else if (bundle.riskLabel === 'Medium') medRisk = true;
+  } else {
+    desc.push('🧩 Bundle Risk: unavailable (' + (bundle?.reason || 'no data') + ')');
+  }
+
+  const color = highRisk ? 0xff3b30 : medRisk ? 0xffa500 : 0x00c853;
+  const embed = new EmbedBuilder()
+    .setColor(color)
+    .setTitle('🧪 /rug — ' + name + ' (' + symbol + ')')
+    .setDescription(desc.join('\n').slice(0, 4000))
+    .addFields({ name: 'Mint', value: '`' + address + '`' })
+    .setFooter({ text: 'RugCheck + Bitquery heuristics (signals, not certainty)' })
+    .setTimestamp();
+
+  if (token?.imageUrl) embed.setThumbnail(token.imageUrl);
+  return interaction.editReply({ embeds: [embed] });
+}
+
 async function handleWalletAdd(interaction) {
   await interaction.deferReply({ ephemeral: true });
   const address = interaction.options.getString('address').trim();
@@ -729,6 +980,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'calls') return handleCalls(interaction);
     if (interaction.commandName === 'remove') return handleRemove(interaction);
     if (interaction.commandName === 'x') return handleX(interaction);
+    if (interaction.commandName === 'rug') return handleRug(interaction);
     if (interaction.commandName === 'wallet') {
       const sub = interaction.options.getSubcommand();
       if (sub === 'add') return handleWalletAdd(interaction);
