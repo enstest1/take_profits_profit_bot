@@ -274,6 +274,150 @@ async function runWithLimit(items, limit, worker) {
   return out;
 }
 
+async function bitqueryRequest(query, variables) {
+  if (!process.env.BITQUERY_API_KEY) return null;
+  try {
+    const res = await fetch('https://streaming.bitquery.io/graphql', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + process.env.BITQUERY_API_KEY,
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    if (j?.errors?.length) return null;
+    return j?.data || null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBitqueryBundleQuick(mint) {
+  const buysQuery =
+    'query ($mint: String!) {' +
+    ' Solana {' +
+    '   DEXTrades(' +
+    '     limit: {count: 200}' +
+    '     orderBy: {ascending: Block_Time}' +
+    '     where: {' +
+    '       Trade: {Buy: {Currency: {MintAddress: {is: $mint}}}},' +
+    '       Transaction: {Result: {Success: true}}' +
+    '     }' +
+    '   ) {' +
+    '     Block { Time }' +
+    '     Transaction { FeePayer }' +
+    '     Trade { Buy { Amount Account { Address } } }' +
+    '   }' +
+    ' }' +
+    '}';
+
+  const buyData = await bitqueryRequest(buysQuery, { mint });
+  const rows = buyData?.Solana?.DEXTrades || [];
+  if (rows.length === 0) return null;
+
+  const early = [];
+  const seen = new Set();
+  for (const r of rows) {
+    const buyer = r?.Trade?.Buy?.Account?.Address;
+    if (!buyer || seen.has(buyer)) continue;
+    seen.add(buyer);
+    early.push(r);
+    if (early.length >= 30) break;
+  }
+  if (early.length === 0) return null;
+
+  const sourceCounts = new Map();
+  const buyerSource = new Map();
+  const buyerAmount = new Map();
+  const allTimes = [];
+  for (const r of early) {
+    const buyer = r?.Trade?.Buy?.Account?.Address;
+    const source = String(r?.Transaction?.FeePayer || 'unknown');
+    const amt = Number(r?.Trade?.Buy?.Amount || 0);
+    const t = toMs(r?.Block?.Time);
+    if (buyer) {
+      buyerSource.set(buyer, source);
+      buyerAmount.set(buyer, (buyerAmount.get(buyer) || 0) + (Number.isFinite(amt) ? amt : 0));
+    }
+    sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+    if (t) allTimes.push(t);
+  }
+
+  const sortedSources = Array.from(sourceCounts.entries()).sort((a, b) => b[1] - a[1]);
+  const topSource = sortedSources[0]?.[0] || 'unknown';
+  const clusterSize = sortedSources[0]?.[1] || 0;
+  const clusterWallets = Array.from(buyerSource.entries()).filter(([, s]) => s === topSource).map(([w]) => w);
+
+  const totalFlow = Array.from(buyerAmount.values()).reduce((s, n) => s + n, 0);
+  const clusterFlow = clusterWallets.reduce((s, w) => s + (buyerAmount.get(w) || 0), 0);
+  const clusterFlowPct = totalFlow > 0 ? (clusterFlow / totalFlow) * 100 : 0;
+
+  const entryBursts = countBurstWindows(allTimes, 10000, 3);
+  const firstTrade = allTimes.length ? Math.min(...allTimes) : null;
+  const clusterTimes = early
+    .filter((r) => clusterWallets.includes(r?.Trade?.Buy?.Account?.Address))
+    .map((r) => toMs(r?.Block?.Time))
+    .filter(Boolean)
+    .sort((a, b) => a - b);
+  const firstClusterStrong = (() => {
+    for (let i = 0; i < clusterTimes.length; i++) {
+      let n = 1;
+      for (let j = i + 1; j < clusterTimes.length; j++) {
+        if (clusterTimes[j] - clusterTimes[i] <= 10000) n++;
+        else break;
+      }
+      if (n >= 3) return clusterTimes[i];
+    }
+    return null;
+  })();
+  const timeToBundleSec = firstTrade && firstClusterStrong
+    ? Math.max(0, Math.round((firstClusterStrong - firstTrade) / 1000))
+    : null;
+
+  let synchronizedExits = 0;
+  if (clusterWallets.length > 0) {
+    const sellsQuery =
+      'query ($mint: String!, $wallets: [String!]) {' +
+      ' Solana {' +
+      '   DEXTrades(' +
+      '     limit: {count: 200}' +
+      '     orderBy: {ascending: Block_Time}' +
+      '     where: {' +
+      '       Trade: {Sell: {Currency: {MintAddress: {is: $mint}}, Account: {Address: {in: $wallets}}}},' +
+      '       Transaction: {Result: {Success: true}}' +
+      '     }' +
+      '   ) {' +
+      '     Block { Time }' +
+      '   }' +
+      ' }' +
+      '}';
+    const sellData = await bitqueryRequest(sellsQuery, { mint, wallets: clusterWallets });
+    const sellRows = sellData?.Solana?.DEXTrades || [];
+    synchronizedExits = countBurstWindows(sellRows.map((r) => toMs(r?.Block?.Time)), 10000, 2);
+  }
+
+  let fired = 0;
+  if (clusterSize >= 8) fired++;
+  if (clusterFlowPct >= 45) fired++;
+  if (entryBursts >= 2) fired++;
+  if (timeToBundleSec !== null && timeToBundleSec <= 120) fired++;
+  if (synchronizedExits >= 1) fired++;
+  const confidence = fired >= 4 ? 'High' : fired >= 2 ? 'Medium' : 'Low';
+
+  return {
+    sampleBuys: rows.length,
+    earlyCount: early.length,
+    clusterSize,
+    clusterFlowPct,
+    timeToBundleSec,
+    synchronizedExits,
+    confidence,
+  };
+}
+
 async function autoTrack(address, message) {
   const db = ensureDBSchema(loadDB());
 
@@ -767,7 +911,7 @@ async function handleRug(interaction) {
     new Promise((resolve) => setTimeout(() => resolve(null), timeLeft())),
   ]);
 
-  const [tokenBlock, riskBlock, bundleBlock, devBlock] = await Promise.allSettled([
+  const [tokenBlock, riskBlock, bundleBlock] = await Promise.allSettled([
     timed(async () => {
       const [token, pump, dex] = await Promise.all([
         fetchTokenData(mint),
@@ -791,144 +935,55 @@ async function handleRug(interaction) {
       return { rug, norm, level, top10Pct, mintAuthEnabled, freezeAuthEnabled, risks, lpLockedPct };
     }),
     timed(async () => {
-      const swaps = await fetchMoralisTokenSwaps(mint, 150, 'ASC');
-      if (!swaps || swaps.length === 0) return null;
-      const buys = swaps.filter((s) => s.transactionType === 'buy');
-      const firstBuyTs = toMs(buys[0]?.blockTimestamp);
-
-      const earlyByWallet = new Map();
-      for (const b of buys) {
-        const w = b.walletAddress;
-        if (!w || earlyByWallet.has(w)) continue;
-        earlyByWallet.set(w, b);
-        if (earlyByWallet.size >= 30) break;
-      }
-      const early = Array.from(earlyByWallet.values());
-      const wallets = early.map((e) => e.walletAddress);
-
-      const walletHist = await runWithLimit(wallets, 10, async (w) => {
-        if (Date.now() > deadline) return null;
-        const hist = await fetchMoralisWalletSwaps(w, 40, 'ASC');
-        if (!hist || hist.length === 0) return { wallet: w, firstSeen: null, sourceKey: 'unknown', reuse: 0 };
-        const first = hist[0];
-        const firstSeen = toMs(first.blockTimestamp);
-        const sourceKey = String(first.exchangeAddress || first.sold?.address || first.pairAddress || 'unknown');
-        const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
-        const reuseTokens = new Set(
-          hist
-            .filter((x) => toMs(x.blockTimestamp) && toMs(x.blockTimestamp) >= thirtyDaysAgo)
-            .map((x) => x.baseToken)
-            .filter((t) => t && t !== mint)
-        );
-        return { wallet: w, firstSeen, sourceKey, reuse: reuseTokens.size };
-      });
-
-      const sourceGroups = new Map();
-      for (const h of walletHist.filter(Boolean)) {
-        sourceGroups.set(h.sourceKey, (sourceGroups.get(h.sourceKey) || 0) + 1);
-      }
-      const clusterSize = sourceGroups.size ? Math.max(...sourceGroups.values()) : 0;
-      const clusterSource = Array.from(sourceGroups.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
-      const clusterWallets = walletHist.filter((h) => h && h.sourceKey === clusterSource).map((h) => h.wallet);
-
-      const amountByWallet = new Map(early.map((e) => [e.walletAddress, Number(e.totalValueUsd || e.bought?.usdAmount || 0)]));
-      const totalFlow = Array.from(amountByWallet.values()).reduce((s, n) => s + (Number.isFinite(n) ? n : 0), 0);
-      const clusterFlow = clusterWallets.reduce((s, w) => s + (amountByWallet.get(w) || 0), 0);
-      const clusterFlowPct = totalFlow > 0 ? (clusterFlow / totalFlow) * 100 : 0;
-
-      const buyTimes = early.map((e) => toMs(e.blockTimestamp)).filter(Boolean);
-      const entryBursts = countBurstWindows(buyTimes, 10000, 3);
-      const timeToBundleSec = buyTimes.length && clusterWallets.length >= 2
-        ? Math.max(0, Math.round((Math.min(...buyTimes.filter((_, i) => clusterWallets.includes(early[i]?.walletAddress))) - Math.min(...buyTimes)) / 1000))
-        : null;
-
-      const freshWallets = walletHist.filter((h) => h?.firstSeen && firstBuyTs && (firstBuyTs - h.firstSeen) <= 24 * 3600 * 1000).length;
-      const freshRatio = early.length > 0 ? (freshWallets / early.length) * 100 : 0;
-      const reusedWallets = walletHist.filter((h) => h && h.reuse >= 2).length;
-
-      const sells = swaps.filter((s) => s.transactionType === 'sell' && clusterWallets.includes(s.walletAddress));
-      const sellBursts = countBurstWindows(sells.map((s) => toMs(s.blockTimestamp)), 10000, 2);
-
-      let signalCount = 0;
-      if (clusterSize >= 8) signalCount++;
-      if (clusterFlowPct >= 55) signalCount++;
-      if (entryBursts >= 2) signalCount++;
-      if (freshRatio >= 50) signalCount++;
-      if (reusedWallets >= 4) signalCount++;
-      if (sellBursts >= 1) signalCount++;
-      const confidence = signalCount >= 5 ? 'High' : signalCount >= 3 ? 'Medium' : 'Low';
-
-      return {
-        earlyCount: early.length,
-        clusterSize,
-        clusterFlowPct,
-        entryBursts,
-        timeToBundleSec,
-        sellBursts,
-        freshRatio,
-        reusedWallets,
-        confidence,
-      };
-    }),
-    timed(async () => {
-      const pump = await fetchPumpFun(mint);
-      const creator = pump?.creator || null;
-      if (!creator) return null;
-      const hist = await fetchMoralisWalletSwaps(creator, 120, 'DESC');
-      if (!hist) return { creator, unavailable: true };
-      const cutoff = Date.now() - 60 * 24 * 3600 * 1000;
-      const launches = Array.from(new Set(
-        hist
-          .filter((x) => toMs(x.blockTimestamp) && toMs(x.blockTimestamp) >= cutoff)
-          .filter((x) => x.subCategory === 'newPosition' || String(x.exchangeName || '').toLowerCase().includes('pump'))
-          .map((x) => x.bought?.address || x.baseToken)
-          .filter((t) => t && t !== mint && t !== 'So11111111111111111111111111111111111111112')
-      )).slice(0, 20);
-
-      const sampled = launches.slice(0, 10);
-      const reports = await runWithLimit(sampled, 5, async (m) => fetchRugCheckReport(m));
-      const bad = reports.filter((r) => r && (r.rugged || Number(r.score_normalised ?? r.score_normalized ?? 0) >= 70));
-      const rugRate = sampled.length > 0 ? (bad.length / sampled.length) * 100 : 0;
-      const medianTimeToDeathDays = bad.length > 0
-        ? Math.round(
-          bad
-            .map((r) => {
-              const a = toMs(r?.detectedAt);
-              const b = toMs((r?.markets || [])[0]?.createdAt);
-              return a && b ? Math.max(0, (a - b) / (24 * 3600 * 1000)) : null;
-            })
-            .filter((n) => n !== null)
-            .sort((a, b) => a - b)[Math.floor((bad.length - 1) / 2)] || 0
-        )
-        : null;
-      const repeatPattern = rugRate >= 50 ? 'YES' : 'NO';
-
-      let watchlistHit = false;
-      try {
-        if (fs.existsSync(WATCHLIST_PATH)) {
-          const list = JSON.parse(fs.readFileSync(WATCHLIST_PATH, 'utf8'));
-          if (Array.isArray(list)) watchlistHit = list.includes(creator);
-        }
-      } catch {}
-
-      return {
-        creator,
-        pastLaunches: launches.length,
-        sampled: sampled.length,
-        ruggedCount: bad.length,
-        rugRate,
-        medianTimeToDeathDays,
-        repeatPattern,
-        linkedDeployers: Math.max(0, Math.min(5, Math.floor(launches.length / 4))),
-        watchlistHit,
-      };
-    }),
+      return fetchBitqueryBundleQuick(mint);
+    })
   ]);
 
   const tokenData = tokenBlock.status === 'fulfilled' ? tokenBlock.value : null;
   const riskData = riskBlock.status === 'fulfilled' ? riskBlock.value : null;
   const bundleData = bundleBlock.status === 'fulfilled' ? bundleBlock.value : null;
-  const devData = devBlock.status === 'fulfilled' ? devBlock.value : null;
+  let devData = null;
+  if (riskData?.rug?.creator) {
+    const creator = riskData.rug.creator;
+    const creatorTokens = Array.isArray(riskData.rug.creatorTokens) ? riskData.rug.creatorTokens : [];
+    const launches = creatorTokens
+      .map((x) => ({ mint: x?.mint, createdAt: x?.createdAt }))
+      .filter((x) => x.mint && x.mint !== mint)
+      .sort((a, b) => (toMs(b.createdAt) || 0) - (toMs(a.createdAt) || 0));
+    const sampledMints = launches.slice(0, 12).map((x) => x.mint);
+    const sampledReports = await runWithLimit(sampledMints, 4, async (m) => {
+      if (Date.now() > deadline) return null;
+      return fetchRugCheckReport(m);
+    });
+    const valid = sampledReports.filter(Boolean);
+    const rugged = valid.filter((r) => r.rugged || Number(r.score_normalised ?? r.score_normalized ?? 0) >= 70);
+    const rugRate = valid.length ? (rugged.length / valid.length) * 100 : 0;
+    const mcapList = valid
+      .map((r) => ({ mint: r?.mint, mcap: Number(r?.tokenMeta?.marketCap || r?.token?.marketCap || 0), rugged: !!r?.rugged }))
+      .filter((x) => x.mint)
+      .sort((a, b) => (b.mcap || 0) - (a.mcap || 0))
+      .slice(0, 5);
+
+    let watchlistHit = false;
+    try {
+      if (fs.existsSync(WATCHLIST_PATH)) {
+        const list = JSON.parse(fs.readFileSync(WATCHLIST_PATH, 'utf8'));
+        if (Array.isArray(list)) watchlistHit = list.includes(creator);
+      }
+    } catch {}
+
+    const repeatPattern = (bundleData?.confidence === 'High' && rugRate >= 50) ? 'YES' : 'NO';
+    devData = {
+      creator,
+      pastLaunches: launches.length,
+      sampled: valid.length,
+      ruggedCount: rugged.length,
+      rugRate,
+      repeatPattern,
+      watchlistHit,
+      mcapList,
+    };
+  }
 
   if (!tokenData?.pump && !tokenData?.dex) {
     return interaction.editReply('❌ Token not found on pump.fun or DexScreener.');
@@ -960,15 +1015,13 @@ async function handleRug(interaction) {
   lines.push('');
   lines.push('━━━ **BUNDLE RISK** ━━━');
   if (bundleData) {
-    lines.push('Cluster: **' + bundleData.clusterSize + ' / ' + bundleData.earlyCount + '** early buyers');
-    lines.push('Buy-flow: **' + bundleData.clusterFlowPct.toFixed(1) + '%** from cluster');
-    lines.push('Entry bursts: **' + bundleData.entryBursts + '** synchronized windows');
+    lines.push('Top funded cluster: **' + bundleData.clusterSize + ' / ' + bundleData.earlyCount + '** early buyers');
+    lines.push('Cluster buy-flow: **' + bundleData.clusterFlowPct.toFixed(1) + '%**');
     lines.push('Time-to-bundle: **' + (bundleData.timeToBundleSec === null ? '—' : bundleData.timeToBundleSec + 's') + '**');
-    lines.push('Synchronized exits: **' + bundleData.sellBursts + '** windows');
-    lines.push('Fresh wallets: **' + bundleData.freshRatio.toFixed(0) + '%**');
-    lines.push('Cross-token reuse: **' + bundleData.reusedWallets + ' / ' + bundleData.earlyCount + '** wallets');
+    lines.push('Synchronized exits: **' + bundleData.synchronizedExits + '** windows');
+    lines.push('Sample: **' + bundleData.sampleBuys + '** buys');
     const confEmoji = bundleData.confidence === 'High' ? '🔴' : bundleData.confidence === 'Medium' ? '🟠' : '🟢';
-    lines.push('Confidence: **' + bundleData.confidence.toUpperCase() + '** ' + confEmoji);
+    lines.push('Bundle confidence: **' + bundleData.confidence.toUpperCase() + '** ' + confEmoji);
     if (bundleData.confidence === 'High') high = true;
     else if (bundleData.confidence === 'Medium') med = true;
   } else {
@@ -978,14 +1031,17 @@ async function handleRug(interaction) {
 
   lines.push('');
   lines.push('━━━ **DEV HISTORY** ━━━');
-  if (devData && !devData.unavailable) {
+  if (devData) {
     lines.push('Past launches: **' + devData.pastLaunches + '**');
     lines.push('Rug rate: **' + devData.ruggedCount + ' / ' + devData.sampled + '**' +
       (devData.rugRate >= 50 ? ' 🔴' : devData.rugRate >= 25 ? ' 🟠' : ' 🟢'));
-    lines.push('Median time-to-death: **' + (devData.medianTimeToDeathDays === null ? '—' : devData.medianTimeToDeathDays + ' days') + '**');
     lines.push('Repeat pattern: **' + devData.repeatPattern + '**' + (devData.repeatPattern === 'YES' ? ' ⚠️' : ''));
-    lines.push('Linked deployers: **' + devData.linkedDeployers + '** found');
     lines.push('Watchlist: ' + (devData.watchlistHit ? '⚠️ FLAGGED' : '✅ Clean'));
+    if (devData.mcapList.length) {
+      lines.push('Current MCAPs (top past): ' + devData.mcapList
+        .map((x) => (x.rugged ? '🔴' : '🟢') + ' ' + x.mint.slice(0, 6) + '… ' + fmtUsd(x.mcap))
+        .join(' · '));
+    }
     if (devData.rugRate >= 50) high = true;
     else if (devData.rugRate >= 25) med = true;
   } else {
