@@ -241,6 +241,14 @@ async function fetchMoralisWalletSwaps(wallet, limit = 40, order = 'DESC') {
   }
 }
 
+function median(nums) {
+  const xs = nums.filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  if (!xs.length) return null;
+  const mid = Math.floor(xs.length / 2);
+  if (xs.length % 2 === 1) return xs[mid];
+  return (xs[mid - 1] + xs[mid]) / 2;
+}
+
 function toMs(v) {
   const t = v ? Date.parse(v) : NaN;
   return Number.isFinite(t) ? t : null;
@@ -418,6 +426,126 @@ async function fetchBitqueryBundleQuick(mint) {
   };
 }
 
+async function fetchDeepForensics(mint, creator, deadline) {
+  const out = {
+    bundle: null,
+    dev: null,
+  };
+
+  const swaps = await fetchMoralisTokenSwaps(mint, 300, 'ASC');
+  if (swaps && swaps.length) {
+    const buys = swaps.filter((s) => s.transactionType === 'buy');
+    const earlyByWallet = new Map();
+    for (const b of buys) {
+      if (Date.now() > deadline) break;
+      const w = b.walletAddress;
+      if (!w || earlyByWallet.has(w)) continue;
+      earlyByWallet.set(w, b);
+      if (earlyByWallet.size >= 40) break;
+    }
+    const early = Array.from(earlyByWallet.values());
+    const wallets = early.map((e) => e.walletAddress);
+    const firstBuyTs = toMs(early[0]?.blockTimestamp);
+
+    const walletHist = await runWithLimit(wallets, 8, async (w) => {
+      if (Date.now() > deadline) return null;
+      const hist = await fetchMoralisWalletSwaps(w, 60, 'ASC');
+      if (!hist || hist.length === 0) return { wallet: w, firstSeen: null, sourceKey: 'unknown', reuse: 0 };
+      const first = hist[0];
+      const firstSeen = toMs(first.blockTimestamp);
+      const sourceKey = String(first.exchangeAddress || first.sold?.address || first.pairAddress || 'unknown');
+      const thirtyDaysAgo = Date.now() - 30 * 24 * 3600 * 1000;
+      const reuseTokens = new Set(
+        hist
+          .filter((x) => toMs(x.blockTimestamp) && toMs(x.blockTimestamp) >= thirtyDaysAgo)
+          .map((x) => x.baseToken)
+          .filter((t) => t && t !== mint)
+      );
+      return { wallet: w, firstSeen, sourceKey, reuse: reuseTokens.size };
+    });
+
+    const sourceGroups = new Map();
+    for (const h of walletHist.filter(Boolean)) {
+      sourceGroups.set(h.sourceKey, (sourceGroups.get(h.sourceKey) || 0) + 1);
+    }
+    const clusterSize = sourceGroups.size ? Math.max(...sourceGroups.values()) : 0;
+    const clusterSource = Array.from(sourceGroups.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const clusterWallets = walletHist.filter((h) => h && h.sourceKey === clusterSource).map((h) => h.wallet);
+
+    const amountByWallet = new Map(early.map((e) => [e.walletAddress, Number(e.totalValueUsd || e.bought?.usdAmount || 0)]));
+    const totalFlow = Array.from(amountByWallet.values()).reduce((s, n) => s + (Number.isFinite(n) ? n : 0), 0);
+    const clusterFlow = clusterWallets.reduce((s, w) => s + (amountByWallet.get(w) || 0), 0);
+    const clusterFlowPct = totalFlow > 0 ? (clusterFlow / totalFlow) * 100 : 0;
+
+    const buyTimes = early.map((e) => toMs(e.blockTimestamp)).filter(Boolean);
+    const entryBursts = countBurstWindows(buyTimes, 10000, 3);
+    const timeToBundleSec = buyTimes.length && clusterWallets.length >= 2
+      ? Math.max(
+        0,
+        Math.round(
+          (Math.min(...buyTimes.filter((_, i) => clusterWallets.includes(early[i]?.walletAddress))) - Math.min(...buyTimes)) / 1000
+        )
+      )
+      : null;
+
+    const freshWallets = walletHist.filter((h) => h?.firstSeen && firstBuyTs && (firstBuyTs - h.firstSeen) <= 24 * 3600 * 1000).length;
+    const freshRatio = early.length > 0 ? (freshWallets / early.length) * 100 : 0;
+    const reusedWallets = walletHist.filter((h) => h && h.reuse >= 2).length;
+
+    const sells = swaps.filter((s) => s.transactionType === 'sell' && clusterWallets.includes(s.walletAddress));
+    const synchronizedExits = countBurstWindows(sells.map((s) => toMs(s.blockTimestamp)), 10000, 2);
+
+    out.bundle = {
+      earlyCount: early.length,
+      clusterSize,
+      clusterFlowPct,
+      entryBursts,
+      timeToBundleSec,
+      synchronizedExits,
+      freshRatio,
+      reusedWallets,
+    };
+  }
+
+  if (creator && Date.now() <= deadline) {
+    const hist = await fetchMoralisWalletSwaps(creator, 250, 'DESC');
+    if (hist && hist.length) {
+      const cutoff = Date.now() - 90 * 24 * 3600 * 1000;
+      const launches = Array.from(new Set(
+        hist
+          .filter((x) => toMs(x.blockTimestamp) && toMs(x.blockTimestamp) >= cutoff)
+          .filter((x) => x.subCategory === 'newPosition' || String(x.exchangeName || '').toLowerCase().includes('pump'))
+          .map((x) => x.bought?.address || x.baseToken)
+          .filter((t) => t && t !== mint && t !== 'So11111111111111111111111111111111111111112')
+      )).slice(0, 24);
+
+      const reports = await runWithLimit(launches.slice(0, 15), 5, async (m) => {
+        if (Date.now() > deadline) return null;
+        return fetchRugCheckReport(m);
+      });
+      const valid = reports.filter(Boolean);
+      const rugged = valid.filter((r) => r.rugged || Number(r.score_normalised ?? r.score_normalized ?? 0) >= 70);
+      const rugRate = valid.length > 0 ? (rugged.length / valid.length) * 100 : 0;
+      const ttdDays = valid
+        .map((r) => {
+          const detected = toMs(r?.detectedAt);
+          const created = toMs((r?.creatorTokens || []).find((x) => x?.mint === r?.mint)?.createdAt) || toMs((r?.markets || [])[0]?.createdAt);
+          return detected && created ? Math.max(0, (detected - created) / (24 * 3600 * 1000)) : null;
+        })
+        .filter((x) => x !== null);
+
+      out.dev = {
+        sampled: valid.length,
+        ruggedCount: rugged.length,
+        rugRate,
+        medianTimeToDeathDays: median(ttdDays),
+      };
+    }
+  }
+
+  return out;
+}
+
 async function autoTrack(address, message) {
   const db = ensureDBSchema(loadDB());
 
@@ -543,6 +671,15 @@ const commands = [
     .setDescription('Run RugCheck + bundle risk scan for a Solana token')
     .addStringOption(opt =>
       opt.setName('mint').setDescription('Solana token mint address').setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('mode')
+        .setDescription('Scan depth')
+        .setRequired(false)
+        .addChoices(
+          { name: 'quick (5-15s)', value: 'quick' },
+          { name: 'deep (30-90s)', value: 'deep' }
+        )
     ),
   new SlashCommandBuilder()
     .setName('wallet')
@@ -889,6 +1026,8 @@ async function handleX(interaction) {
 
 async function handleRug(interaction) {
   await interaction.deferReply();
+  const mode = interaction.options.getString('mode') || 'quick';
+  const isDeep = mode === 'deep';
   const rawMint =
     interaction.options.getString('mint') ||
     interaction.options.getString('address') ||
@@ -899,12 +1038,13 @@ async function handleRug(interaction) {
     return interaction.editReply('❌ Invalid Solana mint address.');
   }
 
-  const cacheHit = rugCache[mint];
+  const cacheKey = mint + ':' + mode;
+  const cacheHit = rugCache[cacheKey];
   if (cacheHit && Date.now() - cacheHit.ts < RUG_CACHE_TTL_MS) {
     return interaction.editReply({ embeds: [cacheHit.embed] });
   }
 
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + (isDeep ? 90000 : 15000);
   const timeLeft = () => Math.max(500, deadline - Date.now());
   const timed = async (fn) => Promise.race([
     fn(),
@@ -985,6 +1125,11 @@ async function handleRug(interaction) {
     };
   }
 
+  let deepData = null;
+  if (isDeep) {
+    deepData = await fetchDeepForensics(mint, riskData?.rug?.creator || null, deadline);
+  }
+
   if (!tokenData?.pump && !tokenData?.dex) {
     return interaction.editReply('❌ Token not found on pump.fun or DexScreener.');
   }
@@ -1027,6 +1172,13 @@ async function handleRug(interaction) {
   } else {
     lines.push('⚠️ Bundle data unavailable');
   }
+  if (deepData?.bundle) {
+    lines.push('Deep fresh-wallet ratio: **' + deepData.bundle.freshRatio.toFixed(0) + '%**');
+    lines.push('Deep cross-token reuse: **' + deepData.bundle.reusedWallets + ' / ' + deepData.bundle.earlyCount + '**');
+    lines.push('Deep entry bursts: **' + deepData.bundle.entryBursts + '**');
+  } else if (isDeep) {
+    lines.push('⚠️ Deep bundle forensics unavailable');
+  }
   lines.push('*Probabilistic signals — not guaranteed*');
 
   lines.push('');
@@ -1047,6 +1199,13 @@ async function handleRug(interaction) {
   } else {
     lines.push('⚠️ Dev history unavailable');
   }
+  if (deepData?.dev) {
+    lines.push('Deep sampled launches: **' + deepData.dev.sampled + '**');
+    lines.push('Deep rug rate: **' + deepData.dev.ruggedCount + ' / ' + deepData.dev.sampled + '**');
+    lines.push('Deep median time-to-death: **' + (deepData.dev.medianTimeToDeathDays === null ? '—' : deepData.dev.medianTimeToDeathDays.toFixed(1) + 'd') + '**');
+  } else if (isDeep) {
+    lines.push('⚠️ Deep dev forensics unavailable');
+  }
   lines.push('*Probabilistic signals — not guaranteed*');
 
   lines.push('');
@@ -1057,14 +1216,14 @@ async function handleRug(interaction) {
   const color = high ? 0xff3b30 : med ? 0xffa500 : 0x00c853;
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle('🔍 Rug Check — ' + name + ' (' + symbol + ')')
+    .setTitle('🔍 Rug Check — ' + name + ' (' + symbol + ')' + (isDeep ? ' [DEEP]' : ''))
     .setDescription(lines.join('\n').slice(0, 4000))
     .addFields({ name: 'Mint', value: '`' + mint + '`' })
     .setFooter({ text: 'Risk signals only — not certainty' })
     .setTimestamp();
 
   if (tokenData?.token?.imageUrl) embed.setThumbnail(tokenData.token.imageUrl);
-  rugCache[mint] = { ts: Date.now(), embed };
+  rugCache[cacheKey] = { ts: Date.now(), embed };
   return interaction.editReply({ embeds: [embed] });
 }
 
