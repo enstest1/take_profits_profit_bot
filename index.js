@@ -209,6 +209,41 @@ function moralisHeaders() {
   return { Authorization: 'Bearer ' + process.env.MORALIS_API_KEY };
 }
 
+async function fetchHeliusWalletHistory(wallet, limit = 40) {
+  if (!process.env.HELIUS_API_KEY) return null;
+  try {
+    const url =
+      'https://api.helius.xyz/v0/addresses/' +
+      wallet +
+      '/transactions?api-key=' +
+      encodeURIComponent(process.env.HELIUS_API_KEY) +
+      '&limit=' +
+      limit;
+    const res = await fetch(url, { signal: AbortSignal.timeout(9000) });
+    if (!res.ok) return null;
+    const txs = await res.json();
+    if (!Array.isArray(txs)) return null;
+
+    // Normalize key fields to the Moralis-like shape used in heuristics.
+    return txs.map((tx) => {
+      const t = tx?.timestamp ? new Date(Number(tx.timestamp) * 1000).toISOString() : null;
+      const firstTransfer = Array.isArray(tx?.tokenTransfers) ? tx.tokenTransfers[0] : null;
+      return {
+        blockTimestamp: t,
+        baseToken: firstTransfer?.mint || null,
+        exchangeAddress: tx?.feePayer || null,
+        pairAddress: null,
+        sold: { address: tx?.nativeTransfers?.[0]?.fromUserAccount || null },
+        bought: { address: firstTransfer?.mint || null },
+        subCategory: String(tx?.type || ''),
+        exchangeName: String(tx?.source || ''),
+      };
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function fetchMoralisTokenSwaps(mint, limit = 120, order = 'ASC') {
   const headers = moralisHeaders();
   if (!headers) return null;
@@ -227,18 +262,20 @@ async function fetchMoralisTokenSwaps(mint, limit = 120, order = 'ASC') {
 
 async function fetchMoralisWalletSwaps(wallet, limit = 40, order = 'DESC') {
   const headers = moralisHeaders();
-  if (!headers) return null;
-  try {
-    const res = await fetch(
-      'https://solana-gateway.moralis.io/account/mainnet/' + wallet + '/swaps?limit=' + limit + '&order=' + order,
-      { headers, signal: AbortSignal.timeout(8000) }
-    );
-    if (!res.ok) return null;
-    const j = await res.json();
-    return j?.result || [];
-  } catch {
-    return null;
+  if (headers) {
+    try {
+      const res = await fetch(
+        'https://solana-gateway.moralis.io/account/mainnet/' + wallet + '/swaps?limit=' + limit + '&order=' + order,
+        { headers, signal: AbortSignal.timeout(8000) }
+      );
+      if (res.ok) {
+        const j = await res.json();
+        return j?.result || [];
+      }
+    } catch {}
   }
+  // Fallback path when Moralis is unavailable/throttled.
+  return fetchHeliusWalletHistory(wallet, limit);
 }
 
 function median(nums) {
@@ -1140,7 +1177,8 @@ async function handleRug(interaction, forcedMode = null) {
     deepData = await fetchDeepForensics(mint, riskData?.rug?.creator || null, deadline);
   }
 
-  if (!tokenData?.pump && !tokenData?.dex) {
+  // Do not hard-fail when market APIs miss if RugCheck still has data.
+  if (!tokenData?.pump && !tokenData?.dex && !riskData?.rug) {
     return interaction.editReply('❌ Token not found on pump.fun or DexScreener.');
   }
 
@@ -1152,7 +1190,7 @@ async function handleRug(interaction, forcedMode = null) {
   let high = false;
   let med = false;
 
-  lines.push('━━━ **MARKET SNAPSHOT** ━━━');
+  lines.push('🧿 **' + name + ' (' + symbol + ')**');
   const priceUsd = tokenData?.token?.price ? Number(tokenData.token.price) : null;
   const liqUsd = rug?.totalMarketLiquidity ?? tokenData?.dex?.liquidity ?? tokenData?.token?.liquidity ?? null;
   const volUsd = tokenData?.dex?.volume24h ?? tokenData?.token?.volume24h ?? null;
@@ -1161,26 +1199,26 @@ async function handleRug(interaction, forcedMode = null) {
   const launchpad = rug?.launchpad || (tokenData?.pump ? 'pump.fun' : 'unknown');
   const migrated = tokenData?.pump?.complete === true ? 'PumpSwap' : (tokenData?.pump ? 'pump.fun' : 'unknown');
   lines.push(
-    'Price: **' + (priceUsd ? '$' + priceUsd.toFixed(priceUsd >= 0.01 ? 4 : 8) : '—') +
-    '** · Liq: **' + fmtUsd(liqUsd) + '** · Vol: **' + fmtUsd(volUsd) + '**'
+    '💵 Price **' + (priceUsd ? '$' + priceUsd.toFixed(priceUsd >= 0.01 ? 4 : 8) : '—') +
+    '** | 💧 Liq **' + fmtUsd(liqUsd) + '** | 📊 Vol **' + fmtUsd(volUsd) + '**'
   );
-  lines.push('Holders: **' + (holders ? Number(holders).toLocaleString() : '—') + '** · Age: **' + ageStr + '**');
-  lines.push('Path: **' + launchpad + ' → ' + migrated + '**');
+  lines.push('👥 Holders **' + (holders ? Number(holders).toLocaleString() : '—') + '** | ⏳ Age **' + ageStr + '**');
+  lines.push('🛤️ Path **' + launchpad + ' → ' + migrated + '**');
 
-  lines.push('━━━ **TOKEN RISK** ━━━');
+  lines.push('');
+  lines.push('🛡️ **TOKEN RISK**');
   if (riskData) {
     const score = Number(riskData.norm || 0);
     const levelEmoji = riskData.level === 'High' ? '🔴' : riskData.level === 'Medium' ? '🟠' : '🟢';
-    lines.push('Score: **' + score + '/100** ' + levelEmoji + ' ' + riskData.level + ' Risk');
-    lines.push('Mint auth: ' + (riskData.mintAuthEnabled ? '⚠️ Enabled' : '✅ Revoked') +
-      ' · Freeze auth: ' + (riskData.freezeAuthEnabled ? '⚠️ Enabled' : '✅ Revoked'));
-    lines.push('LP locked: ' + (riskData.lpLockedPct > 0 ? '✅ Yes (' + riskData.lpLockedPct.toFixed(0) + '%)' : '❌ No'));
-    lines.push('Top 10 holders: **' + riskData.top10Pct.toFixed(1) + '%**' + (riskData.top10Pct >= 60 ? ' ⚠️' : ''));
-    lines.push('Risks: ' + (riskData.risks.length ? riskData.risks.slice(0, 4).join(', ') : 'None'));
+    lines.push('🎯 Score **' + score + '/100** ' + levelEmoji + ' ' + riskData.level);
+    lines.push('🔐 Mint ' + (riskData.mintAuthEnabled ? '⚠️ enabled' : '✅ revoked') +
+      ' | ❄️ Freeze ' + (riskData.freezeAuthEnabled ? '⚠️ enabled' : '✅ revoked'));
+    lines.push('🏦 LP ' + (riskData.lpLockedPct > 0 ? '✅ locked ' + riskData.lpLockedPct.toFixed(0) + '%' : '❌ unlocked'));
+    lines.push('🐋 Top10 **' + riskData.top10Pct.toFixed(1) + '%**' + (riskData.top10Pct >= 60 ? ' ⚠️' : ''));
+    lines.push('🚩 ' + (riskData.risks.length ? riskData.risks.slice(0, 4).join(' | ') : 'No major flags'));
     const devSold = riskData.risks.some((r) => String(r).toLowerCase().includes('creator history of rugged tokens') || String(r).toLowerCase().includes('dev sold'));
     const insiderCount = Number(rug?.insiderNetworks?.length || 0);
-    lines.push('Dev sold: ' + (devSold ? '⚠️ Yes' : '✅ No signal'));
-    lines.push('Insiders: **' + insiderCount + '**' + (insiderCount > 0 ? ' ⚠️' : ''));
+    lines.push('👤 Dev sold ' + (devSold ? '⚠️ yes' : '✅ no-signal') + ' | 🕸️ Insiders **' + insiderCount + '**');
     if (riskData.level === 'High') high = true;
     else if (riskData.level === 'Medium') med = true;
   } else {
@@ -1188,39 +1226,36 @@ async function handleRug(interaction, forcedMode = null) {
   }
 
   lines.push('');
-  lines.push('━━━ **BUNDLE RISK** ━━━');
+  lines.push('📦 **BUNDLE RISK**');
   if (bundleData) {
-    lines.push('Top funded cluster: **' + bundleData.clusterSize + ' / ' + bundleData.earlyCount + '** early buyers');
-    lines.push('Cluster buy-flow: **' + bundleData.clusterFlowPct.toFixed(1) + '%**');
-    lines.push('Time-to-bundle: **' + (bundleData.timeToBundleSec === null ? '—' : bundleData.timeToBundleSec + 's') + '**');
-    lines.push('Synchronized exits: **' + bundleData.synchronizedExits + '** windows');
-    lines.push('Sample: **' + bundleData.sampleBuys + '** buys');
+    lines.push('👥 Cluster **' + bundleData.clusterSize + '/' + bundleData.earlyCount + '** | 💸 Flow **' + bundleData.clusterFlowPct.toFixed(1) + '%**');
+    lines.push('⏱️ TTB **' + (bundleData.timeToBundleSec === null ? '—' : bundleData.timeToBundleSec + 's') + '** | 🔻 Sync exits **' + bundleData.synchronizedExits + '**');
+    lines.push('🧪 Sample **' + bundleData.sampleBuys + '** buys');
     const confEmoji = bundleData.confidence === 'High' ? '🔴' : bundleData.confidence === 'Medium' ? '🟠' : '🟢';
-    lines.push('Bundle confidence: **' + bundleData.confidence.toUpperCase() + '** ' + confEmoji);
+    lines.push('🧠 Confidence **' + bundleData.confidence.toUpperCase() + '** ' + confEmoji);
     if (bundleData.confidence === 'High') high = true;
     else if (bundleData.confidence === 'Medium') med = true;
   } else {
     lines.push('⚠️ Bundle data unavailable');
   }
   if (deepData?.bundle) {
-    lines.push('Deep fresh-wallet ratio: **' + deepData.bundle.freshRatio.toFixed(0) + '%**');
-    lines.push('Deep cross-token reuse: **' + deepData.bundle.reusedWallets + ' / ' + deepData.bundle.earlyCount + '**');
-    lines.push('Deep entry bursts: **' + deepData.bundle.entryBursts + '**');
+    lines.push('🧬 Deep fresh **' + deepData.bundle.freshRatio.toFixed(0) + '%** | ♻️ reuse **' + deepData.bundle.reusedWallets + '/' + deepData.bundle.earlyCount + '**');
+    lines.push('⚡ Deep bursts **' + deepData.bundle.entryBursts + '**');
   } else if (isDeep) {
     lines.push('⚠️ Deep bundle forensics unavailable');
   }
-  lines.push('*Probabilistic signals — not guaranteed*');
+  lines.push('ℹ️ Probabilistic signals — not guaranteed');
 
   lines.push('');
-  lines.push('━━━ **DEV HISTORY** ━━━');
+  lines.push('👤 **DEV HISTORY**');
   if (devData) {
-    lines.push('Past launches: **' + devData.pastLaunches + '**');
-    lines.push('Rug rate: **' + devData.ruggedCount + ' / ' + devData.sampled + '**' +
+    lines.push('🚀 Launches **' + devData.pastLaunches + '**');
+    lines.push('🧨 Rug rate **' + devData.ruggedCount + '/' + devData.sampled + '**' +
       (devData.rugRate >= 50 ? ' 🔴' : devData.rugRate >= 25 ? ' 🟠' : ' 🟢'));
-    lines.push('Repeat pattern: **' + devData.repeatPattern + '**' + (devData.repeatPattern === 'YES' ? ' ⚠️' : ''));
-    lines.push('Watchlist: ' + (devData.watchlistHit ? '⚠️ FLAGGED' : '✅ Clean'));
+    lines.push('🔁 Repeat pattern **' + devData.repeatPattern + '**' + (devData.repeatPattern === 'YES' ? ' ⚠️' : ''));
+    lines.push('📋 Watchlist ' + (devData.watchlistHit ? '⚠️ FLAGGED' : '✅ clean'));
     if (devData.mcapList.length) {
-      lines.push('Current MCAPs (top past): ' + devData.mcapList
+      lines.push('💰 Top past MCAPs: ' + devData.mcapList
         .map((x) => (x.rugged ? '🔴' : '🟢') + ' ' + x.mint.slice(0, 6) + '… ' + fmtUsd(x.mcap))
         .join(' · '));
     }
@@ -1230,30 +1265,29 @@ async function handleRug(interaction, forcedMode = null) {
     lines.push('⚠️ Dev history unavailable');
   }
   if (deepData?.dev) {
-    lines.push('Deep sampled launches: **' + deepData.dev.sampled + '**');
-    lines.push('Deep rug rate: **' + deepData.dev.ruggedCount + ' / ' + deepData.dev.sampled + '**');
-    lines.push('Deep median time-to-death: **' + (deepData.dev.medianTimeToDeathDays === null ? '—' : deepData.dev.medianTimeToDeathDays.toFixed(1) + 'd') + '**');
+    lines.push('🧪 Deep sampled **' + deepData.dev.sampled + '** | Deep rug **' + deepData.dev.ruggedCount + '/' + deepData.dev.sampled + '**');
+    lines.push('⏳ Deep median TTD **' + (deepData.dev.medianTimeToDeathDays === null ? '—' : deepData.dev.medianTimeToDeathDays.toFixed(1) + 'd') + '**');
   } else if (isDeep) {
     lines.push('⚠️ Deep dev forensics unavailable');
   }
-  lines.push('*Probabilistic signals — not guaranteed*');
+  lines.push('ℹ️ Probabilistic signals — not guaranteed');
 
   lines.push('');
-  lines.push('━━━ **VERDICT** ━━━');
+  lines.push('📌 **VERDICT**');
   const verdict = high ? '🔴 HIGH RISK' : med ? '🟠 MIXED RISK' : '🟢 LOW RISK';
-  lines.push(verdict + ' — review all sections before trading');
+  lines.push(verdict + ' — review all sections');
   const dexUrl = tokenData?.dex?.dexUrl || tokenData?.token?.dexUrl || null;
   const pumpUrl = tokenData?.pump ? ('https://pump.fun/' + mint) : null;
   const rugUrl = 'https://rugcheck.xyz/tokens/' + mint;
   const links = [dexUrl, pumpUrl, rugUrl].filter(Boolean);
   if (links.length) {
-    lines.push('Links: ' + links.join(' · '));
+    lines.push('🔗 ' + links.join(' · '));
   }
 
   const color = high ? 0xff3b30 : med ? 0xffa500 : 0x00c853;
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle('🔍 Rug Check — ' + name + ' (' + symbol + ')' + (isDeep ? ' [DEEP]' : ''))
+    .setTitle('💎 ' + (isDeep ? '/rugdeep' : '/rug') + ' — ' + symbol)
     .setDescription(lines.join('\n').slice(0, 4000))
     .addFields({ name: 'Mint', value: '`' + mint + '`' })
     .setFooter({ text: 'Risk signals only — not certainty' })
