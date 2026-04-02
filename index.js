@@ -303,6 +303,19 @@ async function bitqueryRequest(query, variables) {
   }
 }
 
+function fmtAgeFromDate(dateInput) {
+  const ms = toMs(dateInput);
+  if (!ms) return '—';
+  const diff = Date.now() - ms;
+  const h = Math.floor(diff / 3600000);
+  if (h < 1) return '<1h';
+  if (h < 24) return h + 'h';
+  const d = Math.floor(h / 24);
+  if (d < 30) return d + 'd';
+  const m = Math.floor(d / 30);
+  return m + 'mo';
+}
+
 async function fetchBitqueryBundleQuick(mint) {
   const buysQuery =
     'query ($mint: String!) {' +
@@ -671,15 +684,12 @@ const commands = [
     .setDescription('Run RugCheck + bundle risk scan for a Solana token')
     .addStringOption(opt =>
       opt.setName('mint').setDescription('Solana token mint address').setRequired(true)
-    )
+    ),
+  new SlashCommandBuilder()
+    .setName('rugdeep')
+    .setDescription('Run deep RugCheck + bundle + dev forensics scan (slower)')
     .addStringOption(opt =>
-      opt.setName('mode')
-        .setDescription('Scan depth')
-        .setRequired(false)
-        .addChoices(
-          { name: 'quick (5-15s)', value: 'quick' },
-          { name: 'deep (30-90s)', value: 'deep' }
-        )
+      opt.setName('mint').setDescription('Solana token mint address').setRequired(true)
     ),
   new SlashCommandBuilder()
     .setName('wallet')
@@ -1024,9 +1034,9 @@ async function handleX(interaction) {
   return interaction.editReply({ embeds: [embed] });
 }
 
-async function handleRug(interaction) {
+async function handleRug(interaction, forcedMode = null) {
   await interaction.deferReply();
-  const mode = interaction.options.getString('mode') || 'quick';
+  const mode = forcedMode || 'quick';
   const isDeep = mode === 'deep';
   const rawMint =
     interaction.options.getString('mint') ||
@@ -1136,10 +1146,26 @@ async function handleRug(interaction) {
 
   const name = tokenData?.token?.name || riskData?.rug?.tokenMeta?.name || mint.slice(0, 8) + '...';
   const symbol = tokenData?.token?.symbol || riskData?.rug?.tokenMeta?.symbol || 'SOL';
+  const rug = riskData?.rug || null;
 
   const lines = [];
   let high = false;
   let med = false;
+
+  lines.push('━━━ **MARKET SNAPSHOT** ━━━');
+  const priceUsd = tokenData?.token?.price ? Number(tokenData.token.price) : null;
+  const liqUsd = rug?.totalMarketLiquidity ?? tokenData?.dex?.liquidity ?? tokenData?.token?.liquidity ?? null;
+  const volUsd = tokenData?.dex?.volume24h ?? tokenData?.token?.volume24h ?? null;
+  const holders = rug?.totalHolders ?? null;
+  const ageStr = fmtAgeFromDate(rug?.detectedAt || tokenData?.pump?.created_timestamp || tokenData?.dex?.pairCreatedAt || tokenData?.token?.pairCreatedAt || null);
+  const launchpad = rug?.launchpad || (tokenData?.pump ? 'pump.fun' : 'unknown');
+  const migrated = tokenData?.pump?.complete === true ? 'PumpSwap' : (tokenData?.pump ? 'pump.fun' : 'unknown');
+  lines.push(
+    'Price: **' + (priceUsd ? '$' + priceUsd.toFixed(priceUsd >= 0.01 ? 4 : 8) : '—') +
+    '** · Liq: **' + fmtUsd(liqUsd) + '** · Vol: **' + fmtUsd(volUsd) + '**'
+  );
+  lines.push('Holders: **' + (holders ? Number(holders).toLocaleString() : '—') + '** · Age: **' + ageStr + '**');
+  lines.push('Path: **' + launchpad + ' → ' + migrated + '**');
 
   lines.push('━━━ **TOKEN RISK** ━━━');
   if (riskData) {
@@ -1151,6 +1177,10 @@ async function handleRug(interaction) {
     lines.push('LP locked: ' + (riskData.lpLockedPct > 0 ? '✅ Yes (' + riskData.lpLockedPct.toFixed(0) + '%)' : '❌ No'));
     lines.push('Top 10 holders: **' + riskData.top10Pct.toFixed(1) + '%**' + (riskData.top10Pct >= 60 ? ' ⚠️' : ''));
     lines.push('Risks: ' + (riskData.risks.length ? riskData.risks.slice(0, 4).join(', ') : 'None'));
+    const devSold = riskData.risks.some((r) => String(r).toLowerCase().includes('creator history of rugged tokens') || String(r).toLowerCase().includes('dev sold'));
+    const insiderCount = Number(rug?.insiderNetworks?.length || 0);
+    lines.push('Dev sold: ' + (devSold ? '⚠️ Yes' : '✅ No signal'));
+    lines.push('Insiders: **' + insiderCount + '**' + (insiderCount > 0 ? ' ⚠️' : ''));
     if (riskData.level === 'High') high = true;
     else if (riskData.level === 'Medium') med = true;
   } else {
@@ -1212,6 +1242,13 @@ async function handleRug(interaction) {
   lines.push('━━━ **VERDICT** ━━━');
   const verdict = high ? '🔴 HIGH RISK' : med ? '🟠 MIXED RISK' : '🟢 LOW RISK';
   lines.push(verdict + ' — review all sections before trading');
+  const dexUrl = tokenData?.dex?.dexUrl || tokenData?.token?.dexUrl || null;
+  const pumpUrl = tokenData?.pump ? ('https://pump.fun/' + mint) : null;
+  const rugUrl = 'https://rugcheck.xyz/tokens/' + mint;
+  const links = [dexUrl, pumpUrl, rugUrl].filter(Boolean);
+  if (links.length) {
+    lines.push('Links: ' + links.join(' · '));
+  }
 
   const color = high ? 0xff3b30 : med ? 0xffa500 : 0x00c853;
   const embed = new EmbedBuilder()
@@ -1311,6 +1348,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'remove') return handleRemove(interaction);
     if (interaction.commandName === 'x') return handleX(interaction);
     if (interaction.commandName === 'rug') return handleRug(interaction);
+    if (interaction.commandName === 'rugdeep') return handleRug(interaction, 'deep');
     if (interaction.commandName === 'wallet') {
       const sub = interaction.options.getSubcommand();
       if (sub === 'add') return handleWalletAdd(interaction);
