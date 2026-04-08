@@ -33,8 +33,8 @@ function takeProfitDescription(mint, postedBy, postedAt) {
     '\n' +
     '[Lute](https://lute.gg/trade/' +
     mint +
-    ') · [Trench](https://trench.com/trade/' +
-    mint +
+    ') · [Trench](https://trench.com/trade/monitor?mint=' +
+    encodeURIComponent(mint) +
     ')'
   );
 }

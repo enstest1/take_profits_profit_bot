@@ -62,7 +62,8 @@ function luteTradeUrl(mint) {
 }
 
 function trenchTradeUrl(mint) {
-  return 'https://trench.com/trade/' + mint;
+  // Path /trade/<mint> 404s; app uses ?mint= on monitor (see trench.com redirects).
+  return 'https://trench.com/trade/monitor?mint=' + encodeURIComponent(mint);
 }
 
 function takeProfitDescription(mint, postedBy, postedAt) {

@@ -291,6 +291,26 @@ function toMs(v) {
   return Number.isFinite(t) ? t : null;
 }
 
+function toMsTokenCreated(v) {
+  if (v == null) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return v > 1e12 ? v : v * 1000;
+  }
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? t : null;
+}
+
+function shuffleArray(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i];
+    a[i] = a[j];
+    a[j] = t;
+  }
+  return a;
+}
+
 function countBurstWindows(msList, windowMs, threshold) {
   const xs = msList.filter(Boolean).sort((a, b) => a - b);
   let count = 0;
@@ -752,6 +772,17 @@ const commands = [
       sub.setName('list')
         .setDescription('Show all watched wallets')
     ),
+  new SlashCommandBuilder()
+    .setName('devs')
+    .setDescription('Creator wallets inferred from tracked tokens')
+    .addSubcommand(sub =>
+      sub
+        .setName('random')
+        .setDescription('30 random dev wallets + token launch counts in the last 30 days')
+    ),
+  new SlashCommandBuilder()
+    .setName('devrandom')
+    .setDescription('30 random dev wallets from tracked + 30-day launch counts (same as /devs random)'),
 ].map(c => c.toJSON());
 
 async function registerCommands() {
@@ -771,6 +802,106 @@ async function registerCommands() {
   } catch (e) {
     console.error('Failed to register commands:', e.message);
   }
+}
+
+async function handleDevsRandom(interaction) {
+  await interaction.deferReply();
+  const db = ensureDBSchema(loadDB());
+  const entries = Object.values(db.tokens || {});
+  if (entries.length === 0) {
+    return interaction.editReply('📭 No tracked tokens yet — call some mints in chat first.');
+  }
+
+  const mintByDev = new Map();
+  for (const e of entries) {
+    const d = e.devWallet;
+    if (d && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(d) && !mintByDev.has(d)) {
+      mintByDev.set(d, e.address);
+    }
+  }
+
+  const toProbe = shuffleArray(
+    entries.filter((e) => {
+      if (!e.devWallet) return true;
+      return !mintByDev.has(e.devWallet);
+    })
+  );
+
+  let pumpFetches = 0;
+  for (const e of toProbe) {
+    if (mintByDev.size >= 150) break;
+    if (pumpFetches >= 40) break;
+    pumpFetches++;
+    const pump = await fetchPumpFun(e.address);
+    const c = pump && pump.creator;
+    if (c && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(c) && !mintByDev.has(c)) {
+      mintByDev.set(c, e.address);
+    }
+  }
+
+  let pairs = shuffleArray([...mintByDev.entries()]).slice(0, 30);
+  if (pairs.length === 0) {
+    return interaction.editReply(
+      '❌ No creator wallets found. Tracked entries may be missing deployer metadata — try pump.fun mints.'
+    );
+  }
+
+  const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  const rows = await runWithLimit(pairs, 4, async ([dev, mint]) => {
+    const report = await fetchRugCheckReport(mint);
+    if (!report) {
+      return { dev, mint, count30d: null, mismatch: false };
+    }
+    const rcCreator = report.creator || null;
+    const tokens = Array.isArray(report.creatorTokens) ? report.creatorTokens : [];
+    let count30d = 0;
+    for (const t of tokens) {
+      const ms = toMsTokenCreated(t.createdAt || t.created_at);
+      if (ms !== null && ms >= cutoffMs) count30d++;
+    }
+    const mismatch = !!(rcCreator && rcCreator !== dev);
+    return { dev, mint, count30d, mismatch };
+  });
+
+  const validRows = rows.filter(Boolean);
+  validRows.sort((a, b) => {
+    const ac = a.count30d == null ? -1 : a.count30d;
+    const bc = b.count30d == null ? -1 : b.count30d;
+    return bc - ac;
+  });
+
+  const lines = validRows.map((r, i) => {
+    const cnt = r.count30d === null ? 'N/A' : String(r.count30d);
+    const warn = r.mismatch ? ' ⚠️' : '';
+    return (
+      '**' +
+      (i + 1) +
+      '.** `' +
+      r.dev +
+      '` — **' +
+      cnt +
+      '** in last 30d' +
+      warn
+    );
+  });
+
+  const embed = new EmbedBuilder()
+    .setColor(0xa855f7)
+    .setTitle('🎲 30 random creator wallets (from tracked)')
+    .setDescription(
+      'Deploy counts = tokens with **creation time** in the last **30 days** (from index for that wallet). ' +
+        'Each row uses one of your **tracked mints** for that creator.\n\n' +
+        lines.join('\n').slice(0, 4090)
+    )
+    .setFooter({
+      text:
+        validRows.length +
+        ' wallets · N/A = no report or no dated launches · ⚠️ sample mint creator ≠ stored dev',
+    })
+    .setTimestamp();
+
+  return interaction.editReply({ embeds: [embed] });
 }
 
 async function handleCalls(interaction) {
@@ -1385,6 +1516,11 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'x') return handleX(interaction);
     if (interaction.commandName === 'rug') return handleRug(interaction);
     if (interaction.commandName === 'rugdeep') return handleRug(interaction, 'deep');
+    if (interaction.commandName === 'devrandom') return handleDevsRandom(interaction);
+    if (interaction.commandName === 'devs') {
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'random') return handleDevsRandom(interaction);
+    }
     if (interaction.commandName === 'wallet') {
       const sub = interaction.options.getSubcommand();
       if (sub === 'add') return handleWalletAdd(interaction);
