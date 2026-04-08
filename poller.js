@@ -45,6 +45,70 @@ function fmtTime(ms) {
   return 'just now';
 }
 
+function fmtAgeLabel(ms) {
+  if (!ms) return '—';
+  const diff = Date.now() - Number(ms);
+  const mi = Math.floor(diff / 60000);
+  const h = Math.floor(mi / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return d === 1 ? '1 day' : d + ' days';
+  if (h > 0) return h === 1 ? '1 hour' : h + ' hours';
+  if (mi > 0) return mi === 1 ? '1 minute' : mi + ' minutes';
+  return 'just now';
+}
+
+function luteTradeUrl(mint) {
+  return 'https://lute.gg/trade/' + mint;
+}
+
+function trenchTradeUrl(mint) {
+  return 'https://trench.com/trade/' + mint;
+}
+
+function takeProfitDescription(mint, postedBy, postedAt) {
+  return (
+    '💰💰💰 **Take Profit** 💰💰💰\n' +
+    '`' +
+    mint +
+    '`\n' +
+    '**' +
+    postedBy +
+    '** - ' +
+    fmtAgeLabel(postedAt) +
+    '\n' +
+    '[Lute](' +
+    luteTradeUrl(mint) +
+    ') · [Trench](' +
+    trenchTradeUrl(mint) +
+    ')'
+  );
+}
+
+function tokenThumbnail(entry, live) {
+  if (entry && entry.imageUrl) return entry.imageUrl;
+  if (live && live.rawPump && live.rawPump.image_uri) return live.rawPump.image_uri;
+  if (live && live.imageUrl) return live.imageUrl;
+  return null;
+}
+
+/** Normalize legacy milestonesFired (stored price gates 2,5,10,20) to tier ids 1–20. */
+function normalizeTakeProfitTiers(fired) {
+  if (!Array.isArray(fired) || fired.length === 0) return [];
+  const legacySparse = new Set([2, 5, 10, 20]);
+  if (fired.includes(1) || fired.some((x) => x > 20)) {
+    return [...new Set(fired.filter((x) => x >= 1 && x <= 20))].sort((a, b) => a - b);
+  }
+  if (fired.every((x) => legacySparse.has(x))) {
+    return [...new Set(fired.map((x) => x - 1))].filter((t) => t >= 1 && t <= 20).sort((a, b) => a - b);
+  }
+  if (fired.every((x) => x >= 1 && x <= 20)) {
+    return [...new Set(fired)].sort((a, b) => a - b);
+  }
+  return [...new Set(fired.map((x) => (x >= 2 ? x - 1 : x)))]
+    .filter((t) => t >= 1 && t <= 20)
+    .sort((a, b) => a - b);
+}
+
 const pollingLock = new Set();
 let lastSummaryDate = null;
 
@@ -67,6 +131,7 @@ async function fetchDexScreener(address) {
       liquidity: (pair.liquidity && pair.liquidity.usd) || null,
       priceChange1h: (pair.priceChange && pair.priceChange.h1) || null,
       buyPct: totalTxns > 0 ? Math.round(((pair.txns.h24.buys || 0) / totalTxns) * 100) : null,
+      imageUrl: (pair.info && pair.info.imageUrl) || null,
       source: 'dexscreener'
     };
   } catch (e) {
@@ -134,6 +199,7 @@ async function fetchLiveData(address, platform, solPriceUsd) {
         bondingProgress: pump.bonding_curve_progress || 0,
         complete: pump.complete || false,
         source: 'pumpfun',
+        imageUrl: pump.image_uri || null,
         rawPump: pump
       };
     }
@@ -219,32 +285,29 @@ async function pollWallets(client) {
   }
 }
 
-// Daily summary at 4am PST (12:00 UTC)
-async function postDailySummary(client) {
+/**
+ * Build daily summary title/description/footer (same text the bot posts).
+ * @returns {Promise<{ title: string, description: string, footerText: string, tokenCount: number }>}
+ */
+export async function buildDailySummaryParts() {
   const db = ensureDBSchema(loadDB());
   const entries = Object.values(db.tokens || {});
-  console.log('[summary] Posting daily summary — ' + entries.length + ' tokens');
 
   if (entries.length === 0) {
-    try {
-      const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
-      await channel.send({
-        embeds: [new EmbedBuilder()
-          .setColor(0x5865f2)
-          .setTitle('📊 Daily Summary')
-          .setDescription('No tokens being tracked right now.')
-          .setTimestamp()]
-      });
-    } catch (e) { console.error('[summary] failed:', e.message); }
-    return;
+    return {
+      title: '📊 Daily Summary',
+      description: 'No tokens being tracked right now.',
+      footerText: '',
+      tokenCount: 0,
+    };
   }
 
   const solPriceUsd = await fetchSolPrice();
   const results = await Promise.allSettled(
-    entries.map(e => fetchLiveData(e.address, e.platform, solPriceUsd))
+    entries.map((e) => fetchLiveData(e.address, e.platform, solPriceUsd))
   );
 
-  const lines = [];
+  const rows = [];
   let bestCall = null;
   let bestMultiple = 0;
 
@@ -263,35 +326,123 @@ async function postDailySummary(client) {
       if (mult >= 2) multipleStr = '🚀 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
       else if (mult >= 1) multipleStr = '📈 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
       else multipleStr = '📉 ' + mult.toFixed(2) + 'x (' + pct + '%)';
-      if (mult > bestMultiple) { bestMultiple = mult; bestCall = entry; }
+      if (mult > bestMultiple) {
+        bestMultiple = mult;
+        bestCall = entry;
+      }
     }
 
-    const peakStr = entry.peakMultiple && entry.peakMultiple > 1
-      ? ' · Peak: ' + entry.peakMultiple.toFixed(2) + 'x' : '';
+    const peakStr =
+      entry.peakMultiple && entry.peakMultiple > 1
+        ? ' · Peak: ' + entry.peakMultiple.toFixed(2) + 'x'
+        : '';
 
-    lines.push(
-      '**' + entry.name + ' (' + entry.symbol + ')** — ' + multipleStr + '\n' +
-      '└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + ' · MCap: ' + fmtUsd(live ? live.marketCap : null) + peakStr
-    );
+    const line =
+      '**' +
+      entry.name +
+      ' (' +
+      entry.symbol +
+      ')** — ' +
+      multipleStr +
+      '\n' +
+      '└ **' +
+      entry.postedBy +
+      '** · ' +
+      fmtTime(entry.postedAt) +
+      ' · MCap: ' +
+      fmtUsd(live ? live.marketCap : null) +
+      peakStr;
+
+    if (mult !== null) rows.push({ entry, mult, line });
   }
 
+  const TOP_GAINERS = 5;
+  const TOP_LOSERS = 3;
+
+  const byDesc = [...rows].sort((a, b) => b.mult - a.mult);
+  const byAsc = [...rows].sort((a, b) => a.mult - b.mult);
+
+  const gainerSet = new Set();
+  const gainers = [];
+  for (const r of byDesc) {
+    if (gainers.length >= TOP_GAINERS) break;
+    gainers.push(r);
+    gainerSet.add(r.entry.address);
+  }
+
+  const losers = [];
+  for (const r of byAsc) {
+    if (losers.length >= TOP_LOSERS) break;
+    if (gainerSet.has(r.entry.address)) continue;
+    losers.push(r);
+  }
+
+  const sections = [];
+  sections.push('**Top ' + TOP_GAINERS + ' gainers** (by multiple vs call)');
+  sections.push(
+    gainers.length ? gainers.map((r) => r.line).join('\n\n') : '_No price data to rank._'
+  );
+  sections.push('');
+  sections.push('**' + TOP_LOSERS + ' biggest losers** (by multiple vs call)');
+  sections.push(
+    losers.length ? losers.map((r) => r.line).join('\n\n') : '_No price data to rank._'
+  );
+
+  const description = sections.join('\n').slice(0, 4000);
+
   const now = new Date();
-  const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  let footerStr = entries.length + ' token' + (entries.length !== 1 ? 's' : '') + ' tracked';
-  if (bestCall) footerStr += ' · Best: ' + bestCall.name + ' ' + bestMultiple.toFixed(2) + 'x by ' + bestCall.postedBy;
+  const dateStr = now.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  let footerStr =
+    entries.length +
+    ' token' +
+    (entries.length !== 1 ? 's' : '') +
+    ' tracked · summary: top ' +
+    TOP_GAINERS +
+    ' / bottom ' +
+    TOP_LOSERS;
+  if (rows.length < entries.length) {
+    footerStr += ' · ' + (entries.length - rows.length) + ' w/o multiple';
+  }
+  if (bestCall) {
+    footerStr += ' · Best overall: ' + bestCall.name + ' ' + bestMultiple.toFixed(2) + 'x';
+  }
+
+  return {
+    title: '📊 Daily Summary — ' + dateStr,
+    description,
+    footerText: footerStr,
+    tokenCount: entries.length,
+  };
+}
+
+// Daily summary at 4am PST (12:00 UTC)
+async function postDailySummary(client) {
+  const parts = await buildDailySummaryParts();
+  console.log('[summary] Posting daily summary — ' + parts.tokenCount + ' tokens');
 
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
-    .setTitle('📊 Daily Summary — ' + dateStr)
-    .setDescription(lines.join('\n\n').slice(0, 4000))
-    .setFooter({ text: footerStr })
+    .setTitle(parts.title)
+    .setDescription(parts.description)
     .setTimestamp();
+
+  if (parts.footerText) {
+    embed.setFooter({ text: parts.footerText });
+  }
 
   try {
     const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
     await channel.send({ embeds: [embed] });
     console.log('[summary] Posted successfully');
-  } catch (e) { console.error('[summary] Failed to post:', e.message); }
+  } catch (e) {
+    console.error('[summary] Failed to post:', e.message);
+  }
 }
 
 function checkDailySummary(client) {
@@ -422,14 +573,14 @@ async function processToken(client, address, db, solPriceUsd) {
 
   const curGainAlert = db.tokens[address].gainAlertFired || false;
 
-  // Check A: +75% — only fires between 1.75x and 2x to prevent double post
+  // Check A: +75% — only fires between 1.75x and 2x (before tier 1 at 2× price)
   if (currentMultiple >= 1.75 && currentMultiple < 2.0 && !curGainAlert) {
+    const thumb = tokenThumbnail(entry, live);
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
       .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
-      .setFooter({ text: address + ' · ' + entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
-      .setTimestamp();
-    if (entry.imageUrl) embed.setThumbnail(entry.imageUrl);
+      .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+    if (thumb) embed.setThumbnail(thumb);
 
     await sendEmbed(client, entry.alertChannelId, embed);
     db.tokens[address].gainAlertFired = true;
@@ -437,26 +588,30 @@ async function processToken(client, address, db, solPriceUsd) {
     console.log('[+75%] ' + entry.name);
   }
 
-  // Check B: Milestones 2x, 5x, 10x, 20x
-  const milestones = [2, 5, 10, 20];
-  for (const milestone of milestones) {
-    const latest = db.tokens[address].milestonesFired || [];
-    if (!latest.includes(milestone) && currentMultiple >= milestone) {
-      const gainX = milestone - 1;
+  // Take-profit tiers 1x–20x — tier N when price is ≥ (N+1)× call (tier 1 at 2×, …, tier 20 at 21×)
+  const rawMilestones = db.tokens[address].milestonesFired || [];
+  let latest = normalizeTakeProfitTiers(rawMilestones);
+  if (JSON.stringify(latest) !== JSON.stringify(rawMilestones)) {
+    db.tokens[address].milestonesFired = latest;
+    saveDB(db);
+  }
+
+  for (let tier = 1; tier <= 20; tier++) {
+    if (!latest.includes(tier) && currentMultiple >= tier + 1) {
+      const thumb = tokenThumbnail(entry, live);
       const embed = new EmbedBuilder()
         .setColor(0xffd700)
-        .setTitle('🎯 ' + gainX + 'x — ' + entry.name + ' (' + entry.symbol + ')')
-        .setDescription('💰💰💰 Take Profit 💰💰💰')
-        .setFooter({ text: address + ' · ' + entry.postedBy + ' · ' + fmtTime(entry.postedAt) })
-        .setTimestamp();
-      if (entry.imageUrl) embed.setThumbnail(entry.imageUrl);
+        .setTitle('🎯 ' + tier + 'x — ' + entry.name + ' (' + entry.symbol + ')')
+        .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+      if (thumb) embed.setThumbnail(thumb);
 
       await sendEmbed(client, entry.alertChannelId, embed);
-      db.tokens[address].milestonesFired = latest.concat([milestone]);
+      latest = latest.concat([tier]);
+      db.tokens[address].milestonesFired = latest;
       db.tokens[address].gainAlertFired = true;
       db.tokens[address].takeProfitFired = true;
       saveDB(db);
-      console.log('[' + gainX + 'x] ' + entry.name);
+      console.log('[' + tier + 'x] ' + entry.name);
     }
   }
 
