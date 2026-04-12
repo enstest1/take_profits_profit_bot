@@ -485,69 +485,8 @@ export async function pollTokens(client) {
   saveDB(db);
 }
 
-async function processToken(client, address, db, solPriceUsd) {
-  const entry = db.tokens[address];
-  if (!entry) return;
-
-  const graduationAlertFired = entry.graduationAlertFired || false;
-  const bondingAlertFired = entry.bondingAlertFired || false;
-
-  const live = await fetchLiveData(address, entry.platform || 'dexscreener', solPriceUsd);
-  if (!live) return;
-
-  // Graduation check
-  if (live.source === 'pumpfun' && live.rawPump) {
-    const pumpData = live.rawPump;
-    if (pumpData.complete === true && !graduationAlertFired) {
-      const embed = new EmbedBuilder()
-        .setColor(0x00ff88)
-        .setTitle('🎓 ' + entry.name + ' (' + entry.symbol + ') graduated to Raydium!')
-        .setDescription(
-          '**' + entry.name + '** completed its bonding curve.\n\n' +
-          'Posted by **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + '\n' +
-          'Entry MCap: ' + fmtUsd(entry.mcapAtCall)
-        )
-        .addFields(
-          { name: 'Final MCap', value: fmtUsd(pumpData.usd_market_cap), inline: true },
-          { name: 'Chain', value: 'SOLANA', inline: true }
-        )
-        .setFooter({ text: address })
-        .setTimestamp();
-
-      await sendEmbed(client, entry.alertChannelId, embed);
-      db.tokens[address].platform = 'dexscreener';
-      db.tokens[address].graduationAlertFired = true;
-      saveDB(db);
-      console.log('[graduation] ' + entry.name + ' graduated');
-      return;
-    }
-
-    const newBonding = pumpData.bonding_curve_progress || 0;
-    db.tokens[address].bondingProgress = newBonding;
-
-    if (newBonding >= 85 && !bondingAlertFired) {
-      const embed = new EmbedBuilder()
-        .setColor(0xff9900)
-        .setTitle('⚡ ' + entry.name + ' (' + entry.symbol + ') — ' + newBonding.toFixed(0) + '% to Raydium')
-        .setDescription(
-          '**' + entry.name + '** is ' + newBonding.toFixed(0) + '% through its bonding curve.\n\n' +
-          'Posted by **' + entry.postedBy + '**\n' +
-          'MCap now: ' + fmtUsd(live.marketCap)
-        )
-        .setFooter({ text: address })
-        .setTimestamp();
-
-      await sendEmbed(client, entry.alertChannelId, embed);
-      db.tokens[address].bondingAlertFired = true;
-      saveDB(db);
-    }
-
-    if (newBonding < 70 && bondingAlertFired) {
-      db.tokens[address].bondingAlertFired = false;
-      saveDB(db);
-    }
-  }
-
+/** +75% window, 1x–20x milestones, and peak/lastPrice updates (uses USD price vs priceAtCall). */
+async function evaluateGainAndMilestones(client, address, db, entry, live) {
   const livePrice = live.price ? Number(live.price) : null;
   if (!livePrice || !entry.priceAtCall) {
     db.tokens[address].lastChecked = Date.now();
@@ -555,7 +494,6 @@ async function processToken(client, address, db, solPriceUsd) {
   }
 
   const currentMultiple = livePrice / Number(entry.priceAtCall);
-  const buyPctStr = live.buyPct !== null && live.buyPct !== undefined ? live.buyPct + '%' : '—';
 
   // Reset all alerts below 1.5x
   const milestonesFired = db.tokens[address].milestonesFired || [];
@@ -616,7 +554,6 @@ async function processToken(client, address, db, solPriceUsd) {
     }
   }
 
-  // Update tracking fields
   const newPeak = Math.max(entry.peakMultiple || 1, currentMultiple);
   db.tokens[address].lastPrice = String(livePrice);
   db.tokens[address].lastVolume = live.volume24h || 0;
@@ -626,4 +563,74 @@ async function processToken(client, address, db, solPriceUsd) {
     db.tokens[address].buyPressure = live.buyPct;
     db.tokens[address].sellPressure = 100 - live.buyPct;
   }
+}
+
+async function processToken(client, address, db, solPriceUsd) {
+  const entry = db.tokens[address];
+  if (!entry) return;
+
+  const graduationAlertFired = entry.graduationAlertFired || false;
+  const bondingAlertFired = entry.bondingAlertFired || false;
+
+  const live = await fetchLiveData(address, entry.platform || 'dexscreener', solPriceUsd);
+  if (!live) return;
+
+  // Graduation check
+  if (live.source === 'pumpfun' && live.rawPump) {
+    const pumpData = live.rawPump;
+    if (pumpData.complete === true && !graduationAlertFired) {
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff88)
+        .setTitle('🎓 ' + entry.name + ' (' + entry.symbol + ') graduated to Raydium!')
+        .setDescription(
+          '**' + entry.name + '** completed its bonding curve.\n\n' +
+          'Posted by **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + '\n' +
+          'Entry MCap: ' + fmtUsd(entry.mcapAtCall)
+        )
+        .addFields(
+          { name: 'Final MCap', value: fmtUsd(pumpData.usd_market_cap), inline: true },
+          { name: 'Chain', value: 'SOLANA', inline: true }
+        )
+        .setFooter({ text: address })
+        .setTimestamp();
+
+      await sendEmbed(client, entry.alertChannelId, embed);
+      db.tokens[address].platform = 'dexscreener';
+      db.tokens[address].graduationAlertFired = true;
+      saveDB(db);
+      console.log('[graduation] ' + entry.name + ' graduated');
+      // Same tick: previously returned here so +75%/milestones never ran after grad.
+      let liveM = await fetchLiveData(address, 'dexscreener', solPriceUsd);
+      if (!liveM || !liveM.price) liveM = live;
+      await evaluateGainAndMilestones(client, address, db, entry, liveM);
+      return;
+    }
+
+    const newBonding = pumpData.bonding_curve_progress || 0;
+    db.tokens[address].bondingProgress = newBonding;
+
+    if (newBonding >= 85 && !bondingAlertFired) {
+      const embed = new EmbedBuilder()
+        .setColor(0xff9900)
+        .setTitle('⚡ ' + entry.name + ' (' + entry.symbol + ') — ' + newBonding.toFixed(0) + '% to Raydium')
+        .setDescription(
+          '**' + entry.name + '** is ' + newBonding.toFixed(0) + '% through its bonding curve.\n\n' +
+          'Posted by **' + entry.postedBy + '**\n' +
+          'MCap now: ' + fmtUsd(live.marketCap)
+        )
+        .setFooter({ text: address })
+        .setTimestamp();
+
+      await sendEmbed(client, entry.alertChannelId, embed);
+      db.tokens[address].bondingAlertFired = true;
+      saveDB(db);
+    }
+
+    if (newBonding < 70 && bondingAlertFired) {
+      db.tokens[address].bondingAlertFired = false;
+      saveDB(db);
+    }
+  }
+
+  await evaluateGainAndMilestones(client, address, db, entry, live);
 }
