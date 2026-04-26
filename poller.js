@@ -4,6 +4,12 @@ import { EmbedBuilder } from 'discord.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
+/** One-time per volume: first poll after deploy only newest 5 mints may emit 🎯1x; all others skip 🎯 this cycle (avoids flood). Delete file to repeat. */
+const MILESTONE_BOOTSTRAP_FILE = path.join(DATA_DIR, '.tp_milestone_bootstrap_v2');
+const HOT_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const WARM_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const WARM_TIER_EVERY_N_CYCLES = 2;
+const COLD_TIER_EVERY_N_CYCLES = 5;
 
 const SUMMARY_CHANNEL_ID = '1452152164699869298';
 
@@ -112,6 +118,40 @@ function normalizeTakeProfitTiers(fired) {
 
 const pollingLock = new Set();
 let lastSummaryDate = null;
+/** Prevents overlapping poll cycles (setInterval does not await async work). */
+let pollCycleInProgress = false;
+let pollCycleNumber = 0;
+
+function stableAddrHash(address) {
+  let hash = 0;
+  for (let i = 0; i < address.length; i++) {
+    hash = (hash * 31 + address.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function pollTierForEntry(entry) {
+  const now = Date.now();
+  const postedAt = Number(entry?.postedAt) || 0;
+  const ageMs = postedAt > 0 ? now - postedAt : Number.MAX_SAFE_INTEGER;
+  const peakMultiple = Number(entry?.peakMultiple) || 1;
+  const milestones = Array.isArray(entry?.milestonesFired) ? entry.milestonesFired.length : 0;
+
+  if (ageMs <= HOT_TOKEN_MAX_AGE_MS || milestones === 0 || peakMultiple >= 2) {
+    return 'hot';
+  }
+  if (ageMs <= WARM_TOKEN_MAX_AGE_MS || peakMultiple >= 1.5) {
+    return 'warm';
+  }
+  return 'cold';
+}
+
+function shouldPollAddressThisCycle(address, entry, cycleNum) {
+  const tier = pollTierForEntry(entry);
+  if (tier === 'hot') return true;
+  const cadence = tier === 'warm' ? WARM_TIER_EVERY_N_CYCLES : COLD_TIER_EVERY_N_CYCLES;
+  return stableAddrHash(address) % cadence === cycleNum % cadence;
+}
 
 // DexScreener
 async function fetchDexScreener(address) {
@@ -463,51 +503,152 @@ export async function pollTokens(client) {
   // Poll smart wallets
   pollWallets(client).catch(e => console.error('[walletPoll] error:', e.message));
 
-  const db = ensureDBSchema(loadDB());
-  const addresses = Object.keys(db.tokens || {});
-  if (addresses.length === 0) return;
-
-  const solPriceUsd = await fetchSolPrice();
-  console.log('[poll] Checking ' + addresses.length + ' tokens — SOL: $' + (solPriceUsd || '?'));
-
-  for (const address of addresses) {
-    if (pollingLock.has(address)) continue;
-    pollingLock.add(address);
-    try {
-      await processToken(client, address, db, solPriceUsd);
-    } catch (e) {
-      console.error('[poll] Error processing ' + address + ':', e.message);
-    } finally {
-      pollingLock.delete(address);
-    }
+  if (pollCycleInProgress) {
+    console.log('[poll] skip — previous cycle still running (too many tokens or slow APIs)');
+    return;
   }
+  pollCycleInProgress = true;
+  pollCycleNumber += 1;
+  const cycleNum = pollCycleNumber;
 
-  saveDB(db);
+  try {
+    const db = ensureDBSchema(loadDB());
+    const addresses = Object.keys(db.tokens || {});
+    if (addresses.length === 0) return;
+
+    const solPriceUsd = await fetchSolPrice();
+    console.log('[poll] Checking ' + addresses.length + ' tokens — SOL: $' + (solPriceUsd || '?'));
+
+    // Newest tracked first so fresh calls (e.g. MIRUMI) are not stuck behind 500+ older mints each cycle.
+    const ordered = addresses.slice().sort((a, b) => {
+      const ta = db.tokens[a]?.postedAt || 0;
+      const tb = db.tokens[b]?.postedAt || 0;
+      return tb - ta;
+    });
+
+    const scheduled = [];
+    let hotCount = 0;
+    let warmCount = 0;
+    let coldCount = 0;
+    for (const address of ordered) {
+      const entry = db.tokens[address];
+      if (!entry) continue;
+      const tier = pollTierForEntry(entry);
+      if (tier === 'hot') hotCount += 1;
+      else if (tier === 'warm') warmCount += 1;
+      else coldCount += 1;
+      if (shouldPollAddressThisCycle(address, entry, cycleNum)) {
+        scheduled.push(address);
+      }
+    }
+    console.log(
+      '[poll] Cycle #' + cycleNum +
+      ' scheduled ' + scheduled.length + '/' + ordered.length +
+      ' tokens (hot=' + hotCount + ', warm=' + warmCount + ', cold=' + coldCount + ')'
+    );
+
+    const runMilestoneBootstrap = !fs.existsSync(MILESTONE_BOOTSTRAP_FILE);
+    const newest5ForBootstrap = runMilestoneBootstrap ? ordered.slice(0, 5) : [];
+    const newest5Set = new Set(newest5ForBootstrap);
+    if (runMilestoneBootstrap) {
+      console.log(
+        '[poll] milestone bootstrap: 🎯1x-only for newest 5 mints; other tokens skip 🎯 this cycle (no flood)'
+      );
+    }
+
+    for (const address of scheduled) {
+      if (pollingLock.has(address)) continue;
+      pollingLock.add(address);
+      try {
+        const milestoneOpts = {};
+        if (runMilestoneBootstrap) {
+          if (newest5Set.has(address)) milestoneOpts.tier1OnlyBootstrap = true;
+          else milestoneOpts.suppressTierX = true;
+        }
+        await processToken(client, address, db, solPriceUsd, milestoneOpts);
+      } catch (e) {
+        console.error('[poll] Error processing ' + address + ':', e.message);
+      } finally {
+        pollingLock.delete(address);
+      }
+    }
+
+    if (runMilestoneBootstrap) {
+      try {
+        fs.writeFileSync(MILESTONE_BOOTSTRAP_FILE, String(Date.now()));
+        console.log('[poll] milestone bootstrap done — full 🎯 logic on all tokens next cycle');
+      } catch (e) {
+        console.error('[poll] milestone bootstrap marker write failed:', e.message);
+      }
+    }
+
+    saveDB(db);
+  } finally {
+    pollCycleInProgress = false;
+  }
 }
 
 /** +75% window, 1x–20x milestones, and peak/lastPrice updates (uses USD price vs priceAtCall). */
-async function evaluateGainAndMilestones(client, address, db, entry, live) {
-  const livePrice = live.price ? Number(live.price) : null;
-  if (!livePrice || !entry.priceAtCall) {
+async function evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts = {}) {
+  const livePrice =
+    live.price == null || live.price === '' ? null : Number(live.price);
+  const callPx =
+    entry.priceAtCall == null || entry.priceAtCall === '' ? null : Number(entry.priceAtCall);
+  if (
+    livePrice == null ||
+    !Number.isFinite(livePrice) ||
+    livePrice <= 0 ||
+    callPx == null ||
+    !Number.isFinite(callPx) ||
+    callPx <= 0
+  ) {
     db.tokens[address].lastChecked = Date.now();
     return;
   }
 
-  const currentMultiple = livePrice / Number(entry.priceAtCall);
+  const multPrice = livePrice / callPx;
 
-  // Reset all alerts below 1.5x
+  let multMcap = null;
+  const mcapCall =
+    entry.mcapAtCall == null || entry.mcapAtCall === '' ? null : Number(entry.mcapAtCall);
+  const mcapLive =
+    live.marketCap == null || live.marketCap === '' ? null : Number(live.marketCap);
+  if (
+    mcapCall != null &&
+    Number.isFinite(mcapCall) &&
+    mcapCall > 0 &&
+    mcapLive != null &&
+    Number.isFinite(mcapLive) &&
+    mcapLive > 0
+  ) {
+    multMcap = mcapLive / mcapCall;
+  }
+
+  // Use the higher of price× vs call or mcap× vs call so FDV/MCap moves still count when Dex price lags.
+  const currentMultiple =
+    multMcap != null && Number.isFinite(multMcap) && multMcap > 0
+      ? Math.max(multPrice, multMcap)
+      : multPrice;
+
+  // Reset only after 2 consecutive polls below 1.5× (one bad tick was wiping milestones).
   const milestonesFired = db.tokens[address].milestonesFired || [];
   const takeProfitFired = db.tokens[address].takeProfitFired || false;
   const gainAlertFired = db.tokens[address].gainAlertFired || false;
 
+  let lowStreak = Number(db.tokens[address].lowMultStreak) || 0;
   if (currentMultiple < 1.5) {
-    if (milestonesFired.length > 0 || takeProfitFired || gainAlertFired) {
+    lowStreak += 1;
+    db.tokens[address].lowMultStreak = lowStreak;
+    if (lowStreak >= 2 && (milestonesFired.length > 0 || takeProfitFired || gainAlertFired)) {
       db.tokens[address].milestonesFired = [];
       db.tokens[address].takeProfitFired = false;
       db.tokens[address].gainAlertFired = false;
+      db.tokens[address].lowMultStreak = 0;
       saveDB(db);
-      console.log('[reset] ' + entry.name + ' dropped below 1.5x');
+      console.log('[reset] ' + entry.name + ' below 1.5x ×2 polls');
     }
+  } else {
+    db.tokens[address].lowMultStreak = 0;
   }
 
   const curGainAlert = db.tokens[address].gainAlertFired || false;
@@ -535,22 +676,26 @@ async function evaluateGainAndMilestones(client, address, db, entry, live) {
     saveDB(db);
   }
 
-  for (let tier = 1; tier <= 20; tier++) {
-    if (!latest.includes(tier) && currentMultiple >= tier + 1) {
-      const thumb = tokenThumbnail(entry, live);
-      const embed = new EmbedBuilder()
-        .setColor(0xffd700)
-        .setTitle('🎯 ' + tier + 'x — ' + entry.name + ' (' + entry.symbol + ')')
-        .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
-      if (thumb) embed.setThumbnail(thumb);
+  if (!milestoneOpts.suppressTierX) {
+    const maxTier = milestoneOpts.tier1OnlyBootstrap ? 1 : 20;
+    for (let tier = 1; tier <= maxTier; tier++) {
+      if (!latest.includes(tier) && currentMultiple >= tier + 1) {
+        const thumb = tokenThumbnail(entry, live);
+        const embed = new EmbedBuilder()
+          .setColor(0xffd700)
+          .setTitle('🎯 ' + tier + 'x — ' + entry.name + ' (' + entry.symbol + ')')
+          .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+        if (thumb) embed.setThumbnail(thumb);
 
-      await sendEmbed(client, entry.alertChannelId, embed);
-      latest = latest.concat([tier]);
-      db.tokens[address].milestonesFired = latest;
-      db.tokens[address].gainAlertFired = true;
-      db.tokens[address].takeProfitFired = true;
-      saveDB(db);
-      console.log('[' + tier + 'x] ' + entry.name);
+        await sendEmbed(client, entry.alertChannelId, embed);
+        latest = latest.concat([tier]);
+        db.tokens[address].milestonesFired = latest;
+        db.tokens[address].gainAlertFired = true;
+        db.tokens[address].takeProfitFired = true;
+        saveDB(db);
+        console.log('[' + tier + 'x] ' + entry.name);
+        await new Promise((r) => setTimeout(r, 400));
+      }
     }
   }
 
@@ -565,7 +710,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live) {
   }
 }
 
-async function processToken(client, address, db, solPriceUsd) {
+async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}) {
   const entry = db.tokens[address];
   if (!entry) return;
 
@@ -602,7 +747,7 @@ async function processToken(client, address, db, solPriceUsd) {
       // Same tick: previously returned here so +75%/milestones never ran after grad.
       let liveM = await fetchLiveData(address, 'dexscreener', solPriceUsd);
       if (!liveM || !liveM.price) liveM = live;
-      await evaluateGainAndMilestones(client, address, db, entry, liveM);
+      await evaluateGainAndMilestones(client, address, db, entry, liveM, milestoneOpts);
       return;
     }
 
@@ -632,5 +777,5 @@ async function processToken(client, address, db, solPriceUsd) {
     }
   }
 
-  await evaluateGainAndMilestones(client, address, db, entry, live);
+  await evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts);
 }

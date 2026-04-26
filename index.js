@@ -28,6 +28,25 @@ const WATCHLIST_PATH = path.join(ROOT_DIR, 'watchlist.json');
 const RUG_CACHE_TTL_MS = 60 * 1000;
 const rugCache = {};
 
+/** Target time between poll cycle starts; each cycle runs to completion first (avoids setInterval + async skips). */
+const TOKEN_POLL_INTERVAL_MS = 3 * 60 * 1000;
+const TOKEN_POLL_MIN_GAP_MS = 5000;
+
+async function runTokenPollLoop(client) {
+  while (true) {
+    const t0 = Date.now();
+    try {
+      await pollTokens(client);
+    } catch (e) {
+      console.error('[poll] loop error:', e);
+    }
+    const elapsed = Date.now() - t0;
+    const wait = Math.max(TOKEN_POLL_MIN_GAP_MS, TOKEN_POLL_INTERVAL_MS - elapsed);
+    console.log('[poll] cycle ' + Math.round(elapsed / 1000) + 's — next in ' + Math.round(wait / 1000) + 's');
+    await new Promise((r) => setTimeout(r, wait));
+  }
+}
+
 console.log('[boot] Using data dir: ' + DATA_DIR);
 
 function loadDB() {
@@ -687,6 +706,7 @@ async function autoTrack(address, message) {
     lastChecked: Date.now(),
     peakMultiple: 1.0,
     milestonesFired: [],
+    lowMultStreak: 0,
     takeProfitFired: false,
     gainAlertFired: false,
     bondingProgress: token.bondingProgress || 0,
@@ -1538,8 +1558,7 @@ client.on('interactionCreate', async (interaction) => {
 client.once('ready', () => {
   console.log('Bot online as ' + client.user.tag);
   console.log('Data directory: ' + DATA_DIR);
-  pollTokens(client);
-  setInterval(() => pollTokens(client), 3 * 60 * 1000);
+  void runTokenPollLoop(client);
 });
 
 (async () => {
