@@ -466,25 +466,44 @@ async function pollTokens(client, db, saveDB) {
       const pctFromCall = ((livePrice - priceAtCall) / priceAtCall) * 100;
 
       // ─────────────────────────────────────────
-      // FULL RESET — if price drops below call price
+      // Silent catch-up after DB loss / redeploy — mark passed milestones without pinging
       // ─────────────────────────────────────────
       let milestonesFired = entry.milestonesFired ?? [];
-      let pctAlertsFired = entry.pctAlertsFired ?? [];
+      if (milestonesFired.length === 0 && currentMultiple >= 2) {
+        const passed = MILESTONES.filter((ms) => currentMultiple >= ms + 1);
+        if (passed.length > 1) {
+          // Keep the highest milestone eligible for ONE alert; silently mark the rest
+          const silent = passed.slice(0, -1);
+          milestonesFired = silent;
+          console.log(
+            `[Poller] ⏭️ ${entry.symbol} catch-up: silently marked ${silent.length} past milestone(s) (now ${currentMultiple.toFixed(1)}x)`,
+          );
+          db.tokens[entry.address].milestonesFired = milestonesFired;
+          saveDB();
+        }
+      }
 
-      if (currentMultiple < 1.0) {
-        // Price is below entry — reset everything so alerts fire fresh on next pump
+      // ─────────────────────────────────────────
+      // FULL RESET — if price drops well below call price (hysteresis avoids wick spam)
+      // ─────────────────────────────────────────
+      let pctAlertsFired = entry.pctAlertsFired ?? [];
+      const RESET_BELOW = 0.85; // only reset after ~15% below entry, not a tiny wick
+
+      if (currentMultiple < RESET_BELOW) {
         if (milestonesFired.length > 0 || pctAlertsFired.length > 0) {
-          console.log(`[Poller] 🔄 ${entry.symbol} dropped below call price — resetting all alerts`);
+          console.log(`[Poller] 🔄 ${entry.symbol} dropped below ${RESET_BELOW}x — resetting alerts`);
         }
         milestonesFired = [];
         pctAlertsFired = [];
       }
 
       // ─────────────────────────────────────────
-      // CHECK A — % callouts: +15%, +50%, +75% (each fires once, all reset below call)
+      // CHECK A — % callouts: +15%, +50%, +75% (each fires once per cycle max)
       // ─────────────────────────────────────────
       const PCT_THRESHOLDS = [15, 50, 75];
+      let pctAlertThisCycle = false;
       for (const pct of PCT_THRESHOLDS) {
+        if (pctAlertThisCycle) break;
         if (pctFromCall >= pct && !pctAlertsFired.includes(pct)) {
           console.log(`[Poller] 📈 ${entry.symbol} +${pctFromCall.toFixed(1)}% from call (hit ${pct}% threshold)`);
           if (channel) {
@@ -493,24 +512,35 @@ async function pollTokens(client, db, saveDB) {
             }).catch(() => {});
           }
           pctAlertsFired = [...pctAlertsFired, pct];
+          pctAlertThisCycle = true;
+          db.tokens[entry.address].pctAlertsFired = pctAlertsFired;
+          saveDB();
         }
       }
 
       // ─────────────────────────────────────────
       // CHECK B — Milestones (1x=100%, 2x=200%, … 20x=2000% from call)
       // Nx fires when price is (N+1)× the call price.
-      // Each fires 💰 TAKE PROFITS card. All reset below call.
+      // ONE milestone alert per token per poll — prevents 1x→20x spam on catch-up.
       // ─────────────────────────────────────────
+      let milestoneAlertThisCycle = null;
       for (const ms of MILESTONES) {
         if (currentMultiple >= ms + 1 && !milestonesFired.includes(ms)) {
-          console.log(`[Poller] 🎯 ${entry.symbol} hit ${ms}x (${(ms * 100)}% gain)`);
-          if (channel) {
-            await channel.send({
-              embeds: [buildMilestoneEmbed(entry, ms, livePrice, pressure)],
-            }).catch(() => {});
-          }
-          milestonesFired = [...milestonesFired, ms];
+          milestoneAlertThisCycle = ms;
         }
+      }
+
+      if (milestoneAlertThisCycle != null) {
+        const ms = milestoneAlertThisCycle;
+        console.log(`[Poller] 🎯 ${entry.symbol} hit ${ms}x (${ms * 100}% gain)`);
+        if (channel) {
+          await channel.send({
+            embeds: [buildMilestoneEmbed(entry, ms, livePrice, pressure)],
+          }).catch(() => {});
+        }
+        milestonesFired = [...milestonesFired, ms];
+        db.tokens[entry.address].milestonesFired = milestonesFired;
+        saveDB();
       }
 
       // ─────────────────────────────────────────
