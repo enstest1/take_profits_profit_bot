@@ -2,6 +2,7 @@ node_modules/
 .env
 tracked.json
 .tp_milestone_bootstrap_v2
+backups/
 *.log
 .DS_Store
 Thumbs.db

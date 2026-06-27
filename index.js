@@ -18,6 +18,7 @@ import {
 import { pollTokens } from './poller.js';
 import { initAlertGate, shouldSilenceAlerts } from './alertGate.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
+import { runVolumeBackup } from './scripts/backup-volume.mjs';
 
 const client = new Client({
   intents: [
@@ -1696,6 +1697,7 @@ function withTimeout(promise, ms, label) {
   }
 
   console.log('[boot] connecting to Discord...');
+  runVolumeBackup();
   bootWaitTimer = setInterval(() => {
     console.log('[boot] still waiting for Discord gateway...');
   }, 10_000);
