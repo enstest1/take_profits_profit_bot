@@ -1,7 +1,11 @@
 import 'dotenv/config';
+import dns from 'dns';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+// Railway/cloud hosts often hang on Discord gateway over IPv6.
+dns.setDefaultResultOrder('ipv4first');
 import {
   Client,
   GatewayIntentBits,
@@ -1651,8 +1655,10 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.once('ready', async () => {
+  if (bootWaitTimer) clearInterval(bootWaitTimer);
   console.log('Bot online as ' + client.user.tag);
   console.log('Data directory: ' + DATA_DIR);
+  void registerCommands();
   await postStartupBanner(client);
   try {
     initAlertGate();
@@ -1671,12 +1677,33 @@ client.once('ready', async () => {
   void runTokenPollLoop(client);
 });
 
+const LOGIN_TIMEOUT_MS = 45_000;
+let bootWaitTimer = null;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms),
+    ),
+  ]);
+}
+
 (async () => {
-  console.log('[boot] connecting to Discord (slash commands register in background)...');
-  void registerCommands();
+  if (!process.env.DISCORD_TOKEN) {
+    console.error('[boot] DISCORD_TOKEN missing — cannot connect');
+    process.exit(1);
+  }
+
+  console.log('[boot] connecting to Discord...');
+  bootWaitTimer = setInterval(() => {
+    console.log('[boot] still waiting for Discord gateway...');
+  }, 10_000);
+
   try {
-    await client.login(process.env.DISCORD_TOKEN);
+    await withTimeout(client.login(process.env.DISCORD_TOKEN), LOGIN_TIMEOUT_MS, 'Discord login');
   } catch (e) {
+    if (bootWaitTimer) clearInterval(bootWaitTimer);
     console.error('[boot] login failed:', e.message);
     process.exit(1);
   }
