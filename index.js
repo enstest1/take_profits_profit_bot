@@ -716,11 +716,7 @@ async function autoTrack(address, message) {
 
   if (token.imageUrl) embed.setThumbnail(token.imageUrl);
 
-  if (shouldSilenceAlerts()) {
-    console.log('[silence] skipped new-CA confirmation for ' + token.symbol + ' (still tracked in DB)');
-  } else {
-    await message.channel.send({ embeds: [embed] });
-  }
+  await message.channel.send({ embeds: [embed] });
 
   const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
   let buyPressurePct = null;

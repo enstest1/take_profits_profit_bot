@@ -34,7 +34,7 @@ export function initAlertGate() {
     console.log(
       '[comeback] armed ' +
         cycles +
-        ' silent poll cycle(s) — prices/milestones sync to DB only, no Discord alerts',
+        ' silent poll cycle(s) — milestone/price alerts sync to DB only (new CA confirmations still post)',
     );
   } else {
     if (readComebackRemaining() > 0) {
