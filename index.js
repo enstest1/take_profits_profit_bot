@@ -41,22 +41,35 @@ const STARTUP_BANNER =
 async function postStartupBanner(client) {
   console.log(STARTUP_BANNER);
 
-  const logChannelId = process.env.LOG_CHANNEL_ID;
-  if (!logChannelId) {
-    console.log('[startup] LOG_CHANNEL_ID not set — banner printed to logs only');
+  const channelIds = [
+    ...new Set(
+      [process.env.LOG_CHANNEL_ID, process.env.SUMMARY_CHANNEL_ID, '1452152164699869298'].filter(Boolean),
+    ),
+  ];
+
+  if (channelIds.length === 0) {
+    console.log('[startup] no log/summary channel configured — banner printed to logs only');
     return;
   }
 
-  try {
-    const channel = await client.channels.fetch(logChannelId);
-    if (!channel?.isTextBased()) {
-      console.log('[startup] LOG_CHANNEL_ID is not a text channel');
-      return;
+  const embed = new EmbedBuilder()
+    .setColor(0xffd700)
+    .setTitle('💰 Take Profit Bot — ONLINE')
+    .setDescription('```\n' + STARTUP_BANNER + '\n```\nBot is back online and polling.')
+    .setTimestamp();
+
+  for (const channelId of channelIds) {
+    try {
+      const channel = await client.channels.fetch(channelId);
+      if (!channel?.isTextBased()) {
+        console.log('[startup] channel ' + channelId + ' is not text-based — skipped');
+        continue;
+      }
+      await channel.send({ embeds: [embed] });
+      console.log('[startup] banner posted to channel ' + channelId);
+    } catch (e) {
+      console.error('[startup] failed to post banner to ' + channelId + ':', e.message);
     }
-    await channel.send({ content: '```\n' + STARTUP_BANNER + '\n```' });
-    console.log('[startup] banner posted to log channel');
-  } catch (e) {
-    console.error('[startup] failed to post banner:', e.message);
   }
 }
 

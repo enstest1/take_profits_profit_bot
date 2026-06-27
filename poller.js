@@ -21,7 +21,7 @@ const NEW_TOKEN_GRACE_MS = 72 * 60 * 60 * 1000;
 /** New peak must exceed prior peakMultiple by this fraction to refresh peakAt. */
 const MIN_NEW_ATH_BUMP_RATIO = 0.01;
 
-const SUMMARY_CHANNEL_ID = '1452152164699869298';
+const SUMMARY_CHANNEL_ID = process.env.SUMMARY_CHANNEL_ID || '1452152164699869298';
 
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
