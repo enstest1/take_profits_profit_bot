@@ -18,11 +18,11 @@ const COLD_TIER_EVERY_N_CYCLES = 5;
 /** No significant ATH in this window → poll tier cold (token must be older than this too). */
 const INACTIVE_DEMOTE_MS = 72 * 60 * 60 * 1000;
 const NEW_TOKEN_GRACE_MS = 72 * 60 * 60 * 1000;
-/** Reset milestones only when clearly below entry — not on noisy sub-1.5× API ticks. */
-const MILESTONE_RESET_MULT = 0.90;
+/** Trench reset: below call price (with wick buffer) for N polls → milestones clear, ladder can fire again on recovery. */
+const MILESTONE_RESET_MULT = 0.99;
 const MILESTONE_RESET_STREAK = 3;
-/** Tokens that already mooned keep milestone history even through brief bad ticks. */
-const MILESTONE_RESET_MAX_PEAK = 5;
+/** Min time between resets on the same token (stops chop/wick re-alert loops). */
+const MILESTONE_RESET_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 /** New peak must exceed prior peakMultiple by this fraction to refresh peakAt. */
 const MIN_NEW_ATH_BUMP_RATIO = 0.01;
 
@@ -703,19 +703,19 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       ? Math.max(multPrice, multMcap)
       : multPrice;
 
-  // Reset only after N consecutive polls well below entry (bad ticks were wiping milestones at 1.5×).
+  // Trench reset — below call (~0.99×) for 3 polls, max once per 24h; recovery uses highest-tier-only alerts.
   const milestonesFired = db.tokens[address].milestonesFired || [];
   const takeProfitFired = db.tokens[address].takeProfitFired || false;
   const gainAlertFired = db.tokens[address].gainAlertFired || false;
-  const storedPeakForReset = Number(entry.peakMultiple) || 1;
 
   let lowStreak = Number(db.tokens[address].lowMultStreak) || 0;
   if (currentMultiple < MILESTONE_RESET_MULT) {
     lowStreak += 1;
     db.tokens[address].lowMultStreak = lowStreak;
-    const canReset = storedPeakForReset < MILESTONE_RESET_MAX_PEAK;
+    const lastResetAt = Number(db.tokens[address].lastMilestoneResetAt) || 0;
+    const cooldownOk = Date.now() - lastResetAt >= MILESTONE_RESET_COOLDOWN_MS;
     if (
-      canReset &&
+      cooldownOk &&
       lowStreak >= MILESTONE_RESET_STREAK &&
       (milestonesFired.length > 0 || takeProfitFired || gainAlertFired)
     ) {
@@ -725,9 +725,10 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       db.tokens[address].lowMultStreak = 0;
       db.tokens[address].peakMultiple = currentMultiple;
       db.tokens[address].peakAt = Date.now();
+      db.tokens[address].lastMilestoneResetAt = Date.now();
       saveDB(db);
       console.log(
-        '[reset] ' + entry.name + ' below ' + MILESTONE_RESET_MULT + 'x ×' + MILESTONE_RESET_STREAK + ' polls',
+        '[reset] ' + entry.name + ' below call (' + MILESTONE_RESET_MULT + 'x) ×' + MILESTONE_RESET_STREAK + ' polls — milestones cleared for recovery',
       );
     }
   } else {
