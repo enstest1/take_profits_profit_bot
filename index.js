@@ -41,16 +41,8 @@ const STARTUP_BANNER =
 async function postStartupBanner(client) {
   console.log(STARTUP_BANNER);
 
-  const channelIds = [
-    ...new Set(
-      [process.env.LOG_CHANNEL_ID, process.env.SUMMARY_CHANNEL_ID, '1452152164699869298'].filter(Boolean),
-    ),
-  ];
-
-  if (channelIds.length === 0) {
-    console.log('[startup] no log/summary channel configured — banner printed to logs only');
-    return;
-  }
+  const channelId =
+    process.env.LOG_CHANNEL_ID || process.env.SUMMARY_CHANNEL_ID || '1452152164699869298';
 
   const embed = new EmbedBuilder()
     .setColor(0xffd700)
@@ -58,18 +50,16 @@ async function postStartupBanner(client) {
     .setDescription('```\n' + STARTUP_BANNER + '\n```\nBot is back online and polling.')
     .setTimestamp();
 
-  for (const channelId of channelIds) {
-    try {
-      const channel = await client.channels.fetch(channelId);
-      if (!channel?.isTextBased()) {
-        console.log('[startup] channel ' + channelId + ' is not text-based — skipped');
-        continue;
-      }
-      await channel.send({ embeds: [embed] });
-      console.log('[startup] banner posted to channel ' + channelId);
-    } catch (e) {
-      console.error('[startup] failed to post banner to ' + channelId + ':', e.message);
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isTextBased()) {
+      console.log('[startup] channel ' + channelId + ' is not text-based');
+      return;
     }
+    await channel.send({ embeds: [embed] });
+    console.log('[startup] banner posted to channel ' + channelId);
+  } catch (e) {
+    console.error('[startup] failed to post banner to ' + channelId + ':', e.message);
   }
 }
 
