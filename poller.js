@@ -1,768 +1,870 @@
-"use strict";
+import fs from 'fs';
+import path from 'path';
+import { EmbedBuilder } from 'discord.js';
+import {
+  shouldSilenceAlerts,
+  getAlertSilenceStatus,
+  tickComebackAfterPollCycle,
+} from './alertGate.js';
 
-/**
- * poller.js — polling loop, price checks, milestone logic
- * Runs every 15 seconds via setInterval in index.js
- */
+const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
+const DB_PATH = path.join(DATA_DIR, 'tracked.json');
+/** One-time per volume: first poll after deploy only newest 5 mints may emit 🎯1x; all others skip 🎯 this cycle (avoids flood). Delete file to repeat. */
+const MILESTONE_BOOTSTRAP_FILE = path.join(DATA_DIR, '.tp_milestone_bootstrap_v2');
+const HOT_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const WARM_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const WARM_TIER_EVERY_N_CYCLES = 2;
+const COLD_TIER_EVERY_N_CYCLES = 5;
+/** No significant ATH in this window → poll tier cold (token must be older than this too). */
+const INACTIVE_DEMOTE_MS = 72 * 60 * 60 * 1000;
+const NEW_TOKEN_GRACE_MS = 72 * 60 * 60 * 1000;
+/** New peak must exceed prior peakMultiple by this fraction to refresh peakAt. */
+const MIN_NEW_ATH_BUMP_RATIO = 0.01;
 
-const { fetchTokenDex } = require("./dexscreener.js");
-const { fetchPumpFunToken, fetchSolPrice, calculatePumpFunPrice } = require("./pumpfun.js");
-const {
-  getSolanaTokenPrice,
-  getSolanaTokenBuySellPressure,
-  getSolanaTopHolders,
-  getEVMTokenBuySellPressure,
-  getEVMDevWallet,
-  getEVMWalletTokenBalance,
-  delay,
-} = require("./moralis.js");
+const SUMMARY_CHANNEL_ID = '1452152164699869298';
 
-// ─────────────────────────────────────────────
-// RATE-LIMIT PROTECTION
-// ─────────────────────────────────────────────
-
-/** Prevent overlapping poll cycles when a poll takes longer than the interval */
-let pollRunning = false;
-
-/**
- * Buy/sell pressure cache — Moralis free tier = 40 req/min.
- * Pressure data changes slowly; no need to re-fetch every 15 seconds.
- * TTL: 2 minutes → 5 tokens = ~2.5 Moralis calls/min instead of 20–40.
- */
-const pressureCache = new Map();
-const PRESSURE_TTL = 2 * 60 * 1000; // 2 min
-
-async function fetchPressureCached(entry, fallbackBuys, fallbackSells) {
-  const cached = pressureCache.get(entry.address);
-  if (cached && Date.now() - cached.at < PRESSURE_TTL) return cached.data;
-
-  const data = await fetchPressure(entry);
-
-  // If Moralis returned no data, try DexScreener buys/sells as fallback
-  if (data.buyPressurePct == null && fallbackBuys != null && fallbackSells != null) {
-    const total = Number(fallbackBuys) + Number(fallbackSells);
-    if (total > 0) {
-      data.buys = Number(fallbackBuys);
-      data.sells = Number(fallbackSells);
-      data.totalTxns = total;
-      data.buyPressurePct = ((data.buys / total) * 100).toFixed(0);
-    }
-  }
-
-  pressureCache.set(entry.address, { data, at: Date.now() });
-  return data;
+function loadDB() {
+  try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
+  catch { return { tokens: {}, watchlist: {}, wallets: {} }; }
 }
 
-/**
- * SOL price cache — CoinGecko free tier ≈ 10-30 req/min.
- * SOL price changes slowly; cache for 60 seconds.
- */
-let solPriceCache = { price: null, at: 0 };
-const SOL_PRICE_TTL = 60 * 1000; // 60 sec
-
-async function fetchSolPriceCached() {
-  if (solPriceCache.price !== null && Date.now() - solPriceCache.at < SOL_PRICE_TTL) {
-    return solPriceCache.price;
-  }
-  const price = await fetchSolPrice();
-  if (price !== null) solPriceCache = { price, at: Date.now() };
-  return price;
+function saveDB(db) {
+  try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); }
+  catch (e) { console.error('[DB] saveDB failed:', e.message); }
 }
 
-/** Dev wallet check interval — holdings move slowly; check every 5 min not 15 sec */
-const DEV_CHECK_INTERVAL = 5 * 60 * 1000; // 5 min
-
-// ─────────────────────────────────────────────
-// FORMAT HELPERS
-// ─────────────────────────────────────────────
+function ensureDBSchema(db) {
+  if (!db.tokens) db.tokens = {};
+  if (!db.watchlist) db.watchlist = {};
+  if (!db.wallets) db.wallets = {};
+  return db;
+}
 
 function fmtUsd(n) {
+  if (!n || isNaN(Number(n))) return '—';
   const num = Number(n);
-  if (isNaN(num)) return "$?";
-  if (num >= 1_000_000) return `$${(num / 1_000_000).toFixed(2)}M`;
-  if (num >= 1_000) return `$${(num / 1_000).toFixed(1)}K`;
-  return `$${num.toFixed(4)}`;
+  if (num >= 1000000000) return '$' + (num / 1e9).toFixed(2) + 'B';
+  if (num >= 1000000) return '$' + (num / 1e6).toFixed(2) + 'M';
+  if (num >= 1000) return '$' + (num / 1e3).toFixed(1) + 'K';
+  return '$' + num.toFixed(4);
 }
 
 function fmtTime(ms) {
-  const diff = Date.now() - ms;
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 2) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+  if (!ms) return '—';
+  const diff = Date.now() - Number(ms);
+  const m = Math.floor(diff / 60000);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return d + 'd ago';
+  if (h > 0) return h + 'h ago';
+  if (m > 0) return m + 'm ago';
+  return 'just now';
 }
 
-function fmtMultiple(m) {
-  return `${Number(m).toFixed(2)}x`;
+function fmtAgeLabel(ms) {
+  if (!ms) return '—';
+  const diff = Date.now() - Number(ms);
+  const mi = Math.floor(diff / 60000);
+  const h = Math.floor(mi / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return d === 1 ? '1 day' : d + ' days';
+  if (h > 0) return h === 1 ? '1 hour' : h + ' hours';
+  if (mi > 0) return mi === 1 ? '1 minute' : mi + ' minutes';
+  return 'just now';
 }
 
-function fmtDate(ms) {
-  if (!ms) return "";
-  const d = new Date(ms);
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  return `${months[d.getMonth()]} ${d.getDate()}`;
+function luteTradeUrl(mint) {
+  return 'https://lute.gg/trade/' + mint;
 }
 
-function fmtWallet(addr) {
-  if (!addr) return "unknown";
-  return `${addr.slice(0, 8)}…${addr.slice(-4)}`;
+function trenchTradeUrl(mint) {
+  // Path /trade/<mint> 404s; app uses ?mint= on monitor (see trench.com redirects).
+  return 'https://trench.com/trade/monitor?mint=' + encodeURIComponent(mint);
 }
 
-function fmtPressure(buyPct) {
-  if (buyPct == null || buyPct === "") return "⚪ Insufficient data";
-  const buy = Number(buyPct);
-  if (isNaN(buy)) return "⚪ Insufficient data";
-  const sell = 100 - buy;
-  const indicator = buy >= 60 ? "🟢" : buy <= 40 ? "🔴" : "🟡";
-  return `${indicator} ${buy}% buys / ${sell}% sells`;
+function takeProfitDescription(mint, postedBy, postedAt) {
+  return (
+    '💰💰💰 **Take Profit** 💰💰💰\n' +
+    '`' +
+    mint +
+    '`\n' +
+    '**' +
+    postedBy +
+    '** - ' +
+    fmtAgeLabel(postedAt) +
+    '\n' +
+    '[Lute](' +
+    luteTradeUrl(mint) +
+    ') · [Trench](' +
+    trenchTradeUrl(mint) +
+    ')'
+  );
 }
 
-// ─────────────────────────────────────────────
-// FETCH LIVE DATA
-// ─────────────────────────────────────────────
-
-/**
- * Fetch live token data for one entry.
- * Returns { livePrice, liveVolume, pumpData } or null on failure.
- */
-async function fetchLiveData(entry, solPriceUsd) {
-  if (entry.platform === "pumpfun") {
-    const pumpData = await fetchPumpFunToken(entry.address);
-    if (!pumpData) return null;
-    const livePrice = calculatePumpFunPrice(pumpData, solPriceUsd);
-    return { livePrice, liveVolume: 0, marketCap: pumpData.usd_market_cap ?? null, pumpData };
-  }
-
-  if (entry.platform === "dexscreener") {
-    const data = await fetchTokenDex(entry.address);
-    if (!data) return null;
-    return {
-      livePrice: data.price ? Number(data.price) : null,
-      liveVolume: data.volume24h ?? 0,
-      buys24h: data.buys24h,
-      sells24h: data.sells24h,
-      marketCap: data.marketCap,
-      pumpData: null,
-    };
-  }
-
-  if (entry.platform === "moralis") {
-    const data = await getSolanaTokenPrice(entry.address);
-    if (!data) return null;
-    return {
-      livePrice: data.usdPrice ? Number(data.usdPrice) : null,
-      liveVolume: 0,
-      pumpData: null,
-    };
-  }
-
+function tokenThumbnail(entry, live) {
+  if (entry && entry.imageUrl) return entry.imageUrl;
+  if (live && live.rawPump && live.rawPump.image_uri) return live.rawPump.image_uri;
+  if (live && live.imageUrl) return live.imageUrl;
   return null;
 }
 
-// ─────────────────────────────────────────────
-// BUY/SELL PRESSURE
-// ─────────────────────────────────────────────
+/** Normalize legacy milestonesFired (stored price gates 2,5,10,20) to tier ids 1–20. */
+function normalizeTakeProfitTiers(fired) {
+  if (!Array.isArray(fired) || fired.length === 0) return [];
+  const legacySparse = new Set([2, 5, 10, 20]);
+  if (fired.includes(1) || fired.some((x) => x > 20)) {
+    return [...new Set(fired.filter((x) => x >= 1 && x <= 20))].sort((a, b) => a - b);
+  }
+  if (fired.every((x) => legacySparse.has(x))) {
+    return [...new Set(fired.map((x) => x - 1))].filter((t) => t >= 1 && t <= 20).sort((a, b) => a - b);
+  }
+  if (fired.every((x) => x >= 1 && x <= 20)) {
+    return [...new Set(fired)].sort((a, b) => a - b);
+  }
+  return [...new Set(fired.map((x) => (x >= 2 ? x - 1 : x)))]
+    .filter((t) => t >= 1 && t <= 20)
+    .sort((a, b) => a - b);
+}
 
-async function fetchPressure(entry) {
+const pollingLock = new Set();
+let lastSummaryDate = null;
+/** Prevents overlapping poll cycles (setInterval does not await async work). */
+let pollCycleInProgress = false;
+let pollCycleNumber = 0;
+
+function stableAddrHash(address) {
+  let hash = 0;
+  for (let i = 0; i < address.length; i++) {
+    hash = (hash * 31 + address.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function entryAgeMs(entry) {
+  const postedAt = Number(entry?.postedAt) || 0;
+  return postedAt > 0 ? Date.now() - postedAt : Number.MAX_SAFE_INTEGER;
+}
+
+function ensurePeakAt(entry) {
+  if (entry.peakAt != null && entry.peakAt !== '') return Number(entry.peakAt);
+  return Number(entry.postedAt) || Date.now();
+}
+
+function isSignificantNewAth(storedPeak, currentMultiple) {
+  const peak = Number(storedPeak) || 1;
+  if (currentMultiple <= peak) return false;
+  if (peak <= 1) return currentMultiple > 1;
+  return currentMultiple >= peak * (1 + MIN_NEW_ATH_BUMP_RATIO);
+}
+
+/** True when token is past grace period and peakAt is stale — demote to cold polling. */
+function isInactiveForPolling(entry) {
+  const ageMs = entryAgeMs(entry);
+  if (ageMs <= NEW_TOKEN_GRACE_MS) return false;
+  const peakAt = ensurePeakAt(entry);
+  return Date.now() - peakAt > INACTIVE_DEMOTE_MS;
+}
+
+function pollTierForEntry(entry) {
+  const ageMs = entryAgeMs(entry);
+  const milestones = Array.isArray(entry?.milestonesFired) ? entry.milestonesFired.length : 0;
+
+  if (milestones === 0 || ageMs <= HOT_TOKEN_MAX_AGE_MS) {
+    return 'hot';
+  }
+
+  if (isInactiveForPolling(entry)) {
+    return 'cold';
+  }
+
+  if (ageMs <= WARM_TOKEN_MAX_AGE_MS) {
+    return 'hot';
+  }
+
+  const peakMultiple = Number(entry?.peakMultiple) || 1;
+  if (peakMultiple >= 1.5) {
+    return 'warm';
+  }
+  return 'warm';
+}
+
+function shouldPollAddressThisCycle(address, entry, cycleNum) {
+  const tier = pollTierForEntry(entry);
+  if (tier === 'hot') return true;
+  const cadence = tier === 'warm' ? WARM_TIER_EVERY_N_CYCLES : COLD_TIER_EVERY_N_CYCLES;
+  return stableAddrHash(address) % cadence === cycleNum % cadence;
+}
+
+// DexScreener
+async function fetchDexScreener(address) {
   try {
-    let pressure;
-    if (entry.chain === "solana" || entry.platform === "pumpfun" || entry.platform === "moralis") {
-      pressure = await getSolanaTokenBuySellPressure(entry.address);
-    } else {
-      pressure = await getEVMTokenBuySellPressure(entry.address, entry.chain);
-    }
-    return pressure;
-  } catch {
-    return { buys: 0, sells: 0, totalTxns: 0, buyPressurePct: null };
+    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const pair = data.pairs && data.pairs[0];
+    if (!pair) return null;
+    const totalTxns = ((pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0) +
+                      ((pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0);
+    return {
+      price: pair.priceUsd ? Number(pair.priceUsd) : null,
+      marketCap: pair.marketCap || null,
+      volume24h: (pair.volume && pair.volume.h24) || null,
+      liquidity: (pair.liquidity && pair.liquidity.usd) || null,
+      priceChange1h: (pair.priceChange && pair.priceChange.h1) || null,
+      buyPct: totalTxns > 0 ? Math.round(((pair.txns.h24.buys || 0) / totalTxns) * 100) : null,
+      imageUrl: (pair.info && pair.info.imageUrl) || null,
+      source: 'dexscreener'
+    };
+  } catch (e) {
+    console.error('[dex] poll failed for ' + address + ':', e.message);
+    return null;
   }
 }
 
-// ─────────────────────────────────────────────
-// DEV WALLET HOLDING
-// ─────────────────────────────────────────────
-
-async function fetchDevHoldingPct(entry) {
-  if (!entry.devWallet) return null;
+// pump.fun
+async function fetchPumpFun(address) {
   try {
-    if (entry.chain === "solana" || entry.platform === "pumpfun") {
-      const holders = await getSolanaTopHolders(entry.address);
-      const devHolder = holders.find(
-        (h) => h.ownerAddress?.toLowerCase() === entry.devWallet.toLowerCase()
-      );
-      if (!devHolder) return 0;
-      return Number(devHolder.percentageRelativeToTotalSupply ?? 0);
-    }
-    // EVM
-    const bal = await getEVMWalletTokenBalance(entry.devWallet, entry.address, entry.chain);
-    if (!bal) return 0;
-    // Need total supply — approximate from formatted balance + stored devHoldingAtCall ratio
-    return null; // Fall back: no reliable total supply reference — skip
+    const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (!d || !d.mint) return null;
+    return d;
+  } catch (e) {
+    console.error('[pumpfun] poll failed for ' + address + ':', e.message);
+    return null;
+  }
+}
+
+async function fetchSolPrice() {
+  try {
+    const res = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+      { signal: AbortSignal.timeout(8000) }
+    );
+    const data = await res.json();
+    return (data && data.solana && data.solana.usd) || null;
   } catch {
     return null;
   }
 }
 
-// ─────────────────────────────────────────────
-// EMBED BUILDERS
-// ─────────────────────────────────────────────
-
-function buildPriceAlertEmbed(entry, livePrice, pctChange, pressure, liveData) {
-  const mcapNow = liveData?.marketCap ?? null;
-  const mcapEntry = entry.mcapAtCall ?? null;
-
-  const links = [];
-  if (entry.dexUrl) links.push(`[Dex](${entry.dexUrl})`);
-  if (entry.pumpUrl || entry.platform === "pumpfun") links.push(`[Pump](https://pump.fun/${entry.address})`);
-
-  const lines = [];
-  if (mcapEntry && mcapNow) {
-    lines.push(`MCap **${fmtUsd(mcapEntry)}** → **${fmtUsd(mcapNow)}**`);
-  } else if (mcapNow) {
-    lines.push(`MCap **${fmtUsd(mcapNow)}**`);
+function calcPumpFunPrice(pumpData, solPrice) {
+  try {
+    const solRes = Number(pumpData.virtual_sol_reserves);
+    const tokRes = Number(pumpData.virtual_token_reserves);
+    if (!tokRes) return null;
+    return (solRes / 1e9) / (tokRes / 1e6) * solPrice;
+  } catch {
+    return null;
   }
-  if (links.length) lines.push(links.join(" · "));
-  lines.push(`\`\`\`${entry.address}\`\`\``);
-
-  const footerParts = [entry.postedBy];
-  if (entry.tokenAge) footerParts.push(entry.tokenAge);
-  if (entry.postedAt) footerParts.push(`Called ${fmtDate(entry.postedAt)}`);
-
-  return {
-    color: 0x00ff88,
-    title: `↗ +${pctChange.toFixed(1)}% — ${entry.name} (${entry.symbol})`,
-    thumbnail: entry.imageUrl ? { url: entry.imageUrl } : undefined,
-    description: lines.filter(Boolean).join("\n"),
-    footer: { text: footerParts.join(" · ") },
-    timestamp: new Date().toISOString(),
-  };
 }
 
-function buildMilestoneEmbed(entry, milestone, livePrice, pressure) {
-  const links = [];
-  if (entry.dexUrl) links.push(`[Dex](${entry.dexUrl})`);
-  if (entry.pumpUrl || entry.platform === "pumpfun") links.push(`[Pump](https://pump.fun/${entry.address})`);
+// Fetch live price — DexScreener first, pump.fun fallback
+async function fetchLiveData(address, platform, solPriceUsd) {
+  const dex = await fetchDexScreener(address);
+  if (dex && dex.price) return dex;
 
-  const lines = [
-    `💰💰💰💵 **Take Profits** 💵💰💰💰`,
-    `${fmtUsd(entry.priceAtCall)} → **${fmtUsd(livePrice)}**`,
-  ];
-  if (links.length) lines.push(links.join(" · "));
-  lines.push(`\`\`\`${entry.address}\`\`\``);
+  if (solPriceUsd) {
+    const pump = await fetchPumpFun(address);
+    if (pump) {
+      const price = calcPumpFunPrice(pump, solPriceUsd);
+      return {
+        price,
+        marketCap: pump.usd_market_cap || null,
+        volume24h: null,
+        liquidity: null,
+        priceChange1h: null,
+        buyPct: null,
+        bondingProgress: pump.bonding_curve_progress || 0,
+        complete: pump.complete || false,
+        source: 'pumpfun',
+        imageUrl: pump.image_uri || null,
+        rawPump: pump
+      };
+    }
+  }
 
-  const footerParts = [entry.postedBy];
-  if (entry.tokenAge) footerParts.push(entry.tokenAge);
-  if (entry.postedAt) footerParts.push(`Called ${fmtDate(entry.postedAt)}`);
-
-  return {
-    color: 0xffd700,
-    title: `🎯 ${milestone}x — ${entry.name} (${entry.symbol})`,
-    thumbnail: entry.imageUrl ? { url: entry.imageUrl } : undefined,
-    description: lines.join("\n"),
-    footer: { text: footerParts.join(" · ") },
-    timestamp: new Date().toISOString(),
-  };
+  return null;
 }
 
-function buildDevDumpEmbed(entry, devHoldingPct, dropPct) {
-  return {
-    color: 0xff0000,
-    title: `🚨 Dev Wallet Activity — ${entry.name} (${entry.symbol})`,
-    description: [
-      `⚠️ Dev wallet holdings dropped significantly.`,
-      "",
-      `Dev wallet: ${fmtWallet(entry.devWallet)}`,
-      `Was holding: **${Number(entry.devHoldingAtCall).toFixed(2)}%**`,
-      `Now holding: **${Number(devHoldingPct).toFixed(2)}%**`,
-      "",
-      `Dropped: **${dropPct.toFixed(1)}%** of their position`,
-      "",
-      entry.dexUrl ? `[Dex](${entry.dexUrl})` : "",
-    ]
-      .filter((l) => l !== null)
-      .join("\n"),
-    footer: { text: `Posted by ${entry.postedBy}` },
-    timestamp: new Date().toISOString(),
-  };
-}
-
-function buildGraduationEmbed(entry, pumpData) {
-  return {
-    color: 0x00ff88,
-    title: `🎓 ${entry.name} (${entry.symbol}) graduated to Raydium!`,
-    description: [
-      `**${entry.name}** has completed its bonding curve and is now trading on Raydium.`,
-      "",
-      `Posted by **${entry.postedBy}** · ${fmtTime(entry.postedAt)}`,
-      `Entry: ${fmtUsd(entry.priceAtCall)}`,
-      "",
-      `Now tracking via DexScreener for full price data.`,
-    ].join("\n"),
-    fields: [
-      {
-        name: "Final Bonding MCap",
-        value: pumpData?.usd_market_cap ? fmtUsd(pumpData.usd_market_cap) : "—",
-        inline: true,
-      },
-      { name: "Chain", value: "SOLANA", inline: true },
-    ],
-    footer: { text: entry.address },
-    timestamp: new Date().toISOString(),
-  };
-}
-
-function buildBondingAlertEmbed(entry, bondingProgress, pumpData) {
-  return {
-    color: 0xff9900,
-    title: `⚡ ${entry.name} (${entry.symbol}) — ${bondingProgress}% to Raydium`,
-    description: [
-      `**${entry.name}** is **${bondingProgress}%** through its bonding curve.`,
-      "",
-      `Getting close to graduation — watch for the Raydium listing.`,
-      "",
-      `Posted by **${entry.postedBy}**`,
-      `MCap now: ${pumpData?.usd_market_cap ? fmtUsd(pumpData.usd_market_cap) : "—"}`,
-    ].join("\n"),
-    footer: { text: entry.address },
-    timestamp: new Date().toISOString(),
-  };
-}
-
-// ─────────────────────────────────────────────
-// MAIN POLL FUNCTION
-// ─────────────────────────────────────────────
-
-// User's "x" definition: 1x = 100% gain (price doubled), 2x = 200% (tripled), etc.
-// Milestone N fires when currentMultiple >= N + 1  (i.e. price is N+1 times the call price)
-const MILESTONES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
-
-/**
- * Poll all tracked tokens once.
- * @param {import('discord.js').Client} client
- * @param {object} db
- * @param {Function} saveDB
- */
-async function pollTokens(client, db, saveDB) {
-  if (pollRunning) {
-    console.log("[Poller] Previous poll still running — skipping this cycle");
+async function sendEmbed(client, channelId, embed, label = 'alert') {
+  if (shouldSilenceAlerts()) {
+    const st = getAlertSilenceStatus();
+    const title = embed?.data?.title || label;
+    console.log('[silence/' + st.reason + '] skipped: ' + title);
     return;
   }
-  pollRunning = true;
-
   try {
-  const entries = Object.values(db.tokens ?? {});
-  if (entries.length === 0) return;
-
-  console.log(`[Poller] Polling ${entries.length} token(s)…`);
-
-  // ── Backfill missing fields on old entries ──
-  for (const entry of entries) {
-    let changed = false;
-    if (!entry.backfillDone && (!entry.mcapAtCall || !entry.imageUrl)) {
-      try {
-        const dexData = await fetchTokenDex(entry.address);
-        if (dexData) {
-          if (!entry.mcapAtCall && dexData.marketCap) {
-            db.tokens[entry.address].mcapAtCall = dexData.marketCap;
-            changed = true;
-          }
-          if (!entry.imageUrl && dexData.imageUrl) {
-            db.tokens[entry.address].imageUrl = dexData.imageUrl;
-            changed = true;
-          }
-          if (!entry.dexUrl && dexData.dexUrl) {
-            db.tokens[entry.address].dexUrl = dexData.dexUrl;
-            changed = true;
-          }
-        }
-        // If it's a pump.fun token, add pump URL
-        if (!entry.pumpUrl && entry.address.toLowerCase().endsWith("pump")) {
-          db.tokens[entry.address].pumpUrl = `https://pump.fun/${entry.address}`;
-          changed = true;
-        }
-        if (changed) await delay(200);
-      } catch {}
-      // Mark attempted so we don't retry every cycle
-      db.tokens[entry.address].backfillDone = true;
-    }
-    if (changed) {
-      console.log(`[Poller] Backfilled missing fields for ${entry.symbol}`);
-    }
-  }
-  saveDB();
-
-  // Fetch SOL price once for this cycle (cached 60s to respect CoinGecko limits)
-  let solPriceUsd = null;
-  const hasPumpFun = entries.some((e) => e.platform === "pumpfun");
-  if (hasPumpFun) {
-    solPriceUsd = await fetchSolPriceCached();
-    if (solPriceUsd === null) {
-      console.warn("[Poller] SOL price unavailable — skipping pump.fun price checks this cycle");
-    }
-  }
-
-  for (const entry of entries) {
-    try {
-      // Skip pump.fun price checks if no SOL price
-      if (entry.platform === "pumpfun" && solPriceUsd === null) {
-        continue;
-      }
-
-      const live = await fetchLiveData(entry, solPriceUsd);
-      if (!live || live.livePrice == null) {
-        console.log(`[Poller] No live data for ${entry.symbol} (${entry.address})`);
-        continue;
-      }
-
-      const { livePrice, liveVolume, pumpData } = live;
-
-      // ── Fetch pressure (cached 2 min to stay under Moralis 40 req/min) ──
-      const pressure = await fetchPressureCached(entry, live.buys24h, live.sells24h);
-
-      const channel = await client.channels.fetch(entry.alertChannelId).catch(() => null);
-
-      // ─────────────────────────────────────────
-      // CHECK E — Graduation (pump.fun → Raydium)
-      // ─────────────────────────────────────────
-      if (entry.platform === "pumpfun" && pumpData?.complete === true && !entry.graduationAlertFired) {
-        console.log(`[Poller] 🎓 ${entry.symbol} graduated to Raydium`);
-        if (channel) {
-          await channel.send({ embeds: [buildGraduationEmbed(entry, pumpData)] }).catch(() => {});
-        }
-        db.tokens[entry.address].platform = "dexscreener";
-        db.tokens[entry.address].graduationAlertFired = true;
-        saveDB();
-        continue; // Next poll will use DexScreener
-      }
-
-      // ─────────────────────────────────────────
-      // CHECK F — Bonding Curve 85%
-      // ─────────────────────────────────────────
-      if (entry.platform === "pumpfun" && pumpData) {
-        const bp = Number(pumpData.bonding_curve_progress ?? 0);
-        db.tokens[entry.address].bondingProgress = bp;
-
-        if (bp >= 85 && !entry.bondingAlertFired) {
-          console.log(`[Poller] ⚡ ${entry.symbol} bonding at ${bp}%`);
-          if (channel) {
-            await channel.send({ embeds: [buildBondingAlertEmbed(entry, bp, pumpData)] }).catch(() => {});
-          }
-          db.tokens[entry.address].bondingAlertFired = true;
-        } else if (bp < 70 && entry.bondingAlertFired) {
-          db.tokens[entry.address].bondingAlertFired = false;
-        }
-      }
-
-      const priceAtCall = Number(entry.priceAtCall);
-      if (!priceAtCall || priceAtCall === 0) {
-        // Can't compute multiples — just update price
-        db.tokens[entry.address].lastPrice = String(livePrice);
-        db.tokens[entry.address].lastChecked = Date.now();
-        continue;
-      }
-
-      const currentMultiple = livePrice / priceAtCall;
-      const pctFromCall = ((livePrice - priceAtCall) / priceAtCall) * 100;
-
-      // ─────────────────────────────────────────
-      // Silent catch-up after DB loss / redeploy — mark passed milestones without pinging
-      // ─────────────────────────────────────────
-      let milestonesFired = entry.milestonesFired ?? [];
-      if (milestonesFired.length === 0 && currentMultiple >= 2) {
-        const passed = MILESTONES.filter((ms) => currentMultiple >= ms + 1);
-        if (passed.length > 1) {
-          // Keep the highest milestone eligible for ONE alert; silently mark the rest
-          const silent = passed.slice(0, -1);
-          milestonesFired = silent;
-          console.log(
-            `[Poller] ⏭️ ${entry.symbol} catch-up: silently marked ${silent.length} past milestone(s) (now ${currentMultiple.toFixed(1)}x)`,
-          );
-          db.tokens[entry.address].milestonesFired = milestonesFired;
-          saveDB();
-        }
-      }
-
-      // ─────────────────────────────────────────
-      // FULL RESET — if price drops well below call price (hysteresis avoids wick spam)
-      // ─────────────────────────────────────────
-      let pctAlertsFired = entry.pctAlertsFired ?? [];
-      const RESET_BELOW = 0.85; // only reset after ~15% below entry, not a tiny wick
-
-      if (currentMultiple < RESET_BELOW) {
-        if (milestonesFired.length > 0 || pctAlertsFired.length > 0) {
-          console.log(`[Poller] 🔄 ${entry.symbol} dropped below ${RESET_BELOW}x — resetting alerts`);
-        }
-        milestonesFired = [];
-        pctAlertsFired = [];
-      }
-
-      // ─────────────────────────────────────────
-      // CHECK A — % callouts: +15%, +50%, +75% (each fires once per cycle max)
-      // ─────────────────────────────────────────
-      const PCT_THRESHOLDS = [15, 50, 75];
-      let pctAlertThisCycle = false;
-      for (const pct of PCT_THRESHOLDS) {
-        if (pctAlertThisCycle) break;
-        if (pctFromCall >= pct && !pctAlertsFired.includes(pct)) {
-          console.log(`[Poller] 📈 ${entry.symbol} +${pctFromCall.toFixed(1)}% from call (hit ${pct}% threshold)`);
-          if (channel) {
-            await channel.send({
-              embeds: [buildPriceAlertEmbed(entry, livePrice, pctFromCall, pressure, live)],
-            }).catch(() => {});
-          }
-          pctAlertsFired = [...pctAlertsFired, pct];
-          pctAlertThisCycle = true;
-          db.tokens[entry.address].pctAlertsFired = pctAlertsFired;
-          saveDB();
-        }
-      }
-
-      // ─────────────────────────────────────────
-      // CHECK B — Milestones (1x=100%, 2x=200%, … 20x=2000% from call)
-      // Nx fires when price is (N+1)× the call price.
-      // ONE milestone alert per token per poll — prevents 1x→20x spam on catch-up.
-      // ─────────────────────────────────────────
-      let milestoneAlertThisCycle = null;
-      for (const ms of MILESTONES) {
-        if (currentMultiple >= ms + 1 && !milestonesFired.includes(ms)) {
-          milestoneAlertThisCycle = ms;
-        }
-      }
-
-      if (milestoneAlertThisCycle != null) {
-        const ms = milestoneAlertThisCycle;
-        console.log(`[Poller] 🎯 ${entry.symbol} hit ${ms}x (${ms * 100}% gain)`);
-        if (channel) {
-          await channel.send({
-            embeds: [buildMilestoneEmbed(entry, ms, livePrice, pressure)],
-          }).catch(() => {});
-        }
-        milestonesFired = [...milestonesFired, ms];
-        db.tokens[entry.address].milestonesFired = milestonesFired;
-        saveDB();
-      }
-
-      // ─────────────────────────────────────────
-      // CHECK D — Dev Wallet Dump (throttled to every 5 min)
-      // ─────────────────────────────────────────
-      const timeSinceDevCheck = Date.now() - (entry.lastDevCheck ?? 0);
-      if (entry.devWallet && entry.devHoldingAtCall > 0 && timeSinceDevCheck >= DEV_CHECK_INTERVAL) {
-        db.tokens[entry.address].lastDevCheck = Date.now();
-        const devHoldingPct = await fetchDevHoldingPct(entry);
-        await delay(200);
-
-        if (devHoldingPct !== null) {
-          const threshold = entry.devHoldingAtCall * 0.8;
-          if (devHoldingPct < threshold && !entry.devDumpAlertFired) {
-            const dropPct = ((entry.devHoldingAtCall - devHoldingPct) / entry.devHoldingAtCall) * 100;
-            console.log(`[Poller] 🚨 Dev dump detected for ${entry.symbol} — dropped ${dropPct.toFixed(1)}%`);
-            if (channel) {
-              await channel.send({
-                embeds: [buildDevDumpEmbed(entry, devHoldingPct, dropPct)],
-              }).catch(() => {});
-            }
-            db.tokens[entry.address].devDumpAlertFired = true;
-          } else if (devHoldingPct >= entry.devHoldingAtCall * 0.9 && entry.devDumpAlertFired) {
-            db.tokens[entry.address].devDumpAlertFired = false;
-          }
-          db.tokens[entry.address].devLastKnownHolding = devHoldingPct;
-        }
-      }
-
-      // ─────────────────────────────────────────
-      // Update DB
-      // ─────────────────────────────────────────
-      db.tokens[entry.address].lastPrice = String(livePrice);
-      db.tokens[entry.address].lastVolume = liveVolume;
-      db.tokens[entry.address].lastChecked = Date.now();
-      db.tokens[entry.address].peakMultiple = Math.max(entry.peakMultiple ?? 1, currentMultiple);
-      db.tokens[entry.address].milestonesFired = milestonesFired;
-      db.tokens[entry.address].pctAlertsFired = pctAlertsFired;
-      if (pressure.buyPressurePct != null) {
-        db.tokens[entry.address].buyPressure = Number(pressure.buyPressurePct);
-        db.tokens[entry.address].sellPressure = 100 - Number(pressure.buyPressurePct);
-      }
-
-      // TODO: First 30 buyers analysis
-      // - Fetch first 30 buyer wallets from Moralis
-      // - Check if known sniper/bundle bots are present
-      // - Flag if >3 snipers in first 30 buyers
-
-      // TODO: Entry/exit zone suggestions
-      // - Fetch OHLCV data from Moralis
-      // - Calculate basic support/resistance levels
-      // - Add to confirmation embed as "Support ~$X / Resistance ~$Y"
-
-    } catch (err) {
-      console.error(`[Poller] Error processing ${entry.symbol} (${entry.address}):`, err.message);
-    }
-  }
-
-  saveDB();
-  console.log("[Poller] Poll cycle complete.");
-
-  } finally {
-    pollRunning = false;
+    const channel = await client.channels.fetch(channelId);
+    await channel.send({ embeds: [embed] });
+  } catch (e) {
+    console.error('[alert] send failed to channel ' + channelId + ':', e.message);
   }
 }
 
-// ─────────────────────────────────────────────
-// DAILY SUMMARY
-// ─────────────────────────────────────────────
+// Wallet watcher — polls Moralis for recent swaps on watched wallets
+async function pollWallets(client) {
+  if (!process.env.MORALIS_API_KEY) return;
+  const db = ensureDBSchema(loadDB());
+  const wallets = Object.values(db.wallets || {});
+  if (wallets.length === 0) return;
 
-function fmtDateFull() {
-  return new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  for (const wallet of wallets) {
+    try {
+      const res = await fetch(
+        'https://solana-gateway.moralis.io/account/mainnet/' + wallet.address + '/swaps?limit=5&order=DESC',
+        {
+          headers: { 'Authorization': 'Bearer ' + process.env.MORALIS_API_KEY },
+          signal: AbortSignal.timeout(8000)
+        }
+      );
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const swaps = data.result || data.swaps || [];
+      if (!swaps.length) continue;
+
+      const latest = swaps[0];
+      const txHash = latest.transactionHash || latest.transaction_hash || latest.hash;
+
+      // Skip if already seen this tx
+      if (!txHash || txHash === wallet.lastSeenTx) continue;
+
+      // Update last seen immediately to prevent double alerts
+      db.wallets[wallet.address].lastSeenTx = txHash;
+      saveDB(db);
+
+      const txType = (latest.transactionType || latest.type || '').toLowerCase();
+      const isBuy = txType === 'buy';
+      const isSell = txType === 'sell';
+      if (!isBuy && !isSell) continue;
+
+      const tokenOut = latest.tokenOut || latest.bought || {};
+      const tokenIn = latest.tokenIn || latest.sold || {};
+      const tokenName = isBuy ? (tokenOut.name || tokenOut.symbol || 'Unknown') : (tokenIn.name || tokenIn.symbol || 'Unknown');
+      const tokenSymbol = isBuy ? (tokenOut.symbol || '?') : (tokenIn.symbol || '?');
+      const amountUsd = latest.totalValueUsd || latest.usdValue || null;
+
+      const embed = new EmbedBuilder()
+        .setColor(isBuy ? 0x00ff88 : 0xff3333)
+        .setTitle((isBuy ? '🟢 Smart Wallet Buy' : '🔴 Smart Wallet Sell') + ' — ' + wallet.label)
+        .setDescription(
+          '**' + wallet.label + '** just ' + (isBuy ? 'bought' : 'sold') + ' **' + tokenName + ' (' + tokenSymbol + ')**' +
+          (amountUsd ? '\nValue: **$' + Number(amountUsd).toLocaleString() + '**' : '') +
+          '\n\nAdded by ' + wallet.addedBy
+        )
+        .setFooter({ text: wallet.address })
+        .setTimestamp();
+
+      try {
+        const channel = await client.channels.fetch(wallet.alertChannelId);
+        if (shouldSilenceAlerts()) {
+          console.log('[silence] skipped wallet alert: ' + wallet.label + ' ' + (isBuy ? 'buy' : 'sell') + ' ' + tokenSymbol);
+        } else {
+          await channel.send({ embeds: [embed] });
+          console.log('[wallet] ' + wallet.label + ' ' + (isBuy ? 'bought' : 'sold') + ' ' + tokenSymbol);
+        }
+      } catch (e) {
+        console.error('[wallet] send failed:', e.message);
+      }
+
+    } catch (e) {
+      console.error('[wallet] poll error for ' + wallet.label + ':', e.message);
+    }
+  }
 }
 
 /**
- * Build and post the daily summary embed.
+ * Build daily summary title/description/footer (same text the bot posts).
+ * @returns {Promise<{ title: string, description: string, footerText: string, tokenCount: number }>}
  */
-async function postDailySummary(client, db) {
-  const channelId = process.env.SUMMARY_CHANNEL_ID;
-  if (!channelId) return;
-  const channel = await client.channels.fetch(channelId).catch(() => null);
-  if (!channel) return;
+export async function buildDailySummaryParts() {
+  const db = ensureDBSchema(loadDB());
+  const entries = Object.values(db.tokens || {});
 
-  const entries = Object.values(db.tokens ?? {});
-  const watchlistCount = Object.keys(db.watchlist ?? {}).length;
-
-  // Fetch SOL price for pump.fun tokens (cached)
-  let solPriceUsd = null;
-  if (entries.some((e) => e.platform === "pumpfun")) {
-    solPriceUsd = await fetchSolPriceCached();
+  if (entries.length === 0) {
+    return {
+      title: '📊 Daily Summary',
+      description: 'No tokens being tracked right now.',
+      footerText: '',
+      tokenCount: 0,
+    };
   }
 
-  // Fetch live prices
+  const solPriceUsd = await fetchSolPrice();
   const results = await Promise.allSettled(
-    entries.map(async (entry) => {
-      try {
-        if (entry.platform === "pumpfun") {
-          const pumpData = await fetchPumpFunToken(entry.address);
-          const livePrice = calculatePumpFunPrice(pumpData, solPriceUsd);
-          const bp = pumpData?.bonding_curve_progress ?? null;
-          return { entry, livePrice, bondingProgress: bp };
-        }
-        if (entry.platform === "dexscreener") {
-          const data = await fetchTokenDex(entry.address);
-          return { entry, livePrice: data?.price ? Number(data.price) : null };
-        }
-        if (entry.platform === "moralis") {
-          const data = await getSolanaTokenPrice(entry.address);
-          return { entry, livePrice: data?.usdPrice ? Number(data.usdPrice) : null };
-        }
-        return { entry, livePrice: null };
-      } catch {
-        return { entry, livePrice: null };
-      }
-    })
+    entries.map((e) => fetchLiveData(e.address, e.platform, solPriceUsd))
   );
 
-  const winners = [];
+  const rows = [];
+  let bestCall = null;
+  let bestMultiple = 0;
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const live = results[i].status === 'fulfilled' ? results[i].value : null;
+    const livePrice = live && live.price ? Number(live.price) : null;
+    const priceAtCall = entry.priceAtCall ? Number(entry.priceAtCall) : null;
+
+    let multipleStr = '—';
+    let mult = null;
+    if (livePrice && priceAtCall && priceAtCall > 0) {
+      mult = livePrice / priceAtCall;
+      const pct = ((mult - 1) * 100).toFixed(0);
+      const sign = mult >= 1 ? '+' : '';
+      if (mult >= 2) multipleStr = '🚀 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
+      else if (mult >= 1) multipleStr = '📈 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
+      else multipleStr = '📉 ' + mult.toFixed(2) + 'x (' + pct + '%)';
+      if (mult > bestMultiple) {
+        bestMultiple = mult;
+        bestCall = entry;
+      }
+    }
+
+    const peakStr =
+      entry.peakMultiple && entry.peakMultiple > 1
+        ? ' · Peak: ' + entry.peakMultiple.toFixed(2) + 'x'
+        : '';
+
+    const line =
+      '**' +
+      entry.name +
+      ' (' +
+      entry.symbol +
+      ')** — ' +
+      multipleStr +
+      '\n' +
+      '└ **' +
+      entry.postedBy +
+      '** · ' +
+      fmtTime(entry.postedAt) +
+      ' · MCap: ' +
+      fmtUsd(live ? live.marketCap : null) +
+      peakStr;
+
+    if (mult !== null) rows.push({ entry, mult, line });
+  }
+
+  const TOP_GAINERS = 5;
+  const TOP_LOSERS = 3;
+
+  const byDesc = [...rows].sort((a, b) => b.mult - a.mult);
+  const byAsc = [...rows].sort((a, b) => a.mult - b.mult);
+
+  const gainerSet = new Set();
+  const gainers = [];
+  for (const r of byDesc) {
+    if (gainers.length >= TOP_GAINERS) break;
+    gainers.push(r);
+    gainerSet.add(r.entry.address);
+  }
+
   const losers = [];
-
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue;
-    const { entry, livePrice } = result.value;
-
-    if (livePrice == null || !Number(entry.priceAtCall)) continue;
-
-    const multiple = livePrice / Number(entry.priceAtCall);
-    const pct = (multiple - 1) * 100;
-    const row = { entry, livePrice, multiple, pct };
-    if (multiple >= 1) winners.push(row);
-    else losers.push(row);
+  for (const r of byAsc) {
+    if (losers.length >= TOP_LOSERS) break;
+    if (gainerSet.has(r.entry.address)) continue;
+    losers.push(r);
   }
 
-  // Top 5 gainers (desc), worst 3 losers (asc)
-  winners.sort((a, b) => b.multiple - a.multiple);
-  losers.sort((a, b) => a.multiple - b.multiple);
-  const topGainers = winners.slice(0, 5);
-  const topLosers = losers.slice(0, 3);
+  const sections = [];
+  sections.push('**Top ' + TOP_GAINERS + ' gainers** (by multiple vs call)');
+  sections.push(
+    gainers.length ? gainers.map((r) => r.line).join('\n\n') : '_No price data to rank._'
+  );
+  sections.push('');
+  sections.push('**' + TOP_LOSERS + ' biggest losers** (by multiple vs call)');
+  sections.push(
+    losers.length ? losers.map((r) => r.line).join('\n\n') : '_No price data to rank._'
+  );
 
-  const fmtRow = (r, up) => {
-    const pctStr = up ? `+${r.pct.toFixed(0)}%` : `${r.pct.toFixed(0)}%`;
-    const emoji = r.multiple >= 2 ? "🚀" : up ? "📈" : "📉";
-    return `${emoji} **${r.entry.name} (${r.entry.symbol})** ${pctStr} · ${r.entry.postedBy}`;
-  };
+  const description = sections.join('\n').slice(0, 4000);
 
-  const descParts = [];
-  if (topGainers.length) {
-    descParts.push("🟢 **Top Gainers**");
-    descParts.push(...topGainers.map((r) => fmtRow(r, true)));
-  }
-  if (topLosers.length) {
-    descParts.push("");
-    descParts.push("🔴 **Biggest Losses**");
-    descParts.push(...topLosers.map((r) => fmtRow(r, false)));
-  }
-
-  if (descParts.length === 0) descParts.push("No tokens tracked yet.");
-
-  const embed = {
-    color: 0x5865f2,
-    title: `📊 Daily Recap — ${fmtDateFull()}`,
-    description: descParts.join("\n"),
-    footer: { text: `${entries.length} tokens · ${watchlistCount} wallets watched` },
-    timestamp: new Date().toISOString(),
-  };
-
-  await channel.send({ embeds: [embed] }).catch((err) => {
-    console.error("[Poller] Failed to send daily summary:", err.message);
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
   });
-  console.log("[Poller] Daily summary posted.");
+
+  let footerStr =
+    entries.length +
+    ' token' +
+    (entries.length !== 1 ? 's' : '') +
+    ' tracked · summary: top ' +
+    TOP_GAINERS +
+    ' / bottom ' +
+    TOP_LOSERS;
+  if (rows.length < entries.length) {
+    footerStr += ' · ' + (entries.length - rows.length) + ' w/o multiple';
+  }
+  if (bestCall) {
+    footerStr += ' · Best overall: ' + bestCall.name + ' ' + bestMultiple.toFixed(2) + 'x';
+  }
+
+  return {
+    title: '📊 Daily Summary — ' + dateStr,
+    description,
+    footerText: footerStr,
+    tokenCount: entries.length,
+  };
 }
 
-/**
- * Run expiry sweep — remove tokens older than 28 days.
- */
-async function runExpirySweep(client, db, saveDB) {
-  const cutoff = Date.now() - 28 * 24 * 60 * 60 * 1000;
-  const expired = Object.values(db.tokens ?? {}).filter((e) => e.postedAt < cutoff);
+// Daily summary at 4am PST (12:00 UTC)
+async function postDailySummary(client) {
+  const parts = await buildDailySummaryParts();
+  console.log('[summary] Posting daily summary — ' + parts.tokenCount + ' tokens');
 
-  if (expired.length === 0) return;
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(parts.title)
+    .setDescription(parts.description)
+    .setTimestamp();
 
-  for (const entry of expired) {
-    try {
-      const channel = await client.channels.fetch(entry.alertChannelId).catch(() => null);
-      if (channel) {
-        await channel.send({
-          embeds: [
-            {
-              color: 0x888888,
-              title: `🗑️ Expired — ${entry.name} (${entry.symbol})`,
-              description: [
-                `Token tracking expired after 28 days.`,
-                "",
-                `Entry: ${fmtUsd(entry.priceAtCall)}`,
-                `Last price: ${fmtUsd(entry.lastPrice)}`,
-                `Peak: ${fmtMultiple(entry.peakMultiple ?? 1)}`,
-                `Posted by: **${entry.postedBy}**`,
-              ].join("\n"),
-              footer: { text: entry.address },
-            },
-          ],
-        }).catch(() => {});
+  if (parts.footerText) {
+    embed.setFooter({ text: parts.footerText });
+  }
+
+  try {
+    if (shouldSilenceAlerts()) {
+      console.log('[silence] skipped daily summary (' + parts.tokenCount + ' tokens)');
+      return;
+    }
+    const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
+    await channel.send({ embeds: [embed] });
+    console.log('[summary] Posted successfully');
+  } catch (e) {
+    console.error('[summary] Failed to post:', e.message);
+  }
+}
+
+function checkDailySummary(client) {
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  const utcMinute = now.getUTCMinutes();
+  const todayStr = now.toISOString().slice(0, 10);
+  if (utcHour === 12 && utcMinute < 3 && lastSummaryDate !== todayStr) {
+    lastSummaryDate = todayStr;
+    postDailySummary(client).catch(e => console.error('[summary] error:', e.message));
+  }
+}
+
+export async function pollTokens(client) {
+  checkDailySummary(client);
+
+  const silence = getAlertSilenceStatus();
+  if (silence.silenced && silence.reason === 'comeback' && silence.remaining) {
+    console.log('[comeback] poll cycle — ' + silence.remaining + ' silent cycle(s) left before alerts resume');
+  }
+
+  // Poll smart wallets
+  pollWallets(client).catch(e => console.error('[walletPoll] error:', e.message));
+
+  if (pollCycleInProgress) {
+    console.log('[poll] skip — previous cycle still running (too many tokens or slow APIs)');
+    return;
+  }
+  pollCycleInProgress = true;
+  pollCycleNumber += 1;
+  const cycleNum = pollCycleNumber;
+
+  try {
+    const db = ensureDBSchema(loadDB());
+    const addresses = Object.keys(db.tokens || {});
+    if (addresses.length === 0) return;
+
+    const solPriceUsd = await fetchSolPrice();
+    console.log('[poll] Checking ' + addresses.length + ' tokens — SOL: $' + (solPriceUsd || '?'));
+
+    // Newest tracked first so fresh calls (e.g. MIRUMI) are not stuck behind 500+ older mints each cycle.
+    const ordered = addresses.slice().sort((a, b) => {
+      const ta = db.tokens[a]?.postedAt || 0;
+      const tb = db.tokens[b]?.postedAt || 0;
+      return tb - ta;
+    });
+
+    const scheduled = [];
+    let hotCount = 0;
+    let warmCount = 0;
+    let coldCount = 0;
+    let inactiveCount = 0;
+    for (const address of ordered) {
+      const entry = db.tokens[address];
+      if (!entry) continue;
+      if (isInactiveForPolling(entry)) inactiveCount += 1;
+      const tier = pollTierForEntry(entry);
+      if (tier === 'hot') hotCount += 1;
+      else if (tier === 'warm') warmCount += 1;
+      else coldCount += 1;
+      if (shouldPollAddressThisCycle(address, entry, cycleNum)) {
+        scheduled.push(address);
       }
-      delete db.tokens[entry.address];
-      console.log(`[Poller] Expired ${entry.symbol} (${entry.address})`);
-    } catch (err) {
-      console.error(`[Poller] Expiry error for ${entry.address}:`, err.message);
+    }
+    console.log(
+      '[poll] Cycle #' + cycleNum +
+      ' scheduled ' + scheduled.length + '/' + ordered.length +
+      ' tokens (hot=' + hotCount + ', warm=' + warmCount + ', cold=' + coldCount +
+      ', inactive=' + inactiveCount + ')'
+    );
+
+    const runMilestoneBootstrap = !fs.existsSync(MILESTONE_BOOTSTRAP_FILE);
+    const newest5ForBootstrap = runMilestoneBootstrap ? ordered.slice(0, 5) : [];
+    const newest5Set = new Set(newest5ForBootstrap);
+    if (runMilestoneBootstrap) {
+      console.log(
+        '[poll] milestone bootstrap: 🎯1x-only for newest 5 mints; other tokens skip 🎯 this cycle (no flood)'
+      );
+    }
+
+    for (const address of scheduled) {
+      if (pollingLock.has(address)) continue;
+      pollingLock.add(address);
+      try {
+        const milestoneOpts = {};
+        if (runMilestoneBootstrap) {
+          if (newest5Set.has(address)) milestoneOpts.tier1OnlyBootstrap = true;
+          else milestoneOpts.suppressTierX = true;
+        }
+        await processToken(client, address, db, solPriceUsd, milestoneOpts);
+      } catch (e) {
+        console.error('[poll] Error processing ' + address + ':', e.message);
+      } finally {
+        pollingLock.delete(address);
+      }
+    }
+
+    if (runMilestoneBootstrap) {
+      try {
+        fs.writeFileSync(MILESTONE_BOOTSTRAP_FILE, String(Date.now()));
+        console.log('[poll] milestone bootstrap done — full 🎯 logic on all tokens next cycle');
+      } catch (e) {
+        console.error('[poll] milestone bootstrap marker write failed:', e.message);
+      }
+    }
+
+    saveDB(db);
+    tickComebackAfterPollCycle();
+  } finally {
+    pollCycleInProgress = false;
+  }
+}
+
+/** +75% window, 1x–20x milestones, and peak/lastPrice updates (uses USD price vs priceAtCall). */
+async function evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts = {}) {
+  const livePrice =
+    live.price == null || live.price === '' ? null : Number(live.price);
+  const callPx =
+    entry.priceAtCall == null || entry.priceAtCall === '' ? null : Number(entry.priceAtCall);
+  if (
+    livePrice == null ||
+    !Number.isFinite(livePrice) ||
+    livePrice <= 0 ||
+    callPx == null ||
+    !Number.isFinite(callPx) ||
+    callPx <= 0
+  ) {
+    db.tokens[address].lastChecked = Date.now();
+    return;
+  }
+
+  const multPrice = livePrice / callPx;
+
+  let multMcap = null;
+  const mcapCall =
+    entry.mcapAtCall == null || entry.mcapAtCall === '' ? null : Number(entry.mcapAtCall);
+  const mcapLive =
+    live.marketCap == null || live.marketCap === '' ? null : Number(live.marketCap);
+  if (
+    mcapCall != null &&
+    Number.isFinite(mcapCall) &&
+    mcapCall > 0 &&
+    mcapLive != null &&
+    Number.isFinite(mcapLive) &&
+    mcapLive > 0
+  ) {
+    multMcap = mcapLive / mcapCall;
+  }
+
+  // Use the higher of price× vs call or mcap× vs call so FDV/MCap moves still count when Dex price lags.
+  const currentMultiple =
+    multMcap != null && Number.isFinite(multMcap) && multMcap > 0
+      ? Math.max(multPrice, multMcap)
+      : multPrice;
+
+  // Reset only after 2 consecutive polls below 1.5× (one bad tick was wiping milestones).
+  const milestonesFired = db.tokens[address].milestonesFired || [];
+  const takeProfitFired = db.tokens[address].takeProfitFired || false;
+  const gainAlertFired = db.tokens[address].gainAlertFired || false;
+
+  let lowStreak = Number(db.tokens[address].lowMultStreak) || 0;
+  if (currentMultiple < 1.5) {
+    lowStreak += 1;
+    db.tokens[address].lowMultStreak = lowStreak;
+    if (lowStreak >= 2 && (milestonesFired.length > 0 || takeProfitFired || gainAlertFired)) {
+      db.tokens[address].milestonesFired = [];
+      db.tokens[address].takeProfitFired = false;
+      db.tokens[address].gainAlertFired = false;
+      db.tokens[address].lowMultStreak = 0;
+      db.tokens[address].peakMultiple = currentMultiple;
+      db.tokens[address].peakAt = Date.now();
+      saveDB(db);
+      console.log('[reset] ' + entry.name + ' below 1.5x ×2 polls');
+    }
+  } else {
+    db.tokens[address].lowMultStreak = 0;
+  }
+
+  const curGainAlert = db.tokens[address].gainAlertFired || false;
+
+  // Check A: +75% — only fires between 1.75x and 2x (before tier 1 at 2× price)
+  if (currentMultiple >= 1.75 && currentMultiple < 2.0 && !curGainAlert) {
+    const thumb = tokenThumbnail(entry, live);
+    const embed = new EmbedBuilder()
+      .setColor(0x00ff88)
+      .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
+      .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+    if (thumb) embed.setThumbnail(thumb);
+
+    await sendEmbed(client, entry.alertChannelId, embed);
+    db.tokens[address].gainAlertFired = true;
+    saveDB(db);
+    console.log('[+75%] ' + entry.name);
+  }
+
+  // Take-profit tiers 1x–20x — tier N when price is ≥ (N+1)× call (tier 1 at 2×, …, tier 20 at 21×)
+  const rawMilestones = db.tokens[address].milestonesFired || [];
+  let latest = normalizeTakeProfitTiers(rawMilestones);
+  if (JSON.stringify(latest) !== JSON.stringify(rawMilestones)) {
+    db.tokens[address].milestonesFired = latest;
+    saveDB(db);
+  }
+
+  if (!milestoneOpts.suppressTierX) {
+    const maxTier = milestoneOpts.tier1OnlyBootstrap ? 1 : 20;
+    const newlyPassed = [];
+    for (let tier = 1; tier <= maxTier; tier++) {
+      if (!latest.includes(tier) && currentMultiple >= tier + 1) {
+        newlyPassed.push(tier);
+      }
+    }
+
+    if (newlyPassed.length > 0) {
+      const silentTiers = newlyPassed.slice(0, -1);
+      const alertTier = newlyPassed[newlyPassed.length - 1];
+
+      if (silentTiers.length > 0) {
+        latest = [...new Set([...latest, ...silentTiers])].sort((a, b) => a - b);
+        db.tokens[address].milestonesFired = latest;
+        saveDB(db);
+        console.log(
+          '[milestone] ' + entry.name + ' catch-up: marked ' + silentTiers.join(',') + 'x silently',
+        );
+      }
+
+      const thumb = tokenThumbnail(entry, live);
+      const embed = new EmbedBuilder()
+        .setColor(0xffd700)
+        .setTitle('🎯 ' + alertTier + 'x — ' + entry.name + ' (' + entry.symbol + ')')
+        .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+      if (thumb) embed.setThumbnail(thumb);
+
+      await sendEmbed(client, entry.alertChannelId, embed);
+      latest = [...new Set([...latest, alertTier])].sort((a, b) => a - b);
+      db.tokens[address].milestonesFired = latest;
+      db.tokens[address].gainAlertFired = true;
+      db.tokens[address].takeProfitFired = true;
+      saveDB(db);
+      console.log('[' + alertTier + 'x] ' + entry.name);
     }
   }
 
-  console.log(`[Poller] Expiry sweep removed ${expired.length} token(s).`);
-  saveDB();
+  const storedPeak = Number(entry.peakMultiple) || 1;
+  const newPeak = Math.max(storedPeak, currentMultiple);
+  db.tokens[address].lastPrice = String(livePrice);
+  db.tokens[address].lastVolume = live.volume24h || 0;
+  db.tokens[address].lastChecked = Date.now();
+  db.tokens[address].peakMultiple = newPeak;
+  if (isSignificantNewAth(storedPeak, currentMultiple)) {
+    db.tokens[address].peakAt = Date.now();
+  } else if (db.tokens[address].peakAt == null || db.tokens[address].peakAt === '') {
+    db.tokens[address].peakAt = ensurePeakAt(entry);
+  }
+  if (live.buyPct !== null && live.buyPct !== undefined) {
+    db.tokens[address].buyPressure = live.buyPct;
+    db.tokens[address].sellPressure = 100 - live.buyPct;
+  }
 }
 
-module.exports = {
-  pollTokens,
-  postDailySummary,
-  runExpirySweep,
-  fmtUsd,
-  fmtTime,
-  fmtMultiple,
-  fmtDate,
-  fmtWallet,
-  fmtPressure,
-};
+async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}) {
+  const entry = db.tokens[address];
+  if (!entry) return;
+
+  const graduationAlertFired = entry.graduationAlertFired || false;
+  const bondingAlertFired = entry.bondingAlertFired || false;
+
+  const live = await fetchLiveData(address, entry.platform || 'dexscreener', solPriceUsd);
+  if (!live) return;
+
+  // Graduation check
+  if (live.source === 'pumpfun' && live.rawPump) {
+    const pumpData = live.rawPump;
+    if (pumpData.complete === true && !graduationAlertFired) {
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff88)
+        .setTitle('🎓 ' + entry.name + ' (' + entry.symbol + ') graduated to Raydium!')
+        .setDescription(
+          '**' + entry.name + '** completed its bonding curve.\n\n' +
+          'Posted by **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + '\n' +
+          'Entry MCap: ' + fmtUsd(entry.mcapAtCall)
+        )
+        .addFields(
+          { name: 'Final MCap', value: fmtUsd(pumpData.usd_market_cap), inline: true },
+          { name: 'Chain', value: 'SOLANA', inline: true }
+        )
+        .setFooter({ text: address })
+        .setTimestamp();
+
+      await sendEmbed(client, entry.alertChannelId, embed);
+      db.tokens[address].platform = 'dexscreener';
+      db.tokens[address].graduationAlertFired = true;
+      saveDB(db);
+      console.log('[graduation] ' + entry.name + ' graduated');
+      // Same tick: previously returned here so +75%/milestones never ran after grad.
+      let liveM = await fetchLiveData(address, 'dexscreener', solPriceUsd);
+      if (!liveM || !liveM.price) liveM = live;
+      await evaluateGainAndMilestones(client, address, db, entry, liveM, milestoneOpts);
+      return;
+    }
+
+    const newBonding = pumpData.bonding_curve_progress || 0;
+    db.tokens[address].bondingProgress = newBonding;
+
+    if (newBonding >= 85 && !bondingAlertFired) {
+      const embed = new EmbedBuilder()
+        .setColor(0xff9900)
+        .setTitle('⚡ ' + entry.name + ' (' + entry.symbol + ') — ' + newBonding.toFixed(0) + '% to Raydium')
+        .setDescription(
+          '**' + entry.name + '** is ' + newBonding.toFixed(0) + '% through its bonding curve.\n\n' +
+          'Posted by **' + entry.postedBy + '**\n' +
+          'MCap now: ' + fmtUsd(live.marketCap)
+        )
+        .setFooter({ text: address })
+        .setTimestamp();
+
+      await sendEmbed(client, entry.alertChannelId, embed);
+      db.tokens[address].bondingAlertFired = true;
+      saveDB(db);
+    }
+
+    if (newBonding < 70 && bondingAlertFired) {
+      db.tokens[address].bondingAlertFired = false;
+      saveDB(db);
+    }
+  }
+
+  await evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts);
+}
