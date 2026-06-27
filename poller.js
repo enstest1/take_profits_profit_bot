@@ -18,6 +18,11 @@ const COLD_TIER_EVERY_N_CYCLES = 5;
 /** No significant ATH in this window → poll tier cold (token must be older than this too). */
 const INACTIVE_DEMOTE_MS = 72 * 60 * 60 * 1000;
 const NEW_TOKEN_GRACE_MS = 72 * 60 * 60 * 1000;
+/** Reset milestones only when clearly below entry — not on noisy sub-1.5× API ticks. */
+const MILESTONE_RESET_MULT = 0.90;
+const MILESTONE_RESET_STREAK = 3;
+/** Tokens that already mooned keep milestone history even through brief bad ticks. */
+const MILESTONE_RESET_MAX_PEAK = 5;
 /** New peak must exceed prior peakMultiple by this fraction to refresh peakAt. */
 const MIN_NEW_ATH_BUMP_RATIO = 0.01;
 
@@ -29,8 +34,11 @@ function loadDB() {
 }
 
 function saveDB(db) {
-  try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); }
-  catch (e) { console.error('[DB] saveDB failed:', e.message); }
+  try {
+    fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+  } catch (e) {
+    console.error('[DB] saveDB failed (' + DB_PATH + '):', e.message);
+  }
 }
 
 function ensureDBSchema(db) {
@@ -695,16 +703,22 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       ? Math.max(multPrice, multMcap)
       : multPrice;
 
-  // Reset only after 2 consecutive polls below 1.5× (one bad tick was wiping milestones).
+  // Reset only after N consecutive polls well below entry (bad ticks were wiping milestones at 1.5×).
   const milestonesFired = db.tokens[address].milestonesFired || [];
   const takeProfitFired = db.tokens[address].takeProfitFired || false;
   const gainAlertFired = db.tokens[address].gainAlertFired || false;
+  const storedPeakForReset = Number(entry.peakMultiple) || 1;
 
   let lowStreak = Number(db.tokens[address].lowMultStreak) || 0;
-  if (currentMultiple < 1.5) {
+  if (currentMultiple < MILESTONE_RESET_MULT) {
     lowStreak += 1;
     db.tokens[address].lowMultStreak = lowStreak;
-    if (lowStreak >= 2 && (milestonesFired.length > 0 || takeProfitFired || gainAlertFired)) {
+    const canReset = storedPeakForReset < MILESTONE_RESET_MAX_PEAK;
+    if (
+      canReset &&
+      lowStreak >= MILESTONE_RESET_STREAK &&
+      (milestonesFired.length > 0 || takeProfitFired || gainAlertFired)
+    ) {
       db.tokens[address].milestonesFired = [];
       db.tokens[address].takeProfitFired = false;
       db.tokens[address].gainAlertFired = false;
@@ -712,7 +726,9 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       db.tokens[address].peakMultiple = currentMultiple;
       db.tokens[address].peakAt = Date.now();
       saveDB(db);
-      console.log('[reset] ' + entry.name + ' below 1.5x ×2 polls');
+      console.log(
+        '[reset] ' + entry.name + ' below ' + MILESTONE_RESET_MULT + 'x ×' + MILESTONE_RESET_STREAK + ' polls',
+      );
     }
   } else {
     db.tokens[address].lowMultStreak = 0;
@@ -754,9 +770,22 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
 
     if (newlyPassed.length > 0) {
       const silentTiers = newlyPassed.slice(0, -1);
-      const alertTier = newlyPassed[newlyPassed.length - 1];
+      let alertTier = newlyPassed[newlyPassed.length - 1];
 
-      if (silentTiers.length > 0) {
+      // DB loss / redeploy: if many tiers passed at once, mark all silently — no catch-up ping flood.
+      if (silentTiers.length >= 2 && latest.length === 0 && currentMultiple >= 4) {
+        latest = [...new Set([...latest, ...newlyPassed])].sort((a, b) => a - b);
+        db.tokens[address].milestonesFired = latest;
+        db.tokens[address].gainAlertFired = true;
+        db.tokens[address].takeProfitFired = true;
+        saveDB(db);
+        console.log(
+          '[milestone] ' + entry.name + ' full silent catch-up: marked ' + newlyPassed.join(',') + 'x (no ping)',
+        );
+        alertTier = null;
+      }
+
+      if (alertTier != null && silentTiers.length > 0 && alertTier === newlyPassed[newlyPassed.length - 1]) {
         latest = [...new Set([...latest, ...silentTiers])].sort((a, b) => a - b);
         db.tokens[address].milestonesFired = latest;
         saveDB(db);
@@ -765,20 +794,22 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
         );
       }
 
-      const thumb = tokenThumbnail(entry, live);
-      const embed = new EmbedBuilder()
-        .setColor(0xffd700)
-        .setTitle('🎯 ' + alertTier + 'x — ' + entry.name + ' (' + entry.symbol + ')')
-        .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
-      if (thumb) embed.setThumbnail(thumb);
+      if (alertTier != null) {
+        const thumb = tokenThumbnail(entry, live);
+        const embed = new EmbedBuilder()
+          .setColor(0xffd700)
+          .setTitle('🎯 ' + alertTier + 'x — ' + entry.name + ' (' + entry.symbol + ')')
+          .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+        if (thumb) embed.setThumbnail(thumb);
 
-      await sendEmbed(client, entry.alertChannelId, embed);
-      latest = [...new Set([...latest, alertTier])].sort((a, b) => a - b);
-      db.tokens[address].milestonesFired = latest;
-      db.tokens[address].gainAlertFired = true;
-      db.tokens[address].takeProfitFired = true;
-      saveDB(db);
-      console.log('[' + alertTier + 'x] ' + entry.name);
+        await sendEmbed(client, entry.alertChannelId, embed);
+        latest = [...new Set([...latest, alertTier])].sort((a, b) => a - b);
+        db.tokens[address].milestonesFired = latest;
+        db.tokens[address].gainAlertFired = true;
+        db.tokens[address].takeProfitFired = true;
+        saveDB(db);
+        console.log('[' + alertTier + 'x] ' + entry.name);
+      }
     }
   }
 
