@@ -36,8 +36,15 @@ export function initAlertGate() {
         cycles +
         ' silent poll cycle(s) — prices/milestones sync to DB only, no Discord alerts',
     );
-  } else if (readComebackRemaining() > 0) {
-    console.log('[comeback] resuming — ' + readComebackRemaining() + ' silent cycle(s) left');
+  } else {
+    if (readComebackRemaining() > 0) {
+      try {
+        fs.unlinkSync(COMEBACK_STATE_FILE);
+        console.log('[comeback] COMEBACK_SILENCE_CYCLES unset — cleared silence, alerts live');
+      } catch (e) {
+        console.error('[comeback] failed to clear silence file:', e.message);
+      }
+    }
   }
 
   if (envTruthy('MAINTENANCE_MODE')) {
