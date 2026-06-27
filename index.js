@@ -788,6 +788,12 @@ const commands = [
       opt.setName('address').setDescription('Contract address').setRequired(true)
     ),
   new SlashCommandBuilder()
+    .setName('pelpafkedup')
+    .setDescription('Emergency — stop tracking a spamming CA (same as /remove)')
+    .addStringOption(opt =>
+      opt.setName('address').setDescription('Contract address that is spazzing out').setRequired(true)
+    ),
+  new SlashCommandBuilder()
     .setName('x')
     .setDescription('Check X account profile, history and rug signals')
     .addStringOption(opt =>
@@ -995,14 +1001,44 @@ async function handleCalls(interaction) {
 async function handleRemove(interaction) {
   const address = interaction.options.getString('address').trim();
   const db = ensureDBSchema(loadDB());
-  if (!db.tokens[address]) {
-    return interaction.reply({ content: 'Not tracking ' + address, ephemeral: true });
+  const key = resolveTokenKey(db, address);
+  if (!key) {
+    return interaction.reply({ content: 'Not tracking `' + address + '`', ephemeral: true });
   }
-  const name = db.tokens[address].name;
-  const symbol = db.tokens[address].symbol;
-  delete db.tokens[address];
+  const name = db.tokens[key].name;
+  const symbol = db.tokens[key].symbol;
+  delete db.tokens[key];
   saveDB(db);
   await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')**');
+}
+
+function resolveTokenKey(db, rawAddress) {
+  const trimmed = rawAddress.trim();
+  if (db.tokens[trimmed]) return trimmed;
+  const lower = trimmed.toLowerCase();
+  if (db.tokens[lower]) return lower;
+  return Object.keys(db.tokens).find((k) => k.toLowerCase() === lower) || null;
+}
+
+/** Emergency untrack when a token spams alerts — same as /remove, public confirmation. */
+async function handlePelpaFkedup(interaction) {
+  const address = interaction.options.getString('address').trim();
+  const db = ensureDBSchema(loadDB());
+  const key = resolveTokenKey(db, address);
+  if (!key) {
+    return interaction.reply({
+      content: '🤷 Not tracking `' + address + '` — nothing to yeet.',
+      ephemeral: true,
+    });
+  }
+  const name = db.tokens[key].name;
+  const symbol = db.tokens[key].symbol;
+  delete db.tokens[key];
+  saveDB(db);
+  console.log('[pelpafkedup] ' + interaction.user.username + ' removed ' + symbol + ' (' + key + ')');
+  await interaction.reply(
+    '🚨 **Pelpa fked up** — stopped tracking **' + name + ' (' + symbol + ')**.\n`' + key + '`\nNo more alerts for this CA.',
+  );
 }
 
 // /x handler — Twttr API (RapidAPI) for profile data + memory.lol for name changes
@@ -1570,6 +1606,7 @@ client.on('interactionCreate', async (interaction) => {
   try {
     if (interaction.commandName === 'calls') return handleCalls(interaction);
     if (interaction.commandName === 'remove') return handleRemove(interaction);
+    if (interaction.commandName === 'pelpafkedup') return handlePelpaFkedup(interaction);
     if (interaction.commandName === 'x') return handleX(interaction);
     if (interaction.commandName === 'rug') return handleRug(interaction);
     if (interaction.commandName === 'rugdeep') return handleRug(interaction, 'deep');
