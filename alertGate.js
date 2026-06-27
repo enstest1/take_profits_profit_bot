@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
+const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = fs.existsSync('/data') ? '/data' : ROOT_DIR;
 export const COMEBACK_STATE_FILE = path.join(DATA_DIR, '.tp_comeback_cycles');
 
 function envTruthy(name) {
@@ -30,7 +32,13 @@ function readComebackRemaining() {
 export function initAlertGate() {
   const cycles = parseEnvInt('COMEBACK_SILENCE_CYCLES', 0);
   if (cycles > 0) {
-    fs.writeFileSync(COMEBACK_STATE_FILE, String(cycles));
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(COMEBACK_STATE_FILE, String(cycles));
+    } catch (e) {
+      console.error('[comeback] failed to arm silence file:', e.message);
+      return;
+    }
     console.log(
       '[comeback] armed ' +
         cycles +

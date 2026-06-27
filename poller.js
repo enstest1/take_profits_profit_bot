@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { EmbedBuilder } from 'discord.js';
 import {
   shouldSilenceAlerts,
@@ -7,7 +8,7 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 
-const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(new URL(import.meta.url).pathname);
+const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 /** One-time per volume: first poll after deploy only newest 5 mints may emit 🎯1x; all others skip 🎯 this cycle (avoids flood). Delete file to repeat. */
 const MILESTONE_BOOTSTRAP_FILE = path.join(DATA_DIR, '.tp_milestone_bootstrap_v2');

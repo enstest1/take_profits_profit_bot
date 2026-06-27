@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import {
   Client,
   GatewayIntentBits,
@@ -23,7 +24,7 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel],
 });
 
-const ROOT_DIR = path.dirname(new URL(import.meta.url).pathname);
+const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = fs.existsSync('/data') ? '/data' : ROOT_DIR;
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 const WATCHLIST_PATH = path.join(ROOT_DIR, 'watchlist.json');
@@ -668,9 +669,10 @@ async function fetchDeepForensics(mint, creator, deadline) {
 
 async function autoTrack(address, message) {
   const db = ensureDBSchema(loadDB());
+  const existingKey = resolveTokenKey(db, address);
 
-  if (db.tokens[address]) {
-    const existing = db.tokens[address];
+  if (existingKey) {
+    const existing = db.tokens[existingKey];
     if (existing.alertChannelId !== message.channelId) {
       if (!shouldSilenceAlerts()) {
         await message.channel.send({
@@ -683,6 +685,17 @@ async function autoTrack(address, message) {
       } else {
         console.log('[silence] skipped duplicate-CA notice for ' + existing.symbol);
       }
+    } else {
+      console.log('[autotrack] already tracking ' + existing.symbol + ' in this channel');
+      if (!shouldSilenceAlerts()) {
+        await message.channel.send({
+          embeds: [{
+            color: 0x888888,
+            description: '✓ Already tracking **' + existing.name + ' (' + existing.symbol + ')**',
+            footer: { text: 'SOLANA' }
+          }]
+        });
+      }
     }
     return;
   }
@@ -690,6 +703,15 @@ async function autoTrack(address, message) {
   const token = await fetchTokenData(address);
   if (!token) {
     console.log('[skip] ' + address.slice(0, 8) + '... — not found');
+    if (!shouldSilenceAlerts()) {
+      await message.channel.send({
+        embeds: [{
+          color: 0xff4444,
+          description: '⚠️ Could not find token data for `' + address + '` — not added to tracking',
+          footer: { text: 'SOLANA' }
+        }]
+      }).catch(() => null);
+    }
     return;
   }
 
@@ -1632,7 +1654,11 @@ client.once('ready', async () => {
   console.log('Bot online as ' + client.user.tag);
   console.log('Data directory: ' + DATA_DIR);
   await postStartupBanner(client);
-  initAlertGate();
+  try {
+    initAlertGate();
+  } catch (e) {
+    console.error('[boot] initAlertGate failed:', e.message);
+  }
   try {
     if (fs.existsSync(DB_PATH)) {
       printInspectReport(inspectTrackedJson(DB_PATH));
@@ -1646,6 +1672,12 @@ client.once('ready', async () => {
 });
 
 (async () => {
-  await registerCommands();
-  await client.login(process.env.DISCORD_TOKEN);
+  console.log('[boot] connecting to Discord (slash commands register in background)...');
+  void registerCommands();
+  try {
+    await client.login(process.env.DISCORD_TOKEN);
+  } catch (e) {
+    console.error('[boot] login failed:', e.message);
+    process.exit(1);
+  }
 })();
