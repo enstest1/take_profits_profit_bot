@@ -679,28 +679,9 @@ async function autoTrack(address, message) {
   if (existingKey) {
     const existing = db.tokens[existingKey];
     if (existing.alertChannelId !== message.channelId) {
-      if (!shouldSilenceAlerts()) {
-        await message.channel.send({
-          embeds: [{
-            color: 0xffaa00,
-            description: '👀 Already tracking **' + existing.name + ' (' + existing.symbol + ')** — first posted by **' + existing.postedBy + '** ' + fmtTime(existing.postedAt) + ' in <#' + existing.alertChannelId + '>',
-            footer: { text: 'SOLANA' }
-          }]
-        });
-      } else {
-        console.log('[silence] skipped duplicate-CA notice for ' + existing.symbol);
-      }
+      console.log('[autotrack] already tracking ' + existing.symbol + ' — first in <#' + existing.alertChannelId + '>');
     } else {
       console.log('[autotrack] already tracking ' + existing.symbol + ' in this channel');
-      if (!shouldSilenceAlerts()) {
-        await message.channel.send({
-          embeds: [{
-            color: 0x888888,
-            description: '✓ Already tracking **' + existing.name + ' (' + existing.symbol + ')**',
-            footer: { text: 'SOLANA' }
-          }]
-        });
-      }
     }
     return;
   }
