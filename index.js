@@ -706,10 +706,14 @@ async function autoTrack(address, message) {
   if (!token) {
     console.log('[skip] ' + address.slice(0, 8) + '... — not found');
     if (!shouldSilenceAlerts()) {
+      const isPairHint = isEvmAddress(address);
+      const hint = isPairHint
+        ? '\n\nPost the **token contract** (from the token page), not the Uniswap pair address from the URL.'
+        : '';
       await message.channel.send({
         embeds: [{
           color: 0xff4444,
-          description: '⚠️ Could not find token data for `' + address + '` — not added to tracking',
+          description: '⚠️ Could not find token data for `' + address + '` — not added to tracking' + hint,
           footer: { text: enabledChainsFooter() }
         }]
       }).catch(() => null);
