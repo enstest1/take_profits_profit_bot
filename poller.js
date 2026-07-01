@@ -7,7 +7,7 @@ import {
   getAlertSilenceStatus,
   tickComebackAfterPollCycle,
 } from './alertGate.js';
-import { fetchDexPair } from './dexPair.js';
+import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
 import { chainLabel, isEvmChain } from './chains.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
@@ -211,7 +211,10 @@ async function fetchLiveData(address, entry, solPriceUsd) {
   const chain = (entry?.chain || 'solana').toLowerCase();
 
   if (isEvmChain(chain)) {
-    const dex = await fetchDexPair(address, { enabledChains: [chain], chainHint: chain });
+    let dex = await fetchDexPairOnChain(chain, address, { retries: 2, timeoutMs: 10_000 });
+    if (!dex?.price) {
+      dex = await fetchDexPair(address, { enabledChains: [chain], chainHint: chain, retries: 2 });
+    }
     if (dex?.price) return dex;
     return null;
   }

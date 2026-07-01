@@ -152,47 +152,54 @@ function dexResultToToken(dex) {
 }
 
 /**
- * EVM token resolve: token API → pool API → DexScreener links in message.
+ * EVM token resolve — parallel per-chain DexScreener first (fast on Railway).
  */
 export async function resolveEvmToken(address, { evmChains, messageText } = {}) {
   const chains = evmChains || parseEnabledChains().filter((c) => c !== 'solana');
+  const normalized = String(address).toLowerCase();
 
-  let dex = await fetchDexPair(address, {
+  // DexScreener link in message → try that chain first (user workflow).
+  for (const ref of extractDexScreenerRefs(messageText)) {
+    if (!chains.includes(ref.chainId)) continue;
+    let dex = await fetchDexPairOnChain(ref.chainId, normalized, { retries: 2, timeoutMs: 10_000 });
+    if (dex?.name || dex?.symbol) {
+      console.log('[dex] link chain API → ' + dex.symbol + ' on ' + ref.chainId);
+      return dexResultToToken(dex);
+    }
+    dex = await fetchDexPairFromPool(ref.chainId, ref.address, { retries: 2, timeoutMs: 10_000 });
+    if (dex?.name || dex?.symbol) {
+      console.log('[dex] link pool → ' + dex.symbol + ' on ' + ref.chainId);
+      return dexResultToToken(dex);
+    }
+  }
+
+  // Primary: hit every enabled chain API in parallel (~10s max, not 40s+ sequential).
+  const chainResults = await Promise.allSettled(
+    chains.map((chain) => fetchDexPairOnChain(chain, normalized, { retries: 2, timeoutMs: 10_000 })),
+  );
+  for (let i = 0; i < chainResults.length; i++) {
+    const r = chainResults[i];
+    if (r.status === 'fulfilled' && r.value && (r.value.name || r.value.symbol)) {
+      console.log('[dex] parallel chain API → ' + r.value.symbol + ' on ' + chains[i]);
+      return dexResultToToken(r.value);
+    }
+  }
+
+  // Fallback: global token endpoint.
+  let dex = await fetchDexPair(normalized, {
     enabledChains: chains,
-    retries: 3,
-    timeoutMs: 15_000,
+    retries: 2,
+    timeoutMs: 12_000,
   });
   if (dex?.name || dex?.symbol) return dexResultToToken(dex);
 
+  // Pool address posted instead of token.
   for (const chain of chains) {
-    dex = await fetchDexPairOnChain(chain, address, { retries: 2, timeoutMs: 12_000 });
+    dex = await fetchDexPairFromPool(chain, normalized, { retries: 2, timeoutMs: 10_000 });
     if (dex?.name || dex?.symbol) {
-      console.log('[dex] chain API → ' + dex.symbol + ' on ' + chain);
+      console.log('[dex] pool → ' + dex.symbol + ' on ' + chain);
       return dexResultToToken(dex);
     }
-  }
-
-  for (const chain of chains) {
-    dex = await fetchDexPairFromPool(chain, address, { retries: 2, timeoutMs: 12_000 });
-    if (dex?.name || dex?.symbol) {
-      console.log('[dex] resolved pool address → ' + dex.symbol + ' on ' + chain);
-      return dexResultToToken(dex);
-    }
-  }
-
-  for (const ref of extractDexScreenerRefs(messageText)) {
-    if (!chains.includes(ref.chainId) && ref.chainId !== 'solana') continue;
-    dex = await fetchDexPairFromPool(ref.chainId, ref.address, { retries: 2 });
-    if (dex?.name || dex?.symbol) {
-      console.log('[dex] resolved from link → ' + dex.symbol + ' on ' + ref.chainId);
-      return dexResultToToken(dex);
-    }
-    dex = await fetchDexPair(ref.address, {
-      enabledChains: [ref.chainId],
-      chainHint: ref.chainId,
-      retries: 2,
-    });
-    if (dex?.name || dex?.symbol) return dexResultToToken(dex);
   }
 
   return null;
