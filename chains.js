@@ -1,14 +1,15 @@
-export const SUPPORTED_CHAINS = ['solana'];
+export const SUPPORTED_CHAINS = ['solana', 'robinhood'];
 
 const CHAIN_LABELS = {
   solana: 'SOLANA',
+  robinhood: 'ROBINHOOD',
 };
 
-/** Legacy EVM chain ids (kept for stored tokens; not enabled by default). */
-export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract'];
+/** EVM chain ids (DexScreener chainId values). */
+export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract', 'robinhood'];
 
 export function parseEnabledChains() {
-  const raw = process.env.ENABLED_CHAINS || 'solana';
+  const raw = process.env.ENABLED_CHAINS || 'solana,robinhood';
   const parsed = raw
     .split(',')
     .map((s) => s.trim().toLowerCase())
