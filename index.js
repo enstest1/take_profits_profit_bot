@@ -702,8 +702,28 @@ async function autoTrack(address, message) {
     const existing = db.tokens[existingKey];
     if (existing.alertChannelId !== message.channelId) {
       console.log('[autotrack] already tracking ' + existing.symbol + ' — first in <#' + existing.alertChannelId + '>');
+      if (!shouldSilenceAlerts()) {
+        await message.channel.send({
+          embeds: [{
+            color: 0xffaa00,
+            description:
+              '👀 Already tracking **' + existing.name + ' (' + existing.symbol + ')** — first posted by **' +
+              existing.postedBy + '** ' + fmtTime(existing.postedAt) + ' in <#' + existing.alertChannelId + '>',
+            footer: { text: chainLabel(existing.chain) },
+          }],
+        }).catch(() => null);
+      }
     } else {
       console.log('[autotrack] already tracking ' + existing.symbol + ' in this channel');
+      if (!shouldSilenceAlerts()) {
+        await message.channel.send({
+          embeds: [{
+            color: 0x888888,
+            description: '✓ Already tracking **' + existing.name + ' (' + existing.symbol + ')**',
+            footer: { text: chainLabel(existing.chain) },
+          }],
+        }).catch(() => null);
+      }
     }
     return;
   }
