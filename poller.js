@@ -8,7 +8,7 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
-import { chainLabel, isEvmChain } from './chains.js';
+import { chainLabel, isEvmChain, parseEnabledChains } from './chains.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
@@ -579,14 +579,21 @@ export async function pollTokens(client) {
       return tb - ta;
     });
 
+    const enabledChains = new Set(parseEnabledChains());
     const scheduled = [];
     let hotCount = 0;
     let warmCount = 0;
     let coldCount = 0;
     let inactiveCount = 0;
+    let skippedChainCount = 0;
     for (const address of ordered) {
       const entry = db.tokens[address];
       if (!entry) continue;
+      const entryChain = (entry.chain || 'solana').toLowerCase();
+      if (!enabledChains.has(entryChain)) {
+        skippedChainCount += 1;
+        continue;
+      }
       if (isInactiveForPolling(entry)) inactiveCount += 1;
       const tier = pollTierForEntry(entry);
       if (tier === 'hot') hotCount += 1;
@@ -600,7 +607,7 @@ export async function pollTokens(client) {
       '[poll] Cycle #' + cycleNum +
       ' scheduled ' + scheduled.length + '/' + ordered.length +
       ' tokens (hot=' + hotCount + ', warm=' + warmCount + ', cold=' + coldCount +
-      ', inactive=' + inactiveCount + ')'
+      ', inactive=' + inactiveCount + ', skippedChain=' + skippedChainCount + ')'
     );
 
     const runMilestoneBootstrap = !fs.existsSync(MILESTONE_BOOTSTRAP_FILE);

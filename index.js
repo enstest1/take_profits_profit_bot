@@ -94,6 +94,7 @@ async function runTokenPollLoop(client) {
 }
 
 console.log('[boot] Using data dir: ' + DATA_DIR);
+console.log('[boot] Enabled chains: ' + parseEnabledChains().map(chainLabel).join(' · '));
 
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
@@ -143,8 +144,10 @@ function getTokenAgeFlag(createdAtMs) {
 
 function extractAddresses(text) {
   const found = new Set();
-  const evmMatches = text.match(/\b0x[a-fA-F0-9]{40}\b/g) || [];
-  for (const addr of evmMatches) found.add(addr.toLowerCase());
+  if (evmEnabledChains().length > 0) {
+    const evmMatches = text.match(/\b0x[a-fA-F0-9]{40}\b/g) || [];
+    for (const addr of evmMatches) found.add(addr.toLowerCase());
+  }
   const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g) || [];
   for (const addr of solanaMatches) {
     if (/\d/.test(addr) && !/[0OIl]/.test(addr)) found.add(addr);
