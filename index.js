@@ -19,6 +19,15 @@ import { pollTokens } from './poller.js';
 import { initAlertGate, shouldSilenceAlerts } from './alertGate.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
+import { fetchDexPair } from './dexPair.js';
+import {
+  chainLabel,
+  enabledChainsFooter,
+  evmEnabledChains,
+  isEvmAddress,
+  isSolanaAddress,
+  parseEnabledChains,
+} from './chains.js';
 
 const client = new Client({
   intents: [
@@ -143,35 +152,74 @@ function extractAddresses(text) {
   return Array.from(found);
 }
 
-async function fetchDexScreener(address) {
-  try {
-    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const pair = data.pairs && data.pairs[0];
-    if (!pair) return null;
-    return {
-      platform: 'dexscreener',
-      name: pair.baseToken && pair.baseToken.name,
-      symbol: pair.baseToken && pair.baseToken.symbol,
-      price: pair.priceUsd || null,
-      marketCap: pair.marketCap || null,
-      volume24h: (pair.volume && pair.volume.h24) || 0,
-      liquidity: (pair.liquidity && pair.liquidity.usd) || 0,
-      buys24h: (pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0,
-      sells24h: (pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0,
-      dexUrl: pair.url || 'https://dexscreener.com/solana/' + address,
-      imageUrl: (pair.info && pair.info.imageUrl) || null,
-      pairCreatedAt: pair.pairCreatedAt || null,
-    };
-  } catch (e) {
-    console.error('[dex] failed for ' + address + ':', e.message);
+async function fetchTokenData(address) {
+  const enabled = parseEnabledChains();
+
+  if (isEvmAddress(address)) {
+    const evmChains = evmEnabledChains();
+    if (evmChains.length === 0) return null;
+    const dex = await fetchDexPair(address, { enabledChains: evmChains });
+    if (dex?.name) return { ...dex, platform: 'dexscreener' };
     return null;
   }
+
+  if (isSolanaAddress(address)) {
+    if (enabled.includes('solana')) {
+      const dex = await fetchDexPair(address, { enabledChains: ['solana'], chainHint: 'solana' });
+      if (dex?.name) return { ...dex, platform: 'dexscreener' };
+    }
+
+    const pump = await fetchPumpFun(address);
+    if (pump) {
+      const solPrice = await fetchSolPrice();
+      const pumpPrice = solPrice ? calcPumpFunPrice(pump, solPrice) : null;
+      return {
+        platform: 'pumpfun',
+        chain: 'solana',
+        name: pump.name,
+        symbol: pump.symbol,
+        price: pumpPrice ? String(pumpPrice) : null,
+        marketCap: pump.usd_market_cap || 0,
+        volume24h: 0,
+        liquidity: 0,
+        buys24h: 0,
+        sells24h: 0,
+        dexUrl: 'https://pump.fun/' + address,
+        imageUrl: pump.image_uri || null,
+        pairCreatedAt: pump.created_timestamp || null,
+        bondingProgress: pump.bonding_curve_progress || 0,
+        complete: pump.complete || false,
+        creator: pump.creator || null,
+        virtualSolReserves: pump.virtual_sol_reserves,
+        virtualTokenReserves: pump.virtual_token_reserves,
+      };
+    }
+  }
+
+  return null;
 }
 
+async function fetchDexScreener(address, chainHint) {
+  const enabled = parseEnabledChains();
+  const chains = chainHint ? [chainHint] : enabled;
+  const dex = await fetchDexPair(address, { enabledChains: chains, chainHint });
+  if (!dex) return null;
+  return {
+    platform: 'dexscreener',
+    name: dex.name,
+    symbol: dex.symbol,
+    chain: dex.chain,
+    price: dex.price,
+    marketCap: dex.marketCap,
+    volume24h: dex.volume24h,
+    liquidity: dex.liquidity,
+    buys24h: dex.buys24h,
+    sells24h: dex.sells24h,
+    dexUrl: dex.dexUrl,
+    imageUrl: dex.imageUrl,
+    pairCreatedAt: dex.pairCreatedAt,
+  };
+}
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -209,38 +257,6 @@ function calcPumpFunPrice(pump, solPrice) {
   } catch {
     return null;
   }
-}
-
-async function fetchTokenData(address) {
-  const dex = await fetchDexScreener(address);
-  if (dex && dex.name) return dex;
-
-  const pump = await fetchPumpFun(address);
-  if (pump) {
-    const solPrice = await fetchSolPrice();
-    const pumpPrice = solPrice ? calcPumpFunPrice(pump, solPrice) : null;
-    return {
-      platform: 'pumpfun',
-      name: pump.name,
-      symbol: pump.symbol,
-      price: pumpPrice ? String(pumpPrice) : null,
-      marketCap: pump.usd_market_cap || 0,
-      volume24h: 0,
-      liquidity: 0,
-      buys24h: 0,
-      sells24h: 0,
-      dexUrl: 'https://pump.fun/' + address,
-      imageUrl: pump.image_uri || null,
-      pairCreatedAt: pump.created_timestamp || null,
-      bondingProgress: pump.bonding_curve_progress || 0,
-      complete: pump.complete || false,
-      creator: pump.creator || null,
-      virtualSolReserves: pump.virtual_sol_reserves,
-      virtualTokenReserves: pump.virtual_token_reserves,
-    };
-  }
-
-  return null;
 }
 
 async function fetchRugCheckReport(mint) {
@@ -694,7 +710,7 @@ async function autoTrack(address, message) {
         embeds: [{
           color: 0xff4444,
           description: '⚠️ Could not find token data for `' + address + '` — not added to tracking',
-          footer: { text: 'SOLANA' }
+          footer: { text: enabledChainsFooter() }
         }]
       }).catch(() => null);
     }
@@ -719,7 +735,7 @@ async function autoTrack(address, message) {
     .setColor(0x00ccff)
     .setAuthor({ name: '📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')' })
     .setDescription(descParts.join('\n'))
-    .setFooter({ text: 'SOLANA' })
+    .setFooter({ text: chainLabel(token.chain) })
     .setTimestamp();
 
   if (token.imageUrl) embed.setThumbnail(token.imageUrl);
@@ -734,7 +750,7 @@ async function autoTrack(address, message) {
     address,
     name: token.name,
     symbol: token.symbol,
-    chain: 'solana',
+    chain: token.chain || 'solana',
     platform: token.platform,
     postedBy: message.author.username,
     postedByUserId: message.author.id,
@@ -768,7 +784,7 @@ async function autoTrack(address, message) {
   };
 
   saveDB(db);
-  console.log('[tracked] ' + token.name + ' (' + token.symbol + ') — posted by ' + message.author.username);
+  console.log('[tracked] ' + token.name + ' (' + token.symbol + ') [' + chainLabel(token.chain) + '] — posted by ' + message.author.username);
 }
 
 client.on('messageCreate', async (message) => {

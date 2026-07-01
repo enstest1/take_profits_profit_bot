@@ -7,6 +7,8 @@ import {
   getAlertSilenceStatus,
   tickComebackAfterPollCycle,
 } from './alertGate.js';
+import { fetchDexPair } from './dexPair.js';
+import { chainLabel } from './chains.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
@@ -204,35 +206,41 @@ function shouldPollAddressThisCycle(address, entry, cycleNum) {
   return stableAddrHash(address) % cadence === cycleNum % cadence;
 }
 
-// DexScreener
-async function fetchDexScreener(address) {
-  try {
-    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const pair = data.pairs && data.pairs[0];
-    if (!pair) return null;
-    const totalTxns = ((pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0) +
-                      ((pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0);
-    return {
-      price: pair.priceUsd ? Number(pair.priceUsd) : null,
-      marketCap: pair.marketCap || null,
-      volume24h: (pair.volume && pair.volume.h24) || null,
-      liquidity: (pair.liquidity && pair.liquidity.usd) || null,
-      priceChange1h: (pair.priceChange && pair.priceChange.h1) || null,
-      buyPct: totalTxns > 0 ? Math.round(((pair.txns.h24.buys || 0) / totalTxns) * 100) : null,
-      imageUrl: (pair.info && pair.info.imageUrl) || null,
-      source: 'dexscreener'
-    };
-  } catch (e) {
-    console.error('[dex] poll failed for ' + address + ':', e.message);
+// Fetch live price — DexScreener (all chains); pump.fun fallback for Solana only
+async function fetchLiveData(address, entry, solPriceUsd) {
+  const chain = (entry?.chain || 'solana').toLowerCase();
+
+  if (chain === 'ethereum' || chain === 'base') {
+    const dex = await fetchDexPair(address, { enabledChains: [chain], chainHint: chain });
+    if (dex?.price) return dex;
     return null;
   }
-}
 
-// pump.fun
+  const dex = await fetchDexPair(address, { enabledChains: ['solana'], chainHint: 'solana' });
+  if (dex?.price) return dex;
+
+  if (solPriceUsd && entry?.platform === 'pumpfun') {
+    const pump = await fetchPumpFun(address);
+    if (pump) {
+      const price = calcPumpFunPrice(pump, solPriceUsd);
+      return {
+        price,
+        marketCap: pump.usd_market_cap || null,
+        volume24h: null,
+        liquidity: null,
+        priceChange1h: null,
+        buyPct: null,
+        bondingProgress: pump.bonding_curve_progress || 0,
+        complete: pump.complete || false,
+        source: 'pumpfun',
+        imageUrl: pump.image_uri || null,
+        rawPump: pump,
+      };
+    }
+  }
+
+  return null;
+}
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
@@ -270,34 +278,6 @@ function calcPumpFunPrice(pumpData, solPrice) {
   } catch {
     return null;
   }
-}
-
-// Fetch live price — DexScreener first, pump.fun fallback
-async function fetchLiveData(address, platform, solPriceUsd) {
-  const dex = await fetchDexScreener(address);
-  if (dex && dex.price) return dex;
-
-  if (solPriceUsd) {
-    const pump = await fetchPumpFun(address);
-    if (pump) {
-      const price = calcPumpFunPrice(pump, solPriceUsd);
-      return {
-        price,
-        marketCap: pump.usd_market_cap || null,
-        volume24h: null,
-        liquidity: null,
-        priceChange1h: null,
-        buyPct: null,
-        bondingProgress: pump.bonding_curve_progress || 0,
-        complete: pump.complete || false,
-        source: 'pumpfun',
-        imageUrl: pump.image_uri || null,
-        rawPump: pump
-      };
-    }
-  }
-
-  return null;
 }
 
 async function sendEmbed(client, channelId, embed, label = 'alert') {
@@ -406,7 +386,7 @@ export async function buildDailySummaryParts() {
 
   const solPriceUsd = await fetchSolPrice();
   const results = await Promise.allSettled(
-    entries.map((e) => fetchLiveData(e.address, e.platform, solPriceUsd))
+    entries.map((e) => fetchLiveData(e.address, e, solPriceUsd))
   );
 
   const rows = [];
@@ -839,7 +819,7 @@ async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}
   const graduationAlertFired = entry.graduationAlertFired || false;
   const bondingAlertFired = entry.bondingAlertFired || false;
 
-  const live = await fetchLiveData(address, entry.platform || 'dexscreener', solPriceUsd);
+  const live = await fetchLiveData(address, entry, solPriceUsd);
   if (!live) return;
 
   // Graduation check
@@ -856,7 +836,7 @@ async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}
         )
         .addFields(
           { name: 'Final MCap', value: fmtUsd(pumpData.usd_market_cap), inline: true },
-          { name: 'Chain', value: 'SOLANA', inline: true }
+          { name: 'Chain', value: chainLabel(entry.chain), inline: true }
         )
         .setFooter({ text: address })
         .setTimestamp();
@@ -867,7 +847,7 @@ async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}
       saveDB(db);
       console.log('[graduation] ' + entry.name + ' graduated');
       // Same tick: previously returned here so +75%/milestones never ran after grad.
-      let liveM = await fetchLiveData(address, 'dexscreener', solPriceUsd);
+      let liveM = await fetchLiveData(address, entry, solPriceUsd);
       if (!liveM || !liveM.price) liveM = live;
       await evaluateGainAndMilestones(client, address, db, entry, liveM, milestoneOpts);
       return;
