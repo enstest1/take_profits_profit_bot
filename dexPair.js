@@ -117,6 +117,36 @@ export async function fetchDexPairFromPool(chainId, poolAddress, options = {}) {
   return null;
 }
 
+/** Chain-scoped token lookup (often faster / more reliable than /tokens/{address}). */
+export async function fetchDexPairOnChain(chainId, tokenAddress, options = {}) {
+  const chain = normalizeChainId(chainId);
+  const attempts = options.retries ?? 2;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(
+        'https://api.dexscreener.com/token-pairs/v1/' + chain + '/' + tokenAddress,
+        { signal: AbortSignal.timeout(options.timeoutMs ?? 12_000) },
+      );
+      if (!res.ok) continue;
+      const pairs = await res.json();
+      if (!Array.isArray(pairs) || pairs.length === 0) continue;
+      const pair = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
+      const target = String(tokenAddress).toLowerCase();
+      let tokenAddr = pair.baseToken?.address;
+      if (pair.baseToken?.address?.toLowerCase() !== target && pair.quoteToken?.address?.toLowerCase() === target) {
+        tokenAddr = pair.quoteToken.address;
+      }
+      if (!tokenAddr) continue;
+      const meta = tokenMetaFromPair(pair, tokenAddr);
+      if (!meta.name && !meta.symbol) continue;
+      return pairToToken(pair, tokenAddr);
+    } catch {
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+  return null;
+}
+
 function dexResultToToken(dex) {
   return { ...dex, platform: 'dexscreener' };
 }
@@ -133,6 +163,14 @@ export async function resolveEvmToken(address, { evmChains, messageText } = {}) 
     timeoutMs: 15_000,
   });
   if (dex?.name || dex?.symbol) return dexResultToToken(dex);
+
+  for (const chain of chains) {
+    dex = await fetchDexPairOnChain(chain, address, { retries: 2, timeoutMs: 12_000 });
+    if (dex?.name || dex?.symbol) {
+      console.log('[dex] chain API → ' + dex.symbol + ' on ' + chain);
+      return dexResultToToken(dex);
+    }
+  }
 
   for (const chain of chains) {
     dex = await fetchDexPairFromPool(chain, address, { retries: 2, timeoutMs: 12_000 });
@@ -202,6 +240,7 @@ export async function fetchDexPair(address, options = {}) {
     } catch (e) {
       lastErr = e;
     }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 600 * (i + 1)));
   }
 
   console.error('[dex] failed for ' + address.slice(0, 10) + '...:', lastErr?.message || 'unknown');
