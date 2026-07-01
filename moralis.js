@@ -15,6 +15,7 @@ const CHAIN_MAP = {
   ethereum: "eth",
   base: "base",
   bsc: "bsc",
+  abstract: "abstract",
   polygon: "polygon",
 };
 

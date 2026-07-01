@@ -8,7 +8,7 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 import { fetchDexPair } from './dexPair.js';
-import { chainLabel } from './chains.js';
+import { chainLabel, isEvmChain } from './chains.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
@@ -210,7 +210,7 @@ function shouldPollAddressThisCycle(address, entry, cycleNum) {
 async function fetchLiveData(address, entry, solPriceUsd) {
   const chain = (entry?.chain || 'solana').toLowerCase();
 
-  if (chain === 'ethereum' || chain === 'base') {
+  if (isEvmChain(chain)) {
     const dex = await fetchDexPair(address, { enabledChains: [chain], chainHint: chain });
     if (dex?.price) return dex;
     return null;

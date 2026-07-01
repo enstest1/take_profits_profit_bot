@@ -1,13 +1,18 @@
-export const SUPPORTED_CHAINS = ['solana', 'ethereum', 'base'];
+export const SUPPORTED_CHAINS = ['solana', 'ethereum', 'base', 'bsc', 'abstract'];
 
 const CHAIN_LABELS = {
   solana: 'SOLANA',
   ethereum: 'ETHEREUM',
   base: 'BASE',
+  bsc: 'BNB',
+  abstract: 'ABSTRACT',
 };
 
+/** EVM chain ids we support (DexScreener chainId values). */
+export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract'];
+
 export function parseEnabledChains() {
-  const raw = process.env.ENABLED_CHAINS || 'solana,ethereum,base';
+  const raw = process.env.ENABLED_CHAINS || 'solana,ethereum,base,bsc,abstract';
   const parsed = raw
     .split(',')
     .map((s) => s.trim().toLowerCase())
@@ -27,6 +32,10 @@ export function isSolanaAddress(address) {
   );
 }
 
+export function isEvmChain(chain) {
+  return EVM_CHAINS.includes(String(chain || '').toLowerCase());
+}
+
 export function chainLabel(chain) {
   const key = (chain || 'solana').toLowerCase();
   return CHAIN_LABELS[key] || key.toUpperCase();
@@ -37,5 +46,5 @@ export function enabledChainsFooter() {
 }
 
 export function evmEnabledChains() {
-  return parseEnabledChains().filter((c) => c === 'ethereum' || c === 'base');
+  return parseEnabledChains().filter((c) => c !== 'solana');
 }
