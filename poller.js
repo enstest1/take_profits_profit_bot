@@ -8,7 +8,7 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
-import { chainLabel, isEvmChain, parseEnabledChains } from './chains.js';
+import { chainLabel, isEvmChain, isEvmAddress, parseEnabledChains, evmEnabledChains } from './chains.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
@@ -590,7 +590,7 @@ export async function pollTokens(client) {
       const entry = db.tokens[address];
       if (!entry) continue;
       const entryChain = (entry.chain || 'solana').toLowerCase();
-      if (!enabledChains.has(entryChain)) {
+      if (!enabledChains.has(entryChain) || (isEvmAddress(address) && evmEnabledChains().length === 0)) {
         skippedChainCount += 1;
         continue;
       }
