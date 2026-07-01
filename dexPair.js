@@ -59,6 +59,7 @@ function pairToToken(pair, address) {
     ((pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0);
 
   return {
+    address: String(address || '').toLowerCase(),
     chain: normalizeChainId(pair.chainId),
     name: meta.name,
     symbol: meta.symbol,
@@ -77,19 +78,101 @@ function pairToToken(pair, address) {
   };
 }
 
+/** DexScreener URLs in chat: dexscreener.com/{chain}/{address} */
+export function extractDexScreenerRefs(text) {
+  const refs = [];
+  if (!text) return refs;
+  const re = /dexscreener\.com\/([a-z0-9]+)\/(0x[a-fA-F0-9]{40})/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    refs.push({ chainId: m[1].toLowerCase(), address: m[2].toLowerCase() });
+  }
+  return refs;
+}
+
+/** Lookup by liquidity pool / pair contract (DexScreener pairs endpoint). */
+export async function fetchDexPairFromPool(chainId, poolAddress, options = {}) {
+  const chain = normalizeChainId(chainId);
+  const attempts = options.retries ?? 2;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(
+        'https://api.dexscreener.com/latest/dex/pairs/' + chain + '/' + poolAddress,
+        { signal: AbortSignal.timeout(options.timeoutMs ?? 12_000) },
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      const pairs = data.pairs || [];
+      if (pairs.length === 0) continue;
+      const pair = pairs[0];
+      const tokenAddr = pair.baseToken?.address;
+      if (!tokenAddr) continue;
+      const meta = tokenMetaFromPair(pair, tokenAddr);
+      if (!meta.name && !meta.symbol) continue;
+      return pairToToken(pair, tokenAddr);
+    } catch {
+      /* retry */
+    }
+  }
+  return null;
+}
+
+function dexResultToToken(dex) {
+  return { ...dex, platform: 'dexscreener' };
+}
+
+/**
+ * EVM token resolve: token API → pool API → DexScreener links in message.
+ */
+export async function resolveEvmToken(address, { evmChains, messageText } = {}) {
+  const chains = evmChains || parseEnabledChains().filter((c) => c !== 'solana');
+
+  let dex = await fetchDexPair(address, {
+    enabledChains: chains,
+    retries: 3,
+    timeoutMs: 15_000,
+  });
+  if (dex?.name || dex?.symbol) return dexResultToToken(dex);
+
+  for (const chain of chains) {
+    dex = await fetchDexPairFromPool(chain, address, { retries: 2, timeoutMs: 12_000 });
+    if (dex?.name || dex?.symbol) {
+      console.log('[dex] resolved pool address → ' + dex.symbol + ' on ' + chain);
+      return dexResultToToken(dex);
+    }
+  }
+
+  for (const ref of extractDexScreenerRefs(messageText)) {
+    if (!chains.includes(ref.chainId) && ref.chainId !== 'solana') continue;
+    dex = await fetchDexPairFromPool(ref.chainId, ref.address, { retries: 2 });
+    if (dex?.name || dex?.symbol) {
+      console.log('[dex] resolved from link → ' + dex.symbol + ' on ' + ref.chainId);
+      return dexResultToToken(dex);
+    }
+    dex = await fetchDexPair(ref.address, {
+      enabledChains: [ref.chainId],
+      chainHint: ref.chainId,
+      retries: 2,
+    });
+    if (dex?.name || dex?.symbol) return dexResultToToken(dex);
+  }
+
+  return null;
+}
+
 /**
  * Fetch best DexScreener pair for an address, filtered to enabled chains.
  * @param {string} address
  * @param {{ enabledChains?: string[], chainHint?: string }} options
  */
 export async function fetchDexPair(address, options = {}) {
-  const attempts = options.retries ?? 2;
+  const attempts = options.retries ?? 3;
   let lastErr = null;
 
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
-        signal: AbortSignal.timeout(options.timeoutMs ?? 12_000),
+        signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
       });
       if (!res.ok) {
         lastErr = new Error('HTTP ' + res.status);

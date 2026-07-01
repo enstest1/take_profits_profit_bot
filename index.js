@@ -19,7 +19,7 @@ import { pollTokens } from './poller.js';
 import { initAlertGate, shouldSilenceAlerts } from './alertGate.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
-import { fetchDexPair } from './dexPair.js';
+import { fetchDexPair, resolveEvmToken, fetchDexPairFromPool, extractDexScreenerRefs } from './dexPair.js';
 import {
   chainLabel,
   enabledChainsFooter,
@@ -152,15 +152,13 @@ function extractAddresses(text) {
   return Array.from(found);
 }
 
-async function fetchTokenData(address) {
+async function fetchTokenData(address, messageText = '') {
   const enabled = parseEnabledChains();
 
   if (isEvmAddress(address)) {
     const evmChains = evmEnabledChains();
     if (evmChains.length === 0) return null;
-    const dex = await fetchDexPair(address, { enabledChains: evmChains });
-    if (dex?.name) return { ...dex, platform: 'dexscreener' };
-    return null;
+    return resolveEvmToken(address, { evmChains, messageText });
   }
 
   if (isSolanaAddress(address)) {
@@ -702,18 +700,35 @@ async function autoTrack(address, message) {
     return;
   }
 
-  const token = await fetchTokenData(address);
+  const token = await fetchTokenData(address, message.content);
   if (!token) {
     console.log('[skip] ' + address.slice(0, 8) + '... — not found');
     if (!shouldSilenceAlerts()) {
-      const isPairHint = isEvmAddress(address);
-      const hint = isPairHint
-        ? '\n\nPost the **token contract** (from the token page), not the Uniswap pair address from the URL.'
-        : '';
+      let extra = '';
+      if (isEvmAddress(address)) {
+        const refs = extractDexScreenerRefs(message.content);
+        let isPool = false;
+        for (const chain of evmEnabledChains()) {
+          const pool = await fetchDexPairFromPool(chain, address, { retries: 1 });
+          if (pool) {
+            isPool = true;
+            extra =
+              '\n\nThat address is a **pool/pair**, not the token. Use:\n`' +
+              (pool.address || address) +
+              '`';
+            break;
+          }
+        }
+        if (!isPool && refs.length > 0) {
+          extra = '\n\nDexScreener timed out or is slow — **try reposting** the same CA, or drop the link again.';
+        } else if (!isPool) {
+          extra = '\n\nNo DexScreener listing yet, or temporary API timeout — **try again in a moment.**';
+        }
+      }
       await message.channel.send({
         embeds: [{
           color: 0xff4444,
-          description: '⚠️ Could not find token data for `' + address + '` — not added to tracking' + hint,
+          description: '⚠️ Could not find token data for `' + address + '` — not added to tracking' + extra,
           footer: { text: enabledChainsFooter() }
         }]
       }).catch(() => null);
@@ -750,8 +765,12 @@ async function autoTrack(address, message) {
   let buyPressurePct = null;
   if (totalTxns > 0) buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
 
-  db.tokens[address] = {
-    address,
+  const storageKey = isEvmAddress(address) || isEvmAddress(token.address)
+    ? String(token.address || address).toLowerCase()
+    : (token.address || address);
+
+  db.tokens[storageKey] = {
+    address: storageKey,
     name: token.name,
     symbol: token.symbol,
     chain: token.chain || 'solana',
