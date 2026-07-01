@@ -155,18 +155,23 @@ function extractAddresses(text) {
   return Array.from(found);
 }
 
-async function fetchTokenData(address, messageText = '') {
+async function fetchTokenData(address, messageText = '', { autotrack = false } = {}) {
   const enabled = parseEnabledChains();
+  const dexOpts = autotrack ? { retries: 5, timeoutMs: 25_000 } : {};
 
   if (isEvmAddress(address)) {
     const evmChains = evmEnabledChains();
     if (evmChains.length === 0) return null;
-    return resolveEvmToken(address, { evmChains, messageText });
+    return resolveEvmToken(address, { evmChains, messageText, ...dexOpts });
   }
 
   if (isSolanaAddress(address)) {
     if (enabled.includes('solana')) {
-      const dex = await fetchDexPair(address, { enabledChains: ['solana'], chainHint: 'solana' });
+      const dex = await fetchDexPair(address, {
+        enabledChains: ['solana'],
+        chainHint: 'solana',
+        ...dexOpts,
+      });
       if (dex?.name) return { ...dex, platform: 'dexscreener' };
     }
 
@@ -703,7 +708,15 @@ async function autoTrack(address, message) {
     return;
   }
 
-  const token = await fetchTokenData(address, message.content);
+  let token = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    token = await fetchTokenData(address, message.content, { autotrack: true });
+    if (token) break;
+    if (attempt < 2) {
+      console.log('[autotrack] retry ' + (attempt + 2) + '/3 for ' + address.slice(0, 10) + '...');
+      await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+    }
+  }
   if (!token) {
     console.log('[skip] ' + address.slice(0, 8) + '... — not found');
     if (!shouldSilenceAlerts()) {

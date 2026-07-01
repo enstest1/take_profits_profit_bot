@@ -127,6 +127,10 @@ export async function fetchDexPairOnChain(chainId, tokenAddress, options = {}) {
         'https://api.dexscreener.com/token-pairs/v1/' + chain + '/' + tokenAddress,
         { signal: AbortSignal.timeout(options.timeoutMs ?? 12_000) },
       );
+      if (res.status === 429) {
+        if (i < attempts - 1) await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+        continue;
+      }
       if (!res.ok) continue;
       const pairs = await res.json();
       if (!Array.isArray(pairs) || pairs.length === 0) continue;
@@ -154,19 +158,20 @@ function dexResultToToken(dex) {
 /**
  * EVM token resolve — parallel per-chain DexScreener first (fast on Railway).
  */
-export async function resolveEvmToken(address, { evmChains, messageText } = {}) {
+export async function resolveEvmToken(address, { evmChains, messageText, retries, timeoutMs } = {}) {
   const chains = evmChains || parseEnabledChains().filter((c) => c !== 'solana');
   const normalized = String(address).toLowerCase();
+  const fetchOpts = { retries: retries ?? 2, timeoutMs: timeoutMs ?? 10_000 };
 
   // DexScreener link in message → try that chain first (user workflow).
   for (const ref of extractDexScreenerRefs(messageText)) {
     if (!chains.includes(ref.chainId)) continue;
-    let dex = await fetchDexPairOnChain(ref.chainId, normalized, { retries: 2, timeoutMs: 10_000 });
+    let dex = await fetchDexPairOnChain(ref.chainId, normalized, fetchOpts);
     if (dex?.name || dex?.symbol) {
       console.log('[dex] link chain API → ' + dex.symbol + ' on ' + ref.chainId);
       return dexResultToToken(dex);
     }
-    dex = await fetchDexPairFromPool(ref.chainId, ref.address, { retries: 2, timeoutMs: 10_000 });
+    dex = await fetchDexPairFromPool(ref.chainId, ref.address, fetchOpts);
     if (dex?.name || dex?.symbol) {
       console.log('[dex] link pool → ' + dex.symbol + ' on ' + ref.chainId);
       return dexResultToToken(dex);
@@ -175,7 +180,7 @@ export async function resolveEvmToken(address, { evmChains, messageText } = {}) 
 
   // Primary: hit every enabled chain API in parallel (~10s max, not 40s+ sequential).
   const chainResults = await Promise.allSettled(
-    chains.map((chain) => fetchDexPairOnChain(chain, normalized, { retries: 2, timeoutMs: 10_000 })),
+    chains.map((chain) => fetchDexPairOnChain(chain, normalized, fetchOpts)),
   );
   for (let i = 0; i < chainResults.length; i++) {
     const r = chainResults[i];
@@ -188,14 +193,14 @@ export async function resolveEvmToken(address, { evmChains, messageText } = {}) 
   // Fallback: global token endpoint.
   let dex = await fetchDexPair(normalized, {
     enabledChains: chains,
-    retries: 2,
-    timeoutMs: 12_000,
+    retries: fetchOpts.retries,
+    timeoutMs: fetchOpts.timeoutMs,
   });
   if (dex?.name || dex?.symbol) return dexResultToToken(dex);
 
   // Pool address posted instead of token.
   for (const chain of chains) {
-    dex = await fetchDexPairFromPool(chain, normalized, { retries: 2, timeoutMs: 10_000 });
+    dex = await fetchDexPairFromPool(chain, normalized, fetchOpts);
     if (dex?.name || dex?.symbol) {
       console.log('[dex] pool → ' + dex.symbol + ' on ' + chain);
       return dexResultToToken(dex);
@@ -221,6 +226,9 @@ export async function fetchDexPair(address, options = {}) {
       });
       if (!res.ok) {
         lastErr = new Error('HTTP ' + res.status);
+        if (res.status === 429 && i < attempts - 1) {
+          await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+        }
         continue;
       }
 
