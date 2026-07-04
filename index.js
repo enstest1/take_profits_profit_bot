@@ -22,6 +22,14 @@ import { runVolumeBackup } from './scripts/backup-volume.mjs';
 import { runMintCaseRepair } from './scripts/repair-mint-case.mjs';
 import { fetchDexPair } from './dexPair.js';
 import {
+  DATA_DIR,
+  DB_PATH,
+  loadDB,
+  saveDB,
+  ensureDBSchema,
+  markRemovedThisCycle,
+} from './dbStore.js';
+import {
   chainLabel,
   enabledChainsFooter,
   isSolanaAddress,
@@ -40,8 +48,6 @@ const client = new Client({
 });
 
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = fs.existsSync('/data') ? '/data' : ROOT_DIR;
-const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 const WATCHLIST_PATH = path.join(ROOT_DIR, 'watchlist.json');
 const RUG_CACHE_TTL_MS = 60 * 1000;
 const rugCache = {};
@@ -96,23 +102,6 @@ async function runTokenPollLoop(client) {
 
 console.log('[boot] Using data dir: ' + DATA_DIR);
 console.log('[boot] Enabled chains: ' + parseEnabledChains().map(chainLabel).join(' · '));
-
-function loadDB() {
-  try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
-  catch { return { tokens: {}, watchlist: {}, wallets: {} }; }
-}
-
-function saveDB(db) {
-  try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); }
-  catch (e) { console.error('[DB] saveDB failed:', e.message); }
-}
-
-function ensureDBSchema(db) {
-  if (!db.tokens) db.tokens = {};
-  if (!db.watchlist) db.watchlist = {};
-  if (!db.wallets) db.wallets = {};
-  return db;
-}
 
 function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -213,44 +202,6 @@ async function fetchDexScreener(address, chainHint) {
     imageUrl: dex.imageUrl,
     pairCreatedAt: dex.pairCreatedAt,
   };
-}
-async function fetchPumpFun(address) {
-  try {
-    const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!res.ok) return null;
-    const d = await res.json();
-    if (!d || !d.mint || !d.name) return null;
-    return d;
-  } catch (e) {
-    console.error('[pumpfun] failed for ' + address + ':', e.message);
-    return null;
-  }
-}
-
-async function fetchSolPrice() {
-  try {
-    const res = await fetch(
-      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-      { signal: AbortSignal.timeout(6000) }
-    );
-    const data = await res.json();
-    return (data && data.solana && data.solana.usd) || null;
-  } catch {
-    return null;
-  }
-}
-
-function calcPumpFunPrice(pump, solPrice) {
-  try {
-    const solRes = Number(pump.virtual_sol_reserves);
-    const tokRes = Number(pump.virtual_token_reserves);
-    if (!tokRes) return null;
-    return (solRes / 1e9) / (tokRes / 1e6) * solPrice;
-  } catch {
-    return null;
-  }
 }
 
 async function fetchRugCheckReport(mint) {
@@ -1031,30 +982,41 @@ async function handleDevsRandom(interaction) {
 async function handleCalls(interaction) {
   await interaction.deferReply();
   const db = ensureDBSchema(loadDB());
-  const entries = Object.values(db.tokens || {});
+  const entries = Object.values(db.tokens || {})
+    .sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0));
   if (entries.length === 0) {
     return interaction.editReply('Nothing tracked yet — drop a contract address in chat.');
   }
-  const liveData = await Promise.allSettled(
-    entries.map(e => fetchTokenData(e.address).catch(() => null))
-  );
-  const lines = entries.map((entry, i) => {
-    const live = liveData[i].status === 'fulfilled' ? liveData[i].value : null;
-    const livePrice = live && live.price ? Number(live.price) : null;
-    const priceAtCall = entry.priceAtCall ? Number(entry.priceAtCall) : null;
-    let multipleStr = '—';
-    if (livePrice && priceAtCall && priceAtCall > 0) {
-      const mult = livePrice / priceAtCall;
-      multipleStr = mult >= 2 ? '🚀 **' + mult.toFixed(2) + 'x**' : mult >= 1 ? '📈 ' + mult.toFixed(2) + 'x' : '📉 ' + mult.toFixed(2) + 'x';
+
+  const STALE_MS = 15 * 60 * 1000;
+  const lines = entries.slice(0, 40).map((entry) => {
+    const last = entry.lastPrice ? Number(entry.lastPrice) : null;
+    const call = entry.priceAtCall ? Number(entry.priceAtCall) : null;
+    let multStr = '—';
+    if (last && call && call > 0) {
+      const mult = last / call;
+      const stale = Date.now() - (entry.lastChecked || 0) > STALE_MS ? ' ⏳' : '';
+      const backfillMark = entry.priceAtCallBackfilled ? ' ~' : '';
+      multStr =
+        (mult >= 2 ? '🚀 **' : mult >= 1 ? '📈 ' : '📉 ') +
+        mult.toFixed(2) + 'x' +
+        (mult >= 2 ? '**' : '') +
+        stale + backfillMark;
     }
-    return '**' + entry.name + ' (' + entry.symbol + ')** — ' + multipleStr + '\n' +
-           '└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt) + ' · MCap: ' + fmtUsd(live ? live.marketCap : null);
+    return '**' + entry.name + ' (' + entry.symbol + ')** — ' + multStr +
+           '\n└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt);
   });
+
+  const footer =
+    'showing newest 40 of ' + entries.length +
+    ' · ⏳ = stale (>15m since last poll)' +
+    (entries.some((e) => e.priceAtCallBackfilled) ? ' · ~ = backfilled call price' : '');
+
   const embed = new EmbedBuilder()
     .setColor(0x7c3aed)
     .setTitle('Tracked Tokens')
     .setDescription(lines.join('\n\n').slice(0, 4000))
-    .setFooter({ text: entries.length + ' token' + (entries.length !== 1 ? 's' : '') + ' being watched' })
+    .setFooter({ text: footer })
     .setTimestamp();
   await interaction.editReply({ embeds: [embed] });
 }
@@ -1069,6 +1031,7 @@ async function handleRemove(interaction) {
   const name = db.tokens[key].name;
   const symbol = db.tokens[key].symbol;
   delete db.tokens[key];
+  markRemovedThisCycle(key);
   saveDB(db);
   await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')**');
 }
@@ -1104,6 +1067,7 @@ async function handlePelpaFkedup(interaction) {
   const name = db.tokens[key].name;
   const symbol = db.tokens[key].symbol;
   delete db.tokens[key];
+  markRemovedThisCycle(key);
   saveDB(db);
   console.log('[pelpafkedup] ' + interaction.user.username + ' removed ' + symbol + ' (' + key + ')');
   await interaction.reply(
