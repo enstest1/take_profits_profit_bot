@@ -1,15 +1,14 @@
-export const SUPPORTED_CHAINS = ['solana', 'robinhood'];
+export const SUPPORTED_CHAINS = ['solana'];
 
 const CHAIN_LABELS = {
   solana: 'SOLANA',
-  robinhood: 'ROBINHOOD',
 };
 
-/** EVM chain ids (DexScreener chainId values). */
+/** Legacy EVM chain ids (stored tokens only — not enabled for auto-track). */
 export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract', 'robinhood'];
 
 export function parseEnabledChains() {
-  const raw = process.env.ENABLED_CHAINS || 'solana,robinhood';
+  const raw = process.env.ENABLED_CHAINS || 'solana';
   const parsed = raw
     .split(',')
     .map((s) => s.trim().toLowerCase())
@@ -44,4 +43,9 @@ export function enabledChainsFooter() {
 
 export function evmEnabledChains() {
   return parseEnabledChains().filter((c) => c !== 'solana');
+}
+
+/** Canonical DB key for a Solana mint. */
+export function storageKeyForMint(address, token) {
+  return String(token?.address || address);
 }

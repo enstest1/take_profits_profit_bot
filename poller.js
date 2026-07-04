@@ -8,7 +8,7 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
-import { chainLabel, isEvmChain, isEvmAddress, parseEnabledChains, evmEnabledChains } from './chains.js';
+import { chainLabel, isEvmAddress } from './chains.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
@@ -18,6 +18,10 @@ const HOT_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const WARM_TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const WARM_TIER_EVERY_N_CYCLES = 2;
 const COLD_TIER_EVERY_N_CYCLES = 5;
+/** Max concurrent DexScreener requests during a poll cycle. */
+const POLL_CONCURRENCY = 6;
+/** Pause between starting each token fetch (ms) — reduces 429 rate limits. */
+const POLL_STAGGER_MS = 150;
 /** No significant ATH in this window → poll tier cold (token must be older than this too). */
 const INACTIVE_DEMOTE_MS = 72 * 60 * 60 * 1000;
 const NEW_TOKEN_GRACE_MS = 72 * 60 * 60 * 1000;
@@ -31,6 +35,9 @@ const MIN_NEW_ATH_BUMP_RATIO = 0.01;
 
 const SUMMARY_CHANNEL_ID = process.env.SUMMARY_CHANNEL_ID || '1452152164699869298';
 
+/** Keys tracked at poll cycle start — used to merge saves without clobbering mid-cycle autoTrack. */
+let activePollTrackedKeys = null;
+
 function loadDB() {
   try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
   catch { return { tokens: {}, watchlist: {}, wallets: {} }; }
@@ -38,7 +45,10 @@ function loadDB() {
 
 function saveDB(db) {
   try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+    const payload = activePollTrackedKeys
+      ? mergePollSnapshot(db, activePollTrackedKeys)
+      : db;
+    fs.writeFileSync(DB_PATH, JSON.stringify(payload, null, 2));
   } catch (e) {
     console.error('[DB] saveDB failed (' + DB_PATH + '):', e.message);
   }
@@ -180,23 +190,21 @@ function pollTierForEntry(entry) {
   const ageMs = entryAgeMs(entry);
   const milestones = Array.isArray(entry?.milestonesFired) ? entry.milestonesFired.length : 0;
 
-  if (milestones === 0 || ageMs <= HOT_TOKEN_MAX_AGE_MS) {
-    return 'hot';
-  }
+  // Fresh calls (<24h): every cycle
+  if (ageMs <= HOT_TOKEN_MAX_AGE_MS) return 'hot';
 
-  if (isInactiveForPolling(entry)) {
-    return 'cold';
-  }
+  if (isInactiveForPolling(entry)) return 'cold';
 
-  if (ageMs <= WARM_TOKEN_MAX_AGE_MS) {
-    return 'hot';
-  }
-
-  const peakMultiple = Number(entry?.peakMultiple) || 1;
-  if (peakMultiple >= 1.5) {
+  // Runners that already hit milestones stay on the radar
+  if (milestones > 0) {
+    if (ageMs <= WARM_TOKEN_MAX_AGE_MS) return 'hot';
+    const peakMultiple = Number(entry?.peakMultiple) || 1;
+    if (peakMultiple >= 1.5) return 'warm';
     return 'warm';
   }
-  return 'warm';
+
+  // Old tokens that never hit a milestone — cold (was hot for all ~1700 dead tokens)
+  return 'cold';
 }
 
 function shouldPollAddressThisCycle(address, entry, cycleNum) {
@@ -206,20 +214,20 @@ function shouldPollAddressThisCycle(address, entry, cycleNum) {
   return stableAddrHash(address) % cadence === cycleNum % cadence;
 }
 
-// Fetch live price — DexScreener (all chains); pump.fun fallback for Solana only
+// Fetch live price — DexScreener (Solana); pump.fun fallback for bonding curve
 async function fetchLiveData(address, entry, solPriceUsd) {
   const chain = (entry?.chain || 'solana').toLowerCase();
+  if (chain !== 'solana') return null;
 
-  if (isEvmChain(chain)) {
-    let dex = await fetchDexPairOnChain(chain, address, { retries: 2, timeoutMs: 10_000 });
-    if (!dex?.price) {
-      dex = await fetchDexPair(address, { enabledChains: [chain], chainHint: chain, retries: 2 });
-    }
-    if (dex?.price) return dex;
-    return null;
+  let dex = await fetchDexPairOnChain('solana', address, { retries: 2, timeoutMs: 10_000 });
+  if (!dex?.price) {
+    dex = await fetchDexPair(address, {
+      enabledChains: ['solana'],
+      chainHint: 'solana',
+      retries: 2,
+      timeoutMs: 12_000,
+    });
   }
-
-  const dex = await fetchDexPair(address, { enabledChains: ['solana'], chainHint: 'solana' });
   if (dex?.price) return dex;
 
   if (solPriceUsd && entry?.platform === 'pumpfun') {
@@ -281,6 +289,28 @@ function calcPumpFunPrice(pumpData, solPrice) {
   } catch {
     return null;
   }
+}
+
+async function runPollBatch(items, fn) {
+  const queue = items.slice();
+  async function worker() {
+    while (queue.length > 0) {
+      const address = queue.shift();
+      if (!address) break;
+      await fn(address);
+      if (POLL_STAGGER_MS > 0) await new Promise((r) => setTimeout(r, POLL_STAGGER_MS));
+    }
+  }
+  await Promise.all(Array.from({ length: POLL_CONCURRENCY }, () => worker()));
+}
+
+/** Merge in-cycle poll mutations into latest on-disk DB so mid-cycle autoTrack saves are not lost. */
+function mergePollSnapshot(stagedDb, trackedKeys) {
+  const fresh = ensureDBSchema(loadDB());
+  for (const key of trackedKeys) {
+    if (stagedDb.tokens[key]) fresh.tokens[key] = stagedDb.tokens[key];
+  }
+  return fresh;
 }
 
 async function sendEmbed(client, channelId, embed, label = 'alert') {
@@ -566,20 +596,20 @@ export async function pollTokens(client) {
 
   try {
     const db = ensureDBSchema(loadDB());
-    const addresses = Object.keys(db.tokens || {});
-    if (addresses.length === 0) return;
+    const trackedKeys = Object.keys(db.tokens || {});
+    activePollTrackedKeys = trackedKeys;
+    if (trackedKeys.length === 0) return;
 
     const solPriceUsd = await fetchSolPrice();
-    console.log('[poll] Checking ' + addresses.length + ' tokens — SOL: $' + (solPriceUsd || '?'));
+    console.log('[poll] Checking ' + trackedKeys.length + ' tokens — SOL: $' + (solPriceUsd || '?'));
 
     // Newest tracked first so fresh calls (e.g. MIRUMI) are not stuck behind 500+ older mints each cycle.
-    const ordered = addresses.slice().sort((a, b) => {
+    const ordered = trackedKeys.slice().sort((a, b) => {
       const ta = db.tokens[a]?.postedAt || 0;
       const tb = db.tokens[b]?.postedAt || 0;
       return tb - ta;
     });
 
-    const enabledChains = new Set(parseEnabledChains());
     const scheduled = [];
     let hotCount = 0;
     let warmCount = 0;
@@ -590,7 +620,7 @@ export async function pollTokens(client) {
       const entry = db.tokens[address];
       if (!entry) continue;
       const entryChain = (entry.chain || 'solana').toLowerCase();
-      if (!enabledChains.has(entryChain) || (isEvmAddress(address) && evmEnabledChains().length === 0)) {
+      if (entryChain !== 'solana' || isEvmAddress(address)) {
         skippedChainCount += 1;
         continue;
       }
@@ -619,8 +649,8 @@ export async function pollTokens(client) {
       );
     }
 
-    for (const address of scheduled) {
-      if (pollingLock.has(address)) continue;
+    await runPollBatch(scheduled, async (address) => {
+      if (pollingLock.has(address)) return;
       pollingLock.add(address);
       try {
         const milestoneOpts = {};
@@ -634,7 +664,7 @@ export async function pollTokens(client) {
       } finally {
         pollingLock.delete(address);
       }
-    }
+    });
 
     if (runMilestoneBootstrap) {
       try {
@@ -648,6 +678,7 @@ export async function pollTokens(client) {
     saveDB(db);
     tickComebackAfterPollCycle();
   } finally {
+    activePollTrackedKeys = null;
     pollCycleInProgress = false;
   }
 }

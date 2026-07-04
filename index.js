@@ -19,14 +19,13 @@ import { pollTokens } from './poller.js';
 import { initAlertGate, shouldSilenceAlerts } from './alertGate.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
-import { fetchDexPair, resolveEvmToken, fetchDexPairFromPool, extractDexScreenerRefs } from './dexPair.js';
+import { fetchDexPair } from './dexPair.js';
 import {
   chainLabel,
   enabledChainsFooter,
-  evmEnabledChains,
-  isEvmAddress,
   isSolanaAddress,
   parseEnabledChains,
+  storageKeyForMint,
 } from './chains.js';
 
 const client = new Client({
@@ -144,10 +143,6 @@ function getTokenAgeFlag(createdAtMs) {
 
 function extractAddresses(text) {
   const found = new Set();
-  if (evmEnabledChains().length > 0) {
-    const evmMatches = text.match(/\b0x[a-fA-F0-9]{40}\b/g) || [];
-    for (const addr of evmMatches) found.add(addr.toLowerCase());
-  }
   const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g) || [];
   for (const addr of solanaMatches) {
     if (/\d/.test(addr) && !/[0OIl]/.test(addr)) found.add(addr);
@@ -156,50 +151,41 @@ function extractAddresses(text) {
 }
 
 async function fetchTokenData(address, messageText = '', { autotrack = false } = {}) {
-  const enabled = parseEnabledChains();
-  const dexOpts = autotrack ? { retries: 5, timeoutMs: 25_000 } : {};
+  if (!isSolanaAddress(address)) return null;
 
-  if (isEvmAddress(address)) {
-    const evmChains = evmEnabledChains();
-    if (evmChains.length === 0) return null;
-    return resolveEvmToken(address, { evmChains, messageText, ...dexOpts });
-  }
+  const dexOpts = autotrack ? { retries: 5, timeoutMs: 25_000 } : { retries: 2, timeoutMs: 12_000 };
 
-  if (isSolanaAddress(address)) {
-    if (enabled.includes('solana')) {
-      const dex = await fetchDexPair(address, {
-        enabledChains: ['solana'],
-        chainHint: 'solana',
-        ...dexOpts,
-      });
-      if (dex?.name) return { ...dex, platform: 'dexscreener' };
-    }
+  const dex = await fetchDexPair(address, {
+    enabledChains: ['solana'],
+    chainHint: 'solana',
+    ...dexOpts,
+  });
+  if (dex?.name) return { ...dex, platform: 'dexscreener' };
 
-    const pump = await fetchPumpFun(address);
-    if (pump) {
-      const solPrice = await fetchSolPrice();
-      const pumpPrice = solPrice ? calcPumpFunPrice(pump, solPrice) : null;
-      return {
-        platform: 'pumpfun',
-        chain: 'solana',
-        name: pump.name,
-        symbol: pump.symbol,
-        price: pumpPrice ? String(pumpPrice) : null,
-        marketCap: pump.usd_market_cap || 0,
-        volume24h: 0,
-        liquidity: 0,
-        buys24h: 0,
-        sells24h: 0,
-        dexUrl: 'https://pump.fun/' + address,
-        imageUrl: pump.image_uri || null,
-        pairCreatedAt: pump.created_timestamp || null,
-        bondingProgress: pump.bonding_curve_progress || 0,
-        complete: pump.complete || false,
-        creator: pump.creator || null,
-        virtualSolReserves: pump.virtual_sol_reserves,
-        virtualTokenReserves: pump.virtual_token_reserves,
-      };
-    }
+  const pump = await fetchPumpFun(address);
+  if (pump) {
+    const solPrice = await fetchSolPrice();
+    const pumpPrice = solPrice ? calcPumpFunPrice(pump, solPrice) : null;
+    return {
+      platform: 'pumpfun',
+      chain: 'solana',
+      name: pump.name,
+      symbol: pump.symbol,
+      price: pumpPrice ? String(pumpPrice) : null,
+      marketCap: pump.usd_market_cap || 0,
+      volume24h: 0,
+      liquidity: 0,
+      buys24h: 0,
+      sells24h: 0,
+      dexUrl: 'https://pump.fun/' + address,
+      imageUrl: pump.image_uri || null,
+      pairCreatedAt: pump.created_timestamp || null,
+      bondingProgress: pump.bonding_curve_progress || 0,
+      complete: pump.complete || false,
+      creator: pump.creator || null,
+      virtualSolReserves: pump.virtual_sol_reserves,
+      virtualTokenReserves: pump.virtual_token_reserves,
+    };
   }
 
   return null;
@@ -694,17 +680,11 @@ async function fetchDeepForensics(mint, creator, deadline) {
   return out;
 }
 
-async function autoTrack(address, message) {
+async function autoTrack(address, message, seenThisMessage = new Set()) {
   const db = ensureDBSchema(loadDB());
-  const existingKey = resolveTokenKey(db, address);
 
-  if (existingKey) {
-    const existing = db.tokens[existingKey];
-    if (existing.alertChannelId !== message.channelId) {
-      console.log('[autotrack] already tracking ' + existing.symbol + ' — first in <#' + existing.alertChannelId + '>');
-    } else {
-      console.log('[autotrack] already tracking ' + existing.symbol + ' in this channel');
-    }
+  if (resolveTokenKey(db, address)) {
+    console.log('[autotrack] already tracking (raw address) ' + address.slice(0, 8) + '...');
     return;
   }
 
@@ -720,37 +700,34 @@ async function autoTrack(address, message) {
   if (!token) {
     console.log('[skip] ' + address.slice(0, 8) + '... — not found');
     if (!shouldSilenceAlerts()) {
-      let extra = '';
-      if (isEvmAddress(address)) {
-        const refs = extractDexScreenerRefs(message.content);
-        let isPool = false;
-        for (const chain of evmEnabledChains()) {
-          const pool = await fetchDexPairFromPool(chain, address, { retries: 1 });
-          if (pool) {
-            isPool = true;
-            extra =
-              '\n\nThat address is a **pool/pair**, not the token. Use:\n`' +
-              (pool.address || address) +
-              '`';
-            break;
-          }
-        }
-        if (!isPool && refs.length > 0) {
-          extra = '\n\nDexScreener timed out or is slow — **try reposting** the same CA, or drop the link again.';
-        } else if (!isPool) {
-          extra = '\n\nNo DexScreener listing yet, or temporary API timeout — **try again in a moment.**';
-        }
-      }
       await message.channel.send({
         embeds: [{
           color: 0xff4444,
-          description: '⚠️ Could not find token data for `' + address + '` — not added to tracking' + extra,
-          footer: { text: enabledChainsFooter() }
-        }]
+          description:
+            '⚠️ Could not find token data for `' + address + '` — not added to tracking\n\n' +
+            'No DexScreener/pump.fun listing yet, or temporary API timeout — **try again in a moment.**',
+          footer: { text: enabledChainsFooter() },
+        }],
       }).catch(() => null);
     }
     return;
   }
+
+  const storageKey = storageKeyForMint(address, token);
+
+  if (seenThisMessage.has(storageKey)) {
+    console.log('[autotrack] duplicate mint in same message: ' + storageKey.slice(0, 8) + '...');
+    return;
+  }
+
+  const existingCanonical = resolveTokenKey(db, storageKey);
+  if (existingCanonical || db.tokens[storageKey]) {
+    const sym = db.tokens[existingCanonical || storageKey]?.symbol || storageKey.slice(0, 8);
+    console.log('[autotrack] already tracking ' + sym + ' (canonical mint — OG call preserved)');
+    return;
+  }
+
+  seenThisMessage.add(storageKey);
 
   const ageStr = getTokenAgeFlag(token.pairCreatedAt);
   const posterLine = ageStr
@@ -780,10 +757,6 @@ async function autoTrack(address, message) {
   const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
   let buyPressurePct = null;
   if (totalTxns > 0) buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
-
-  const storageKey = isEvmAddress(address) || isEvmAddress(token.address)
-    ? String(token.address || address).toLowerCase()
-    : (token.address || address);
 
   db.tokens[storageKey] = {
     address: storageKey,
@@ -832,8 +805,9 @@ client.on('messageCreate', async (message) => {
   const addresses = extractAddresses(message.content);
   if (addresses.length === 0) return;
   console.log('[detect] Found ' + addresses.length + ' address(es) from ' + message.author.username);
+  const seenThisMessage = new Set();
   for (const address of addresses) {
-    await autoTrack(address, message).catch(e =>
+    await autoTrack(address, message, seenThisMessage).catch(e =>
       console.error('[autotrack] Error for ' + address + ':', e.message)
     );
   }
