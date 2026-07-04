@@ -19,11 +19,13 @@ import { pollTokens } from './poller.js';
 import { initAlertGate, shouldSilenceAlerts } from './alertGate.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
+import { runMintCaseRepair } from './scripts/repair-mint-case.mjs';
 import { fetchDexPair } from './dexPair.js';
 import {
   chainLabel,
   enabledChainsFooter,
   isSolanaAddress,
+  isEvmAddress,
   parseEnabledChains,
   storageKeyForMint,
 } from './chains.js';
@@ -683,8 +685,8 @@ async function fetchDeepForensics(mint, creator, deadline) {
 async function autoTrack(address, message, seenThisMessage = new Set()) {
   const db = ensureDBSchema(loadDB());
 
-  if (resolveTokenKey(db, address)) {
-    console.log('[autotrack] already tracking (raw address) ' + address.slice(0, 8) + '...');
+  if (db.tokens[address]) {
+    console.log('[autotrack] already tracking (exact key) ' + address.slice(0, 8) + '...');
     return;
   }
 
@@ -722,8 +724,31 @@ async function autoTrack(address, message, seenThisMessage = new Set()) {
 
   const existingCanonical = resolveTokenKey(db, storageKey);
   if (existingCanonical || db.tokens[storageKey]) {
-    const sym = db.tokens[existingCanonical || storageKey]?.symbol || storageKey.slice(0, 8);
-    console.log('[autotrack] already tracking ' + sym + ' (canonical mint — OG call preserved)');
+    const key = existingCanonical || storageKey;
+    if (key !== storageKey && !isEvmAddress(storageKey)) {
+      const og = db.tokens[key];
+      db.tokens[storageKey] = { ...og, address: storageKey };
+      delete db.tokens[key];
+      saveDB(db);
+      console.log(
+        '[repair] fixed mint case for ' + (og.symbol || storageKey.slice(0, 8)) +
+        ' — OG call preserved, polling restored',
+      );
+    } else {
+      const sym = db.tokens[key]?.symbol || storageKey.slice(0, 8);
+      console.log('[autotrack] already tracking ' + sym + ' (canonical mint — OG call preserved)');
+    }
+    return;
+  }
+
+  const archivedKey = resolveArchivedKey(db, storageKey);
+  if (archivedKey) {
+    const og = db.archived[archivedKey];
+    const newKey = archivedKey !== storageKey && !isEvmAddress(storageKey) ? storageKey : archivedKey;
+    db.tokens[newKey] = { ...og, address: newKey };
+    delete db.archived[archivedKey];
+    saveDB(db);
+    console.log('[repair] un-archived ' + (og.symbol || newKey.slice(0, 8)) + ' on repost — OG call preserved');
     return;
   }
 
@@ -1054,6 +1079,15 @@ function resolveTokenKey(db, rawAddress) {
   const lower = trimmed.toLowerCase();
   if (db.tokens[lower]) return lower;
   return Object.keys(db.tokens).find((k) => k.toLowerCase() === lower) || null;
+}
+
+function resolveArchivedKey(db, rawAddress) {
+  if (!db.archived) return null;
+  const trimmed = rawAddress.trim();
+  if (db.archived[trimmed]) return trimmed;
+  const lower = trimmed.toLowerCase();
+  if (db.archived[lower]) return lower;
+  return Object.keys(db.archived).find((k) => k.toLowerCase() === lower) || null;
 }
 
 /** Emergency untrack when a token spams alerts — same as /remove, public confirmation. */
@@ -1675,6 +1709,11 @@ client.once('ready', async () => {
     initAlertGate();
   } catch (e) {
     console.error('[boot] initAlertGate failed:', e.message);
+  }
+  try {
+    await runMintCaseRepair();
+  } catch (e) {
+    console.error('[boot] mint-case repair failed (non-fatal):', e.message);
   }
   try {
     if (fs.existsSync(DB_PATH)) {

@@ -1,4 +1,5 @@
 import { parseEnabledChains } from './chains.js';
+import { rateLimiter } from './rateLimiter.js';
 
 function normalizeChainId(chainId) {
   return String(chainId || '').toLowerCase();
@@ -53,14 +54,16 @@ function pickBestPair(pairs, { enabledChains, chainHint, tokenAddress } = {}) {
 }
 
 function pairToToken(pair, address) {
+  const chain = normalizeChainId(pair.chainId);
+  const addr = String(address || '');
   const meta = tokenMetaFromPair(pair, address);
   const totalTxns =
     ((pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0) +
     ((pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0);
 
   return {
-    address: String(address || '').toLowerCase(),
-    chain: normalizeChainId(pair.chainId),
+    address: chain === 'solana' ? addr : addr.toLowerCase(),
+    chain,
     name: meta.name,
     symbol: meta.symbol,
     price: pair.priceUsd != null ? String(pair.priceUsd) : null,
@@ -96,7 +99,7 @@ export async function fetchDexPairFromPool(chainId, poolAddress, options = {}) {
   const attempts = options.retries ?? 2;
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(
+      const res = await rateLimiter.fetch(
         'https://api.dexscreener.com/latest/dex/pairs/' + chain + '/' + poolAddress,
         { signal: AbortSignal.timeout(options.timeoutMs ?? 12_000) },
       );
@@ -123,7 +126,7 @@ export async function fetchDexPairOnChain(chainId, tokenAddress, options = {}) {
   const attempts = options.retries ?? 2;
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(
+      const res = await rateLimiter.fetch(
         'https://api.dexscreener.com/token-pairs/v1/' + chain + '/' + tokenAddress,
         { signal: AbortSignal.timeout(options.timeoutMs ?? 12_000) },
       );
@@ -221,7 +224,7 @@ export async function fetchDexPair(address, options = {}) {
 
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
+      const res = await rateLimiter.fetch('https://api.dexscreener.com/latest/dex/tokens/' + address, {
         signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
       });
       if (!res.ok) {
