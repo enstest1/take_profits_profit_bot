@@ -11,9 +11,16 @@ import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
 import { chainLabel, isEvmAddress, isBrokenSolKey } from './chains.js';
 import { batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
+import {
+  loadDB,
+  saveDB,
+  ensureDBSchema,
+  setActivePollTrackedKeys,
+  clearActivePollTrackedKeys,
+  clearRemovedThisCycle,
+} from './dbStore.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 /** One-time per volume: first poll after deploy only newest 5 mints may emit 🎯1x; all others skip 🎯 this cycle (avoids flood). Delete file to repeat. */
 const MILESTONE_BOOTSTRAP_FILE = path.join(DATA_DIR, '.tp_milestone_bootstrap_v2');
 const HOT_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -34,34 +41,9 @@ const MILESTONE_RESET_STREAK = 3;
 const MILESTONE_RESET_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 /** New peak must exceed prior peakMultiple by this fraction to refresh peakAt. */
 const MIN_NEW_ATH_BUMP_RATIO = 0.01;
+const CALLS_STALE_MS = 15 * 60 * 1000;
 
 const SUMMARY_CHANNEL_ID = process.env.SUMMARY_CHANNEL_ID || '1452152164699869298';
-
-/** Keys tracked at poll cycle start — used to merge saves without clobbering mid-cycle autoTrack. */
-let activePollTrackedKeys = null;
-
-function loadDB() {
-  try { return JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
-  catch { return { tokens: {}, watchlist: {}, wallets: {} }; }
-}
-
-function saveDB(db) {
-  try {
-    const payload = activePollTrackedKeys
-      ? mergePollSnapshot(db, activePollTrackedKeys)
-      : db;
-    fs.writeFileSync(DB_PATH, JSON.stringify(payload, null, 2));
-  } catch (e) {
-    console.error('[DB] saveDB failed (' + DB_PATH + '):', e.message);
-  }
-}
-
-function ensureDBSchema(db) {
-  if (!db.tokens) db.tokens = {};
-  if (!db.watchlist) db.watchlist = {};
-  if (!db.wallets) db.wallets = {};
-  return db;
-}
 
 function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -254,10 +236,11 @@ async function fetchLiveData(address, entry, solPriceUsd) {
 
   return null;
 }
+
 async function fetchPumpFun(address) {
   try {
     const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
-      signal: AbortSignal.timeout(8000)
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return null;
     const d = await res.json();
@@ -273,7 +256,7 @@ async function fetchSolPrice() {
   try {
     const res = await fetch(
       'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-      { signal: AbortSignal.timeout(8000) }
+      { signal: AbortSignal.timeout(8000) },
     );
     const data = await res.json();
     return (data && data.solana && data.solana.usd) || null;
@@ -311,15 +294,6 @@ function tierRank(entry) {
   if (tier === 'hot') return 0;
   if (tier === 'warm') return 1;
   return 2;
-}
-
-/** Merge in-cycle poll mutations into latest on-disk DB so mid-cycle autoTrack saves are not lost. */
-function mergePollSnapshot(stagedDb, trackedKeys) {
-  const fresh = ensureDBSchema(loadDB());
-  for (const key of trackedKeys) {
-    if (stagedDb.tokens[key]) fresh.tokens[key] = stagedDb.tokens[key];
-  }
-  return fresh;
 }
 
 async function sendEmbed(client, channelId, embed, label = 'alert') {
@@ -426,20 +400,14 @@ export async function buildDailySummaryParts() {
     };
   }
 
-  const solPriceUsd = await fetchSolPrice();
-  const results = await Promise.allSettled(
-    entries.map((e) => fetchLiveData(e.address, e, solPriceUsd))
-  );
-
   const rows = [];
   let bestCall = null;
   let bestMultiple = 0;
 
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    const live = results[i].status === 'fulfilled' ? results[i].value : null;
-    const livePrice = live && live.price ? Number(live.price) : null;
+  for (const entry of entries) {
+    const livePrice = entry.lastPrice ? Number(entry.lastPrice) : null;
     const priceAtCall = entry.priceAtCall ? Number(entry.priceAtCall) : null;
+    const stale = Date.now() - (entry.lastChecked || 0) > CALLS_STALE_MS;
 
     let multipleStr = '—';
     let mult = null;
@@ -447,9 +415,10 @@ export async function buildDailySummaryParts() {
       mult = livePrice / priceAtCall;
       const pct = ((mult - 1) * 100).toFixed(0);
       const sign = mult >= 1 ? '+' : '';
-      if (mult >= 2) multipleStr = '🚀 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
-      else if (mult >= 1) multipleStr = '📈 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)';
-      else multipleStr = '📉 ' + mult.toFixed(2) + 'x (' + pct + '%)';
+      const staleMark = stale ? ' ⏳' : '';
+      if (mult >= 2) multipleStr = '🚀 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)' + staleMark;
+      else if (mult >= 1) multipleStr = '📈 ' + mult.toFixed(2) + 'x (' + sign + pct + '%)' + staleMark;
+      else multipleStr = '📉 ' + mult.toFixed(2) + 'x (' + pct + '%)' + staleMark;
       if (mult > bestMultiple) {
         bestMultiple = mult;
         bestCall = entry;
@@ -474,7 +443,7 @@ export async function buildDailySummaryParts() {
       '** · ' +
       fmtTime(entry.postedAt) +
       ' · MCap: ' +
-      fmtUsd(live ? live.marketCap : null) +
+      fmtUsd(entry.mcapAtCall) +
       peakStr;
 
     if (mult !== null) rows.push({ entry, mult, line });
@@ -529,7 +498,8 @@ export async function buildDailySummaryParts() {
     ' tracked · summary: top ' +
     TOP_GAINERS +
     ' / bottom ' +
-    TOP_LOSERS;
+    TOP_LOSERS +
+    ' · cached prices · ⏳ = >15m stale';
   if (rows.length < entries.length) {
     footerStr += ' · ' + (entries.length - rows.length) + ' w/o multiple';
   }
@@ -602,11 +572,12 @@ export async function pollTokens(client) {
   pollCycleInProgress = true;
   pollCycleNumber += 1;
   const cycleNum = pollCycleNumber;
+  clearRemovedThisCycle();
 
   try {
     const db = ensureDBSchema(loadDB());
     const trackedKeys = Object.keys(db.tokens || {});
-    activePollTrackedKeys = trackedKeys;
+    setActivePollTrackedKeys(trackedKeys);
     if (trackedKeys.length === 0) return;
 
     const tCycle = Date.now();
@@ -724,7 +695,7 @@ export async function pollTokens(client) {
       ') rate=' + JSON.stringify(rateStats),
     );
   } finally {
-    activePollTrackedKeys = null;
+    clearActivePollTrackedKeys();
     pollCycleInProgress = false;
   }
 }
@@ -794,7 +765,6 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       db.tokens[address].peakMultiple = currentMultiple;
       db.tokens[address].peakAt = Date.now();
       db.tokens[address].lastMilestoneResetAt = Date.now();
-      saveDB(db);
       console.log(
         '[reset] ' + entry.name + ' below call (' + MILESTONE_RESET_MULT + 'x) ×' + MILESTONE_RESET_STREAK + ' polls — milestones cleared for recovery',
       );
@@ -820,12 +790,10 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     console.log('[+75%] ' + entry.name);
   }
 
-  // Take-profit tiers 1x–20x — tier N when price is ≥ (N+1)× call (tier 1 at 2×, …, tier 20 at 21×)
   const rawMilestones = db.tokens[address].milestonesFired || [];
   let latest = normalizeTakeProfitTiers(rawMilestones);
   if (JSON.stringify(latest) !== JSON.stringify(rawMilestones)) {
     db.tokens[address].milestonesFired = latest;
-    saveDB(db);
   }
 
   if (!milestoneOpts.suppressTierX) {
@@ -841,13 +809,11 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       const silentTiers = newlyPassed.slice(0, -1);
       let alertTier = newlyPassed[newlyPassed.length - 1];
 
-      // DB loss / redeploy: if many tiers passed at once, mark all silently — no catch-up ping flood.
       if (silentTiers.length >= 2 && latest.length === 0 && currentMultiple >= 4) {
         latest = [...new Set([...latest, ...newlyPassed])].sort((a, b) => a - b);
         db.tokens[address].milestonesFired = latest;
         db.tokens[address].gainAlertFired = true;
         db.tokens[address].takeProfitFired = true;
-        saveDB(db);
         console.log(
           '[milestone] ' + entry.name + ' full silent catch-up: marked ' + newlyPassed.join(',') + 'x (no ping)',
         );
@@ -857,7 +823,6 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       if (alertTier != null && silentTiers.length > 0 && alertTier === newlyPassed[newlyPassed.length - 1]) {
         latest = [...new Set([...latest, ...silentTiers])].sort((a, b) => a - b);
         db.tokens[address].milestonesFired = latest;
-        saveDB(db);
         console.log(
           '[milestone] ' + entry.name + ' catch-up: marked ' + silentTiers.join(',') + 'x silently',
         );
@@ -944,7 +909,6 @@ async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}
       db.tokens[address].graduationAlertFired = true;
       saveDB(db);
       console.log('[graduation] ' + entry.name + ' graduated');
-      // Same tick: previously returned here so +75%/milestones never ran after grad.
       let liveM = await fetchLiveData(address, entry, solPriceUsd);
       if (!liveM || !liveM.price) liveM = live;
       await evaluateGainAndMilestones(client, address, db, entry, liveM, milestoneOpts);
@@ -973,7 +937,6 @@ async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}
 
     if (newBonding < 70 && bondingAlertFired) {
       db.tokens[address].bondingAlertFired = false;
-      saveDB(db);
     }
   }
 
