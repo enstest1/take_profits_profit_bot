@@ -2,6 +2,8 @@
 
 A Discord bot that automatically detects contract addresses in chat and delivers real-time price alerts, milestone Take Profit notifications, wallet monitoring, and daily performance recaps.
 
+> **Git workflow:** see [GITHUB_PRACTICES.md](GITHUB_PRACTICES.md) · **Engineering handoff:** [docs/BOT_OVERVIEW.md](docs/BOT_OVERVIEW.md)
+
 ---
 
 ## Features
