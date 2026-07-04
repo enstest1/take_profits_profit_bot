@@ -49,3 +49,10 @@ export function evmEnabledChains() {
 export function storageKeyForMint(address, token) {
   return String(token?.address || address);
 }
+
+/** Solana key with letters but zero uppercase = mangled by the lowercase bug. */
+export function isBrokenSolKey(key, entry) {
+  if ((entry?.chain || 'solana').toLowerCase() !== 'solana') return false;
+  if (/^0x/i.test(key)) return false;
+  return /[a-z]/.test(key) && !/[A-Z]/.test(key);
+}
