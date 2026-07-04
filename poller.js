@@ -8,7 +8,9 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
-import { chainLabel, isEvmAddress } from './chains.js';
+import { chainLabel, isEvmAddress, isBrokenSolKey } from './chains.js';
+import { batchFetchSolana } from './dexBatch.js';
+import { rateLimiter } from './rateLimiter.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(DATA_DIR, 'tracked.json');
@@ -302,6 +304,13 @@ async function runPollBatch(items, fn) {
     }
   }
   await Promise.all(Array.from({ length: POLL_CONCURRENCY }, () => worker()));
+}
+
+function tierRank(entry) {
+  const tier = pollTierForEntry(entry);
+  if (tier === 'hot') return 0;
+  if (tier === 'warm') return 1;
+  return 2;
 }
 
 /** Merge in-cycle poll mutations into latest on-disk DB so mid-cycle autoTrack saves are not lost. */
@@ -600,10 +609,10 @@ export async function pollTokens(client) {
     activePollTrackedKeys = trackedKeys;
     if (trackedKeys.length === 0) return;
 
+    const tCycle = Date.now();
     const solPriceUsd = await fetchSolPrice();
     console.log('[poll] Checking ' + trackedKeys.length + ' tokens — SOL: $' + (solPriceUsd || '?'));
 
-    // Newest tracked first so fresh calls (e.g. MIRUMI) are not stuck behind 500+ older mints each cycle.
     const ordered = trackedKeys.slice().sort((a, b) => {
       const ta = db.tokens[a]?.postedAt || 0;
       const tb = db.tokens[b]?.postedAt || 0;
@@ -616,6 +625,7 @@ export async function pollTokens(client) {
     let coldCount = 0;
     let inactiveCount = 0;
     let skippedChainCount = 0;
+    let brokenCount = 0;
     for (const address of ordered) {
       const entry = db.tokens[address];
       if (!entry) continue;
@@ -624,6 +634,7 @@ export async function pollTokens(client) {
         skippedChainCount += 1;
         continue;
       }
+      if (isBrokenSolKey(address, entry)) brokenCount += 1;
       if (isInactiveForPolling(entry)) inactiveCount += 1;
       const tier = pollTierForEntry(entry);
       if (tier === 'hot') hotCount += 1;
@@ -633,32 +644,57 @@ export async function pollTokens(client) {
         scheduled.push(address);
       }
     }
-    console.log(
-      '[poll] Cycle #' + cycleNum +
-      ' scheduled ' + scheduled.length + '/' + ordered.length +
-      ' tokens (hot=' + hotCount + ', warm=' + warmCount + ', cold=' + coldCount +
-      ', inactive=' + inactiveCount + ', skippedChain=' + skippedChainCount + ')'
-    );
 
     const runMilestoneBootstrap = !fs.existsSync(MILESTONE_BOOTSTRAP_FILE);
     const newest5ForBootstrap = runMilestoneBootstrap ? ordered.slice(0, 5) : [];
     const newest5Set = new Set(newest5ForBootstrap);
     if (runMilestoneBootstrap) {
       console.log(
-        '[poll] milestone bootstrap: 🎯1x-only for newest 5 mints; other tokens skip 🎯 this cycle (no flood)'
+        '[poll] milestone bootstrap: 🎯1x-only for newest 5 mints; other tokens skip 🎯 this cycle (no flood)',
       );
     }
 
-    await runPollBatch(scheduled, async (address) => {
+    function milestoneOptsFor(address) {
+      const milestoneOpts = {};
+      if (runMilestoneBootstrap) {
+        if (newest5Set.has(address)) milestoneOpts.tier1OnlyBootstrap = true;
+        else milestoneOpts.suppressTierX = true;
+      }
+      return milestoneOpts;
+    }
+
+    const dexMints = [];
+    const pumpMints = [];
+    for (const address of scheduled) {
+      const entry = db.tokens[address];
+      if (isBrokenSolKey(address, entry)) continue;
+      if (entry?.platform === 'pumpfun' && !entry.graduationAlertFired) {
+        pumpMints.push(address);
+      } else {
+        dexMints.push(address);
+      }
+    }
+
+    dexMints.sort((a, b) => tierRank(db.tokens[a]) - tierRank(db.tokens[b]));
+
+    const liveMap = await batchFetchSolana(dexMints);
+    let dexProcessed = 0;
+    for (const address of dexMints) {
+      const live = liveMap.get(address);
+      if (!live) continue;
+      try {
+        await processTokenWithLive(client, address, db, live, milestoneOptsFor(address));
+        dexProcessed += 1;
+      } catch (e) {
+        console.error('[poll] Error processing ' + address + ':', e.message);
+      }
+    }
+
+    await runPollBatch(pumpMints, async (address) => {
       if (pollingLock.has(address)) return;
       pollingLock.add(address);
       try {
-        const milestoneOpts = {};
-        if (runMilestoneBootstrap) {
-          if (newest5Set.has(address)) milestoneOpts.tier1OnlyBootstrap = true;
-          else milestoneOpts.suppressTierX = true;
-        }
-        await processToken(client, address, db, solPriceUsd, milestoneOpts);
+        await processToken(client, address, db, solPriceUsd, milestoneOptsFor(address));
       } catch (e) {
         console.error('[poll] Error processing ' + address + ':', e.message);
       } finally {
@@ -677,6 +713,16 @@ export async function pollTokens(client) {
 
     saveDB(db);
     tickComebackAfterPollCycle();
+
+    const elapsed = Math.round((Date.now() - tCycle) / 1000);
+    const rateStats = rateLimiter.stats();
+    console.log(
+      '[poll] Cycle #' + cycleNum + ' done in ' + elapsed + 's — scheduled ' + scheduled.length +
+      '/' + ordered.length + ' (hot=' + hotCount + ', warm=' + warmCount + ', cold=' + coldCount +
+      ', inactive=' + inactiveCount + ', skippedChain=' + skippedChainCount + ', broken=' + brokenCount +
+      ', dexBatch=' + dexProcessed + '/' + dexMints.length + ', pump=' + pumpMints.length +
+      ') rate=' + JSON.stringify(rateStats),
+    );
   } finally {
     activePollTrackedKeys = null;
     pollCycleInProgress = false;
@@ -851,6 +897,17 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     db.tokens[address].buyPressure = live.buyPct;
     db.tokens[address].sellPressure = 100 - live.buyPct;
   }
+}
+
+async function processTokenWithLive(client, address, db, live, milestoneOpts = {}) {
+  const entry = db.tokens[address];
+  if (!entry) return;
+
+  if (live.source === 'dexscreener' && entry.platform === 'pumpfun') {
+    db.tokens[address].platform = 'dexscreener';
+  }
+
+  await evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts);
 }
 
 async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}) {
