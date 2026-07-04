@@ -11,6 +11,7 @@ import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
 import { chainLabel, isEvmAddress, isBrokenSolKey } from './chains.js';
 import { batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
+import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import {
   loadDB,
   saveDB,
@@ -41,9 +42,13 @@ const MILESTONE_RESET_STREAK = 3;
 const MILESTONE_RESET_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 /** New peak must exceed prior peakMultiple by this fraction to refresh peakAt. */
 const MIN_NEW_ATH_BUMP_RATIO = 0.01;
+const ARCHIVE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const SILENT_CATCHUP_STALE_MS = 10 * 60 * 1000;
 const CALLS_STALE_MS = 15 * 60 * 1000;
 
 const SUMMARY_CHANNEL_ID = process.env.SUMMARY_CHANNEL_ID || '1452152164699869298';
+
+let lastArchiveDate = null;
 
 function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -237,45 +242,6 @@ async function fetchLiveData(address, entry, solPriceUsd) {
   return null;
 }
 
-async function fetchPumpFun(address) {
-  try {
-    const res = await fetch('https://frontend-api.pump.fun/coins/' + address, {
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const d = await res.json();
-    if (!d || !d.mint) return null;
-    return d;
-  } catch (e) {
-    console.error('[pumpfun] poll failed for ' + address + ':', e.message);
-    return null;
-  }
-}
-
-async function fetchSolPrice() {
-  try {
-    const res = await fetch(
-      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-      { signal: AbortSignal.timeout(8000) },
-    );
-    const data = await res.json();
-    return (data && data.solana && data.solana.usd) || null;
-  } catch {
-    return null;
-  }
-}
-
-function calcPumpFunPrice(pumpData, solPrice) {
-  try {
-    const solRes = Number(pumpData.virtual_sol_reserves);
-    const tokRes = Number(pumpData.virtual_token_reserves);
-    if (!tokRes) return null;
-    return (solRes / 1e9) / (tokRes / 1e6) * solPrice;
-  } catch {
-    return null;
-  }
-}
-
 async function runPollBatch(items, fn) {
   const queue = items.slice();
   async function worker() {
@@ -294,6 +260,34 @@ function tierRank(entry) {
   if (tier === 'hot') return 0;
   if (tier === 'warm') return 1;
   return 2;
+}
+
+function archiveDeadTokens(db) {
+  if (!db.archived) db.archived = {};
+  let moved = 0;
+  for (const [key, e] of Object.entries(db.tokens)) {
+    if (isBrokenSolKey(key, e)) continue;
+    const dead =
+      entryAgeMs(e) > ARCHIVE_AGE_MS &&
+      (Number(e.peakMultiple) || 1) < 1.2 &&
+      (e.milestonesFired || []).length === 0;
+    if (dead) {
+      db.archived[key] = { ...e, archivedAt: Date.now() };
+      delete db.tokens[key];
+      moved += 1;
+    }
+  }
+  if (moved) {
+    console.log('[archive] moved ' + moved + ' dead tokens (never >1.2x, 30d+) — nothing deleted');
+  }
+  return moved;
+}
+
+function maybeRunDailyArchive(db) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (lastArchiveDate === todayStr) return;
+  lastArchiveDate = todayStr;
+  archiveDeadTokens(db);
 }
 
 async function sendEmbed(client, channelId, embed, label = 'alert') {
@@ -576,6 +570,7 @@ export async function pollTokens(client) {
 
   try {
     const db = ensureDBSchema(loadDB());
+    maybeRunDailyArchive(db);
     const trackedKeys = Object.keys(db.tokens || {});
     setActivePollTrackedKeys(trackedKeys);
     if (trackedKeys.length === 0) return;
@@ -704,8 +699,24 @@ export async function pollTokens(client) {
 async function evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts = {}) {
   const livePrice =
     live.price == null || live.price === '' ? null : Number(live.price);
-  const callPx =
+  let callPx =
     entry.priceAtCall == null || entry.priceAtCall === '' ? null : Number(entry.priceAtCall);
+
+  if (
+    livePrice != null &&
+    Number.isFinite(livePrice) &&
+    livePrice > 0 &&
+    (callPx == null || !Number.isFinite(callPx) || callPx <= 0) &&
+    !entry.priceAtCallBackfilled
+  ) {
+    db.tokens[address].priceAtCall = String(livePrice);
+    db.tokens[address].priceAtCallBackfilled = true;
+    console.log('[backfill] ' + entry.name + ' priceAtCall was null — set from first live tick');
+    db.tokens[address].lastPrice = String(livePrice);
+    db.tokens[address].lastChecked = Date.now();
+    return;
+  }
+
   if (
     livePrice == null ||
     !Number.isFinite(livePrice) ||
@@ -808,8 +819,10 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     if (newlyPassed.length > 0) {
       const silentTiers = newlyPassed.slice(0, -1);
       let alertTier = newlyPassed[newlyPassed.length - 1];
+      const lastCheckedAge = Date.now() - (Number(entry.lastChecked) || 0);
+      const staleCatchUp = lastCheckedAge > SILENT_CATCHUP_STALE_MS;
 
-      if (silentTiers.length >= 2 && latest.length === 0 && currentMultiple >= 4) {
+      if (silentTiers.length >= 2 && latest.length === 0 && currentMultiple >= 4 && staleCatchUp) {
         latest = [...new Set([...latest, ...newlyPassed])].sort((a, b) => a - b);
         db.tokens[address].milestonesFired = latest;
         db.tokens[address].gainAlertFired = true;

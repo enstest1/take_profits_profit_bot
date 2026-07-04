@@ -21,6 +21,7 @@ import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracke
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
 import { runMintCaseRepair } from './scripts/repair-mint-case.mjs';
 import { fetchDexPair } from './dexPair.js';
+import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import {
   DATA_DIR,
   DB_PATH,
