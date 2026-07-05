@@ -12,6 +12,16 @@ import { chainLabel, isBrokenSolKey, parseStorageKey, isLegacyEvmKey, enabledCha
 import { batchFetch, batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
+import { rebuildCallerStats, updateCallerStatsForUser } from './callerStats.js';
+import { deriveLifecycle, lifecyclePrefix } from './signals/lifecycle.js';
+import { currentMultipleFromLive } from './signals/mult.js';
+import { evaluateVelocity } from './signals/velocity.js';
+import { evaluateLiquidityDivergence } from './signals/liquidity.js';
+import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
+import { evaluatePersonalPositions } from './positions.js';
+import { sendChannelAlert, sendTokenAlert } from './channelAlert.js';
+import { checkWeeklyRecap } from './recap.js';
+import { CFG } from './signals/config.js';
 import {
   loadDB,
   saveDB,
@@ -138,6 +148,7 @@ function normalizeTakeProfitTiers(fired) {
 
 const pollingLock = new Set();
 let lastSummaryDate = null;
+let lastCallerRebuildDate = null;
 /** Prevents overlapping poll cycles (setInterval does not await async work). */
 let pollCycleInProgress = false;
 let pollCycleNumber = 0;
@@ -291,17 +302,36 @@ function maybeRunDailyArchive(db) {
 }
 
 async function sendEmbed(client, channelId, embed, label = 'alert') {
-  if (shouldSilenceAlerts()) {
-    const st = getAlertSilenceStatus();
-    const title = embed?.data?.title || label;
-    console.log('[silence/' + st.reason + '] skipped: ' + title);
-    return;
-  }
-  try {
-    const channel = await client.channels.fetch(channelId);
-    await channel.send({ embeds: [embed] });
-  } catch (e) {
-    console.error('[alert] send failed to channel ' + channelId + ':', e.message);
+  return sendChannelAlert(client, channelId, embed, label);
+}
+
+async function maybeWalletConfluence(client, db, mint, wallet, boughtMint) {
+  if (!boughtMint || !db.tokens[boughtMint]) return;
+  const entry = db.tokens[boughtMint];
+  const age = Date.now() - (entry.postedAt || 0);
+  if (age > CFG.WALLET_CONFLUENCE_MAX_AGE_MS) return;
+  if (Date.now() - (entry.walletConfluenceAt || 0) < CFG.WALLET_CONFLUENCE_COOLDOWN_MS) return;
+
+  const mult =
+    entry.lastPrice && entry.priceAtCall
+      ? Number(entry.lastPrice) / Number(entry.priceAtCall)
+      : null;
+  const afterMs = Date.now() - (entry.postedAt || 0);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00ccff)
+    .setTitle('🐋 SMART MONEY — tracked wallet aped ' + entry.symbol)
+    .setDescription(
+      'Wallet: ' + wallet.label + ' (watched) · ' + fmtAgeLabel(afterMs) + " after @" +
+      entry.postedBy + "'s call · token at " + (mult != null ? mult.toFixed(1) + 'x' : '—'),
+    )
+    .setTimestamp();
+
+  const sent = await sendTokenAlert(client, db, boughtMint, embed, 'walletconf', 'wallet-conf');
+  if (sent) {
+    entry.walletConfluenceAt = Date.now();
+    saveDB(db);
+    console.log('[wallet-conf] ' + wallet.label + ' → ' + entry.symbol);
   }
 }
 
@@ -344,6 +374,7 @@ async function pollWallets(client) {
 
       const tokenOut = latest.tokenOut || latest.bought || {};
       const tokenIn = latest.tokenIn || latest.sold || {};
+      const boughtMint = isBuy ? (tokenOut.mint || tokenOut.address || tokenOut.tokenAddress) : null;
       const tokenName = isBuy ? (tokenOut.name || tokenOut.symbol || 'Unknown') : (tokenIn.name || tokenIn.symbol || 'Unknown');
       const tokenSymbol = isBuy ? (tokenOut.symbol || '?') : (tokenIn.symbol || '?');
       const amountUsd = latest.totalValueUsd || latest.usdValue || null;
@@ -366,6 +397,9 @@ async function pollWallets(client) {
         } else {
           await channel.send({ embeds: [embed] });
           console.log('[wallet] ' + wallet.label + ' ' + (isBuy ? 'bought' : 'sold') + ' ' + tokenSymbol);
+          if (isBuy && boughtMint) {
+            await maybeWalletConfluence(client, db, boughtMint, wallet, boughtMint);
+          }
         }
       } catch (e) {
         console.error('[wallet] send failed:', e.message);
@@ -425,6 +459,7 @@ export async function buildDailySummaryParts() {
         : '';
 
     const line =
+      lifecyclePrefix(entry) +
       '**' +
       entry.name +
       ' (' +
@@ -537,7 +572,7 @@ async function postDailySummary(client) {
   }
 }
 
-function checkDailySummary(client) {
+function checkDailySummary(client, db) {
   const now = new Date();
   const utcHour = now.getUTCHours();
   const utcMinute = now.getUTCMinutes();
@@ -546,10 +581,15 @@ function checkDailySummary(client) {
     lastSummaryDate = todayStr;
     postDailySummary(client).catch(e => console.error('[summary] error:', e.message));
   }
+  if (utcHour === 12 && utcMinute < 3 && lastCallerRebuildDate !== todayStr) {
+    lastCallerRebuildDate = todayStr;
+    rebuildCallerStats(db);
+  }
+  checkWeeklyRecap(client, db);
 }
 
 export async function pollTokens(client) {
-  checkDailySummary(client);
+  checkDailySummary(client, ensureDBSchema(loadDB()));
 
   const silence = getAlertSilenceStatus();
   if (silence.silenced && silence.reason === 'comeback' && silence.remaining) {
@@ -815,11 +855,11 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     const thumb = tokenThumbnail(entry, live);
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
-      .setTitle('📈 ' + chainBadge(entry.chain) + ' ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
+      .setTitle('📈 ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
       .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
     if (thumb) embed.setThumbnail(thumb);
 
-    await sendEmbed(client, entry.alertChannelId, embed);
+    await sendTokenAlert(client, db, address, embed, 'gain75', '+75%');
     db.tokens[address].gainAlertFired = true;
     saveDB(db);
     console.log('[+75%] ' + entry.name);
@@ -869,16 +909,17 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
         const thumb = tokenThumbnail(entry, live);
         const embed = new EmbedBuilder()
           .setColor(0xffd700)
-          .setTitle('🎯 ' + alertTier + 'x — ' + chainBadge(entry.chain) + ' ' + entry.name + ' (' + entry.symbol + ')')
+          .setTitle('🎯 ' + alertTier + 'x — ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ')')
           .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
         if (thumb) embed.setThumbnail(thumb);
 
-        await sendEmbed(client, entry.alertChannelId, embed);
+        await sendTokenAlert(client, db, address, embed, 'tier' + alertTier, alertTier + 'x');
         latest = [...new Set([...latest, alertTier])].sort((a, b) => a - b);
         db.tokens[address].milestonesFired = latest;
         db.tokens[address].gainAlertFired = true;
         db.tokens[address].takeProfitFired = true;
         saveDB(db);
+        updateCallerStatsForUser(db, entry.postedByUserId, entry.postedBy);
         console.log('[' + alertTier + 'x] ' + entry.name);
       }
     }
@@ -886,10 +927,18 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
 
   const storedPeak = Number(entry.peakMultiple) || 1;
   const newPeak = Math.max(storedPeak, currentMultiple);
+  maybeResetRetestOnAth(db.tokens[address], storedPeak, newPeak);
   db.tokens[address].lastPrice = String(livePrice);
   db.tokens[address].lastVolume = live.volume24h || 0;
   db.tokens[address].lastChecked = Date.now();
   db.tokens[address].peakMultiple = newPeak;
+  if (newPeak > storedPeak) {
+    db.tokens[address].athLedger = {
+      peakMultiple: newPeak,
+      peakAt: Date.now(),
+      minsToPeak: Math.round((Date.now() - (entry.postedAt || Date.now())) / 60000),
+    };
+  }
   if (isSignificantNewAth(storedPeak, currentMultiple)) {
     db.tokens[address].peakAt = Date.now();
   } else if (db.tokens[address].peakAt == null || db.tokens[address].peakAt === '') {
@@ -910,6 +959,19 @@ async function processTokenWithLive(client, address, db, live, milestoneOpts = {
   }
 
   await evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts);
+
+  const currentMult = currentMultipleFromLive(entry, live);
+  if (currentMult != null) {
+    entry.lifecycle = deriveLifecycle(entry, currentMult);
+    try {
+      await evaluateVelocity(client, db, address, entry, live, currentMult);
+      await evaluateLiquidityDivergence(client, db, address, entry, live, currentMult);
+      await evaluateRetest(client, db, address, entry, live, currentMult);
+      await evaluatePersonalPositions(client, db, address, entry, live, currentMult);
+    } catch (e) {
+      console.error('[signals] ' + address + ':', e.message);
+    }
+  }
 }
 
 async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}) {

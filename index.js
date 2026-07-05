@@ -44,6 +44,24 @@ import {
   resolveArchivedKey,
   parseStorageKey,
 } from './chains.js';
+import { computeInlineCallerStats, formatDurationMins } from './callerStats.js';
+import { lifecyclePrefix } from './signals/lifecycle.js';
+import { onAlreadyTracking, sendTrackingEmbed } from './autotrackHelpers.js';
+import { fetchRugCheckRaw } from './risk/rugscan.js';
+import {
+  followCaller,
+  unfollowCaller,
+  watchToken,
+  unwatchToken,
+  resolveMintForCommand,
+} from './subscriptions.js';
+import {
+  setPosition,
+  resolveTrackedMint,
+  buildMyBagsLines,
+} from './positions.js';
+import { parseTagsInput, validateTags, applyTags } from './metaTags.js';
+import { startHeliusServer } from './webhooks/heliusServer.js';
 
 const client = new Client({
   intents: [
@@ -205,6 +223,7 @@ async function autoTrackRobinhood(raw, message, seenThisMessage) {
   }
   if (db.tokens[storageKey]) {
     console.log('[autotrack] already tracking ' + (db.tokens[storageKey].symbol || storageKey) + ' (OG preserved)');
+    await onAlreadyTracking(message.client, db, storageKey, message);
     return;
   }
 
@@ -221,25 +240,12 @@ async function autoTrackRobinhood(raw, message, seenThisMessage) {
   seenThisMessage.add(storageKey);
   const token = tokenDataFromRobinhoodPair(resolved.pair, resolved.tokenAddress);
   const ageStr = getTokenAgeFlag(token.pairCreatedAt);
+  token.ageStr = ageStr;
+  token.liquidity = resolved.pair?.liquidity?.usd || token.liquidity || 0;
 
-  const embed = new EmbedBuilder()
-    .setColor(0x00ccff)
-    .setAuthor({
-      name: chainBadge('robinhood') + ' 📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')',
-    })
-    .setDescription(
-      'Posted by **' + message.author.username + '**' +
-      (ageStr ? ' · ' + ageStr : '') +
-      '\nMCap: **' + fmtUsd(token.marketCap) + '**',
-    )
-    .setFooter({ text: chainLabel('robinhood') })
-    .setTimestamp();
-  if (token.imageUrl) embed.setThumbnail(token.imageUrl);
-  await message.channel.send({ embeds: [embed] });
-
-  db.tokens[storageKey] = buildTrackedEntry(token, storageKey, message, ageStr);
-  saveDB(db);
-  console.log('[tracked] ' + token.name + ' (' + token.symbol + ') [' + chainLabel('robinhood') + '] — posted by ' + message.author.username);
+  await sendTrackingEmbed(message, token, storageKey, db, () =>
+    buildTrackedEntry(token, storageKey, message, ageStr),
+  );
 }
 
 async function fetchTokenData(address, messageText = '', { autotrack = false } = {}) {
@@ -288,6 +294,7 @@ async function autoTrackSolana(address, message, seenThisMessage = new Set()) {
 
   if (db.tokens[address]) {
     console.log('[autotrack] already tracking (exact key) ' + address.slice(0, 8) + '...');
+    await onAlreadyTracking(message.client, db, address, message);
     return;
   }
 
@@ -338,6 +345,7 @@ async function autoTrackSolana(address, message, seenThisMessage = new Set()) {
     } else {
       const sym = db.tokens[key]?.symbol || storageKey.slice(0, 8);
       console.log('[autotrack] already tracking ' + sym + ' (canonical mint — OG call preserved)');
+      await onAlreadyTracking(message.client, db, key, message);
     }
     return;
   }
@@ -356,29 +364,13 @@ async function autoTrackSolana(address, message, seenThisMessage = new Set()) {
   seenThisMessage.add(storageKey);
 
   const ageStr = getTokenAgeFlag(token.pairCreatedAt);
-  const posterLine = ageStr
-    ? 'Posted by **' + message.author.username + '** · ' + ageStr
-    : 'Posted by **' + message.author.username + '**';
+  token.ageStr = ageStr;
+  token.liquidity = token.liquidity || 0;
+  if (token.creator) token.creator = token.creator;
 
-  const descParts = [posterLine, 'MCap: **' + fmtUsd(token.marketCap) + '**'];
-  if (token.platform === 'pumpfun' && !token.complete) {
-    descParts.push('⏳ Bonding curve: **' + (token.bondingProgress ? token.bondingProgress.toFixed(0) : 0) + '%** to Raydium');
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00ccff)
-    .setAuthor({
-      name: chainBadge('solana') + ' 📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')',
-    })
-    .setDescription(descParts.join('\n'))
-    .setFooter({ text: chainLabel(token.chain) })
-    .setTimestamp();
-  if (token.imageUrl) embed.setThumbnail(token.imageUrl);
-  await message.channel.send({ embeds: [embed] });
-
-  db.tokens[storageKey] = buildTrackedEntry(token, storageKey, message, ageStr);
-  saveDB(db);
-  console.log('[tracked] ' + token.name + ' (' + token.symbol + ') [' + chainLabel(token.chain) + '] — posted by ' + message.author.username);
+  await sendTrackingEmbed(message, token, storageKey, db, () =>
+    buildTrackedEntry(token, storageKey, message, ageStr),
+  );
 }
 
 async function fetchDexScreener(address, chainHint) {
@@ -405,16 +397,7 @@ async function fetchDexScreener(address, chainHint) {
 
 async function fetchRugCheckReport(mint) {
   try {
-    const headers = {};
-    if (process.env.RUGCHECK_API_KEY) {
-      headers.Authorization = 'Bearer ' + process.env.RUGCHECK_API_KEY;
-    }
-    const res = await fetch('https://api.rugcheck.xyz/v1/tokens/' + mint + '/report', {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    return res.json();
+    return await fetchRugCheckRaw(mint);
   } catch {
     return null;
   }
@@ -915,6 +898,53 @@ const commands = [
   new SlashCommandBuilder()
     .setName('devrandom')
     .setDescription('30 random dev wallets from tracked + 30-day launch counts (same as /devs random)'),
+  new SlashCommandBuilder()
+    .setName('rank')
+    .setDescription('Caller stats for a Discord user')
+    .addUserOption((opt) =>
+      opt.setName('user').setDescription('Member to rank').setRequired(false),
+    ),
+  new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('Top callers by hit rate')
+    .addStringOption((opt) =>
+      opt
+        .setName('period')
+        .setDescription('weekly or alltime')
+        .addChoices(
+          { name: 'weekly', value: 'weekly' },
+          { name: 'alltime', value: 'alltime' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('ape')
+    .setDescription('Set your personal entry price on a tracked token')
+    .addStringOption((opt) => opt.setName('ca').setDescription('Contract address').setRequired(true))
+    .addNumberOption((opt) => opt.setName('price').setDescription('Your entry price (optional)').setRequired(false)),
+  new SlashCommandBuilder()
+    .setName('mybags')
+    .setDescription('Your personal positions on tracked tokens'),
+  new SlashCommandBuilder()
+    .setName('follow')
+    .setDescription('DM when a caller posts a new CA')
+    .addUserOption((opt) => opt.setName('user').setDescription('Caller to follow').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('unfollow')
+    .setDescription('Stop following a caller')
+    .addUserOption((opt) => opt.setName('user').setDescription('Caller to unfollow').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('watch')
+    .setDescription('DM on alerts for a tracked token')
+    .addStringOption((opt) => opt.setName('ca').setDescription('Contract address').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('unwatch')
+    .setDescription('Stop watching a token')
+    .addStringOption((opt) => opt.setName('ca').setDescription('Contract address').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('tag')
+    .setDescription('Tag a tracked token (max 3 meta tags)')
+    .addStringOption((opt) => opt.setName('ca').setDescription('Contract address').setRequired(true))
+    .addStringOption((opt) => opt.setName('tags').setDescription('Comma-separated tags').setRequired(true)),
 ].map(c => c.toJSON());
 
 async function registerCommands() {
@@ -1060,7 +1090,12 @@ async function handleCalls(interaction) {
         (mult >= 2 ? '**' : '') +
         stale + backfillMark;
     }
-    return chainBadge(entry.chain) + ' **' + entry.name + ' (' + entry.symbol + ')** — ' + multStr +
+    const peakNote =
+      entry.athLedger?.peakMultiple > 1.2
+        ? ' · peaked ' + entry.athLedger.peakMultiple.toFixed(1) + 'x'
+        : '';
+    return chainBadge(entry.chain) + lifecyclePrefix(entry) + ' **' + entry.name + ' (' + entry.symbol + ')** — ' + multStr +
+           peakNote +
            '\n└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt);
   });
 
@@ -1091,6 +1126,179 @@ async function handleRemove(interaction) {
   markRemovedThisCycle(key);
   saveDB(db);
   await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')** · `' + key + '`');
+}
+
+async function handleRank(interaction) {
+  await interaction.deferReply();
+  const user = interaction.options.getUser('user') || interaction.user;
+  const db = ensureDBSchema(loadDB());
+  let stats = computeInlineCallerStats(db, user.id, user.username);
+  if (!stats || stats.totalCalls === 0) {
+    return interaction.editReply('No tracked calls from that user yet.');
+  }
+  const hitPct = Math.round((stats.hits2x / Math.max(1, stats.totalCalls)) * 100);
+  const best = stats.bestCall;
+  const bestLine = best
+    ? '$' + best.symbol + ' — ' + best.peak.toFixed(1) + 'x (' +
+      new Date(best.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ')'
+    : '—';
+  const embed = new EmbedBuilder()
+    .setColor(0xffd700)
+    .setTitle('🏆 Rank — @' + user.username)
+    .setDescription(
+      'Calls: ' + stats.totalCalls + ' · Hit rate (2x+): ' + hitPct + '% · Rugs: ' +
+      Math.round((stats.rugs / Math.max(1, stats.totalCalls)) * 100) + '%\n' +
+      'Avg peak: ' + stats.avgPeak + 'x · Median time to 2x: ' +
+      formatDurationMins(stats.medianMinsTo2x) + ' · Streak: ' + stats.streak2x + ' 🔥\n' +
+      'Best call: ' + bestLine,
+    )
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleLeaderboard(interaction) {
+  await interaction.deferReply();
+  const period = interaction.options.getString('period') || 'weekly';
+  const db = ensureDBSchema(loadDB());
+  const since = period === 'weekly' ? Date.now() - 7 * 24 * 60 * 60 * 1000 : 0;
+  const byUser = new Map();
+  for (const e of Object.values(db.tokens || {})) {
+    if (since && (e.postedAt || 0) < since) continue;
+    if (!e.postedByUserId) continue;
+    if (!byUser.has(e.postedByUserId)) byUser.set(e.postedByUserId, []);
+    byUser.get(e.postedByUserId).push(e);
+  }
+  const rows = [];
+  for (const [userId, calls] of byUser) {
+    if (calls.length < 3) continue;
+    const hits = calls.filter((e) => (Number(e.peakMultiple) || 1) >= 2).length;
+    const avg =
+      calls.reduce((s, e) => s + (Number(e.peakMultiple) || 1), 0) / calls.length;
+    rows.push({
+      name: calls[0].postedBy || userId,
+      hitPct: Math.round((hits / calls.length) * 100),
+      avg: Math.round(avg * 10) / 10,
+      total: calls.length,
+    });
+  }
+  rows.sort((a, b) => b.hitPct - a.hitPct || b.avg - a.avg);
+  if (!rows.length) {
+    const msg = period === 'weekly'
+      ? 'Not enough resolved calls this week.'
+      : 'Not enough resolved calls to rank (min 3 per caller).';
+    return interaction.editReply(msg);
+  }
+  const title = period === 'weekly' ? '🏆 Leaderboard — This Week' : '🏆 Leaderboard — All Time';
+  const lines = rows.slice(0, 10).map((r, i) =>
+    (i + 1) + '. @' + r.name + ' — ' + r.hitPct + '% hits · ' + r.avg + 'x avg · ' + r.total + ' calls',
+  );
+  const embed = new EmbedBuilder()
+    .setColor(0x7c3aed)
+    .setTitle(title)
+    .setDescription(lines.join('\n') + '\n\nMin 3 calls to rank. Full stats: /rank @user')
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleApe(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const ca = interaction.options.getString('ca').trim();
+  const priceOpt = interaction.options.getNumber('price');
+  const db = ensureDBSchema(loadDB());
+  const mint = resolveTrackedMint(db, ca);
+  if (!mint) {
+    return interaction.editReply('Not tracking that CA. Post it in the channel first to start tracking.');
+  }
+  const entry = db.tokens[mint];
+  let px = priceOpt;
+  if (px == null) px = entry.lastPrice ? Number(entry.lastPrice) : null;
+  if (px == null || !Number.isFinite(px) || px <= 0) {
+    return interaction.editReply('No live price yet — pass `price:` explicitly.');
+  }
+  setPosition(db, mint, interaction.user.id, px);
+  saveDB(db);
+  await interaction.editReply(
+    'Updated your entry on **$' + entry.symbol + '** to $' + Number(px).toFixed(8),
+  );
+}
+
+async function handleMybags(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const db = ensureDBSchema(loadDB());
+  const rows = buildMyBagsLines(db, interaction.user.id);
+  if (!rows.length) {
+    return interaction.editReply('💼 No open positions — use `/ape` on a tracked token.');
+  }
+  const capped = rows.slice(0, 25);
+  const extra = rows.length > 25 ? '\n…and ' + (rows.length - 25) + ' more' : '';
+  const embed = new EmbedBuilder()
+    .setColor(0x00ccff)
+    .setTitle('💼 Your bags (' + rows.length + ')')
+    .setDescription(capped.map((r) => r.line).join('\n') + extra)
+    .setTimestamp();
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleFollow(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const user = interaction.options.getUser('user');
+  if (!user) return interaction.editReply('Pick a user to follow.');
+  const db = ensureDBSchema(loadDB());
+  followCaller(db, user.id, interaction.user.id);
+  saveDB(db);
+  await interaction.editReply("Following **@" + user.username + "** — you'll get a DM whenever they call.");
+}
+
+async function handleUnfollow(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const user = interaction.options.getUser('user');
+  const db = ensureDBSchema(loadDB());
+  if (!unfollowCaller(db, user.id, interaction.user.id)) {
+    return interaction.editReply("You weren't following that.");
+  }
+  saveDB(db);
+  await interaction.editReply('Unfollowed **@' + user.username + '**.');
+}
+
+async function handleWatch(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const ca = interaction.options.getString('ca').trim();
+  const db = ensureDBSchema(loadDB());
+  const mint = resolveMintForCommand(db, ca);
+  if (!mint) return interaction.editReply('Not tracking that CA.');
+  watchToken(db, mint, interaction.user.id);
+  saveDB(db);
+  await interaction.editReply(
+    'Watching **$' + db.tokens[mint].symbol + '** — DMs on alerts for this token.',
+  );
+}
+
+async function handleUnwatch(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const ca = interaction.options.getString('ca').trim();
+  const db = ensureDBSchema(loadDB());
+  const mint = resolveMintForCommand(db, ca);
+  if (!mint) return interaction.editReply('Not tracking that CA.');
+  if (!unwatchToken(db, mint, interaction.user.id)) {
+    return interaction.editReply("You weren't watching that.");
+  }
+  saveDB(db);
+  await interaction.editReply('Stopped watching **$' + db.tokens[mint].symbol + '**.');
+}
+
+async function handleTag(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const ca = interaction.options.getString('ca').trim();
+  const tagsRaw = interaction.options.getString('tags');
+  const db = ensureDBSchema(loadDB());
+  const mint = resolveMintForCommand(db, ca);
+  if (!mint) return interaction.editReply('Not tracking that CA.');
+  const parsed = parseTagsInput(tagsRaw);
+  const v = validateTags(parsed);
+  if (!v.ok) return interaction.editReply(v.error);
+  applyTags(db.tokens[mint], v.tags);
+  saveDB(db);
+  await interaction.editReply('Tagged **$' + db.tokens[mint].symbol + '**: ' + v.tags.join(', '));
 }
 
 /** Solana-only case-insensitive key lookup (mint-case repair). */
@@ -1695,6 +1903,15 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'calls') return handleCalls(interaction);
     if (interaction.commandName === 'remove') return handleRemove(interaction);
     if (interaction.commandName === 'pelpafkedup') return handlePelpaFkedup(interaction);
+    if (interaction.commandName === 'rank') return handleRank(interaction);
+    if (interaction.commandName === 'leaderboard') return handleLeaderboard(interaction);
+    if (interaction.commandName === 'ape') return handleApe(interaction);
+    if (interaction.commandName === 'mybags') return handleMybags(interaction);
+    if (interaction.commandName === 'follow') return handleFollow(interaction);
+    if (interaction.commandName === 'unfollow') return handleUnfollow(interaction);
+    if (interaction.commandName === 'watch') return handleWatch(interaction);
+    if (interaction.commandName === 'unwatch') return handleUnwatch(interaction);
+    if (interaction.commandName === 'tag') return handleTag(interaction);
     if (interaction.commandName === 'x') return handleX(interaction);
     if (interaction.commandName === 'rug') return handleRug(interaction);
     if (interaction.commandName === 'rugdeep') return handleRug(interaction, 'deep');
@@ -1743,6 +1960,7 @@ client.once('ready', async () => {
     console.error('[inspect] boot report failed:', e.message);
   }
   void runTokenPollLoop(client);
+  startHeliusServer(client, () => ensureDBSchema(loadDB()));
 });
 
 const LOGIN_TIMEOUT_MS = 45_000;
