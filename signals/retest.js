@@ -17,6 +17,8 @@ export async function evaluateRetest(client, db, mint, entry, _live, currentMult
   if (currentMult == null) return false;
   if (currentMult < CFG.RETEST_BAND[0] || currentMult > CFG.RETEST_BAND[1]) return false;
 
+  const addr = entry.address || mint;
+
   const embed = new EmbedBuilder()
     .setColor(0x7c3aed)
     .setTitle(
@@ -25,6 +27,7 @@ export async function evaluateRetest(client, db, mint, entry, _live, currentMult
     .setDescription(
       'Back at OG call price (' + currentMult.toFixed(2) + 'x) after peaking ' +
       peak.toFixed(1) + 'x\n' +
+      '`' + addr + '`\n' +
       'Called by @' + entry.postedBy + ' · ' + fmtDate(entry.postedAt) + ' · full round trip',
     )
     .setTimestamp();
