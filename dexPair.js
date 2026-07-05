@@ -264,3 +264,53 @@ export async function fetchDexPair(address, options = {}) {
   console.error('[dex] failed for ' + address.slice(0, 10) + '...:', lastErr?.message || 'unknown');
   return null;
 }
+
+/**
+ * Resolve 0x on Robinhood Chain only — pool-in, token-out (prevents v1 bug #1).
+ * No cross-chain fallback (prevents v1 bug #2).
+ */
+export async function resolveRobinhoodToken(rawAddr) {
+  const addr = rawAddr.toLowerCase();
+
+  let res = await rateLimiter.fetch(
+    'https://api.dexscreener.com/token-pairs/v1/robinhood/' + addr,
+    { signal: AbortSignal.timeout(10_000) },
+  );
+  if (res.ok) {
+    const pairs = await res.json();
+    if (Array.isArray(pairs) && pairs.length > 0) {
+      const best = pairs.reduce((a, b) =>
+        ((a.liquidity?.usd || 0) >= (b.liquidity?.usd || 0) ? a : b));
+      return { tokenAddress: best.baseToken.address.toLowerCase(), pair: best };
+    }
+  }
+
+  res = await rateLimiter.fetch(
+    'https://api.dexscreener.com/latest/dex/pairs/robinhood/' + addr,
+    { signal: AbortSignal.timeout(10_000) },
+  );
+  if (res.ok) {
+    const data = await res.json();
+    const pair = data?.pairs?.[0] || data?.pair;
+    if (pair?.baseToken?.address) {
+      console.log(
+        '[robinhood] pool address resolved to token ' + pair.baseToken.address +
+        ' (input was pair ' + addr.slice(0, 10) + '…)',
+      );
+      return { tokenAddress: pair.baseToken.address.toLowerCase(), pair };
+    }
+  }
+
+  return null;
+}
+
+/** Build autotrack token object from a resolved Robinhood DexScreener pair. */
+export function tokenDataFromRobinhoodPair(pair, tokenAddress) {
+  const token = pairToToken(pair, tokenAddress);
+  return {
+    ...token,
+    platform: 'dexscreener',
+    chain: 'robinhood',
+    address: tokenAddress,
+  };
+}

@@ -20,7 +20,7 @@ import { initAlertGate, shouldSilenceAlerts } from './alertGate.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
 import { runMintCaseRepair } from './scripts/repair-mint-case.mjs';
-import { fetchDexPair } from './dexPair.js';
+import { fetchDexPair, resolveRobinhoodToken, tokenDataFromRobinhoodPair } from './dexPair.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import {
   DATA_DIR,
@@ -32,11 +32,17 @@ import {
 } from './dbStore.js';
 import {
   chainLabel,
+  chainBadge,
   enabledChainsFooter,
   isSolanaAddress,
   isEvmAddress,
   parseEnabledChains,
   storageKeyForMint,
+  makeStorageKey,
+  extractAddresses,
+  resolveUserInputToKey,
+  resolveArchivedKey,
+  parseStorageKey,
 } from './chains.js';
 
 const client = new Client({
@@ -133,13 +139,107 @@ function getTokenAgeFlag(createdAtMs) {
   return Math.floor(ageHours / 24) + 'd old';
 }
 
-function extractAddresses(text) {
-  const found = new Set();
-  const solanaMatches = text.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g) || [];
-  for (const addr of solanaMatches) {
-    if (/\d/.test(addr) && !/[0OIl]/.test(addr)) found.add(addr);
+function buildTrackedEntry(token, storageKey, message, ageStr) {
+  const { chainId } = parseStorageKey(storageKey);
+  const isRh = chainId === 'robinhood';
+  const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
+  let buyPressurePct = null;
+  if (totalTxns > 0) buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
+
+  return {
+    address: isRh ? token.address : storageKey,
+    name: token.name,
+    symbol: token.symbol,
+    chain: token.chain || chainId,
+    platform: token.platform,
+    postedBy: message.author.username,
+    postedByUserId: message.author.id,
+    postedAt: Date.now(),
+    calledInGuild: message.guildId,
+    alertChannelId: message.channelId,
+    priceAtCall: token.price || null,
+    mcapAtCall: token.marketCap || null,
+    volumeAtCall: token.volume24h || 0,
+    lastPrice: token.price || null,
+    lastVolume: token.volume24h || 0,
+    lastChecked: Date.now(),
+    peakMultiple: 1.0,
+    peakAt: Date.now(),
+    milestonesFired: [],
+    lowMultStreak: 0,
+    takeProfitFired: false,
+    gainAlertFired: false,
+    bondingProgress: isRh ? null : (token.bondingProgress || 0),
+    graduationAlertFired: isRh ? null : false,
+    bondingAlertFired: isRh ? null : false,
+    tokenAge: ageStr || 'unknown',
+    dexUrl: token.dexUrl,
+    imageUrl: token.imageUrl || null,
+    devWallet: isRh ? null : (token.creator || null),
+    devHoldingAtCall: 0,
+    devLastKnownHolding: 0,
+    devDumpAlertFired: false,
+    buyPressure: buyPressurePct || 0,
+    sellPressure: buyPressurePct !== null ? 100 - buyPressurePct : 0,
+  };
+}
+
+async function autoTrack(ref, message, seenThisMessage = new Set()) {
+  const { chainId, raw } = ref;
+  if (chainId === 'robinhood') return autoTrackRobinhood(raw, message, seenThisMessage);
+  return autoTrackSolana(raw, message, seenThisMessage);
+}
+
+async function autoTrackRobinhood(raw, message, seenThisMessage) {
+  const db = ensureDBSchema(loadDB());
+  const resolved = await resolveRobinhoodToken(raw);
+  if (!resolved) {
+    console.log('[autotrack] 0x ' + raw.slice(0, 10) + '… has no robinhood pair — ignored');
+    return;
   }
-  return Array.from(found);
+
+  const storageKey = makeStorageKey('robinhood', resolved.tokenAddress);
+  if (seenThisMessage.has(storageKey)) {
+    console.log('[autotrack] duplicate robinhood mint in same message: ' + storageKey.slice(0, 20) + '…');
+    return;
+  }
+  if (db.tokens[storageKey]) {
+    console.log('[autotrack] already tracking ' + (db.tokens[storageKey].symbol || storageKey) + ' (OG preserved)');
+    return;
+  }
+
+  const archivedKey = resolveArchivedKey(db, storageKey, raw);
+  if (archivedKey) {
+    const og = db.archived[archivedKey];
+    db.tokens[storageKey] = { ...og, address: resolved.tokenAddress };
+    delete db.archived[archivedKey];
+    saveDB(db);
+    console.log('[repair] un-archived ' + (og.symbol || storageKey) + ' on repost — OG call preserved');
+    return;
+  }
+
+  seenThisMessage.add(storageKey);
+  const token = tokenDataFromRobinhoodPair(resolved.pair, resolved.tokenAddress);
+  const ageStr = getTokenAgeFlag(token.pairCreatedAt);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00ccff)
+    .setAuthor({
+      name: chainBadge('robinhood') + ' 📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')',
+    })
+    .setDescription(
+      'Posted by **' + message.author.username + '**' +
+      (ageStr ? ' · ' + ageStr : '') +
+      '\nMCap: **' + fmtUsd(token.marketCap) + '**',
+    )
+    .setFooter({ text: chainLabel('robinhood') })
+    .setTimestamp();
+  if (token.imageUrl) embed.setThumbnail(token.imageUrl);
+  await message.channel.send({ embeds: [embed] });
+
+  db.tokens[storageKey] = buildTrackedEntry(token, storageKey, message, ageStr);
+  saveDB(db);
+  console.log('[tracked] ' + token.name + ' (' + token.symbol + ') [' + chainLabel('robinhood') + '] — posted by ' + message.author.username);
 }
 
 async function fetchTokenData(address, messageText = '', { autotrack = false } = {}) {
@@ -181,6 +281,104 @@ async function fetchTokenData(address, messageText = '', { autotrack = false } =
   }
 
   return null;
+}
+
+async function autoTrackSolana(address, message, seenThisMessage = new Set()) {
+  const db = ensureDBSchema(loadDB());
+
+  if (db.tokens[address]) {
+    console.log('[autotrack] already tracking (exact key) ' + address.slice(0, 8) + '...');
+    return;
+  }
+
+  let token = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    token = await fetchTokenData(address, message.content, { autotrack: true });
+    if (token) break;
+    if (attempt < 2) {
+      console.log('[autotrack] retry ' + (attempt + 2) + '/3 for ' + address.slice(0, 10) + '...');
+      await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+    }
+  }
+  if (!token) {
+    console.log('[skip] ' + address.slice(0, 8) + '... — not found');
+    if (!shouldSilenceAlerts()) {
+      await message.channel.send({
+        embeds: [{
+          color: 0xff4444,
+          description:
+            '⚠️ Could not find token data for `' + address + '` — not added to tracking\n\n' +
+            'No DexScreener/pump.fun listing yet, or temporary API timeout — **try again in a moment.**',
+          footer: { text: enabledChainsFooter() },
+        }],
+      }).catch(() => null);
+    }
+    return;
+  }
+
+  const storageKey = storageKeyForMint(address, token);
+
+  if (seenThisMessage.has(storageKey)) {
+    console.log('[autotrack] duplicate mint in same message: ' + storageKey.slice(0, 8) + '...');
+    return;
+  }
+
+  const existingCanonical = resolveTokenKey(db, storageKey);
+  if (existingCanonical || db.tokens[storageKey]) {
+    const key = existingCanonical || storageKey;
+    if (key !== storageKey && !isEvmAddress(storageKey)) {
+      const og = db.tokens[key];
+      db.tokens[storageKey] = { ...og, address: storageKey };
+      delete db.tokens[key];
+      saveDB(db);
+      console.log(
+        '[repair] fixed mint case for ' + (og.symbol || storageKey.slice(0, 8)) +
+        ' — OG call preserved, polling restored',
+      );
+    } else {
+      const sym = db.tokens[key]?.symbol || storageKey.slice(0, 8);
+      console.log('[autotrack] already tracking ' + sym + ' (canonical mint — OG call preserved)');
+    }
+    return;
+  }
+
+  const archivedKey = resolveArchivedKey(db, storageKey, address);
+  if (archivedKey) {
+    const og = db.archived[archivedKey];
+    const newKey = archivedKey !== storageKey && !isEvmAddress(storageKey) ? storageKey : archivedKey;
+    db.tokens[newKey] = { ...og, address: newKey };
+    delete db.archived[archivedKey];
+    saveDB(db);
+    console.log('[repair] un-archived ' + (og.symbol || newKey.slice(0, 8)) + ' on repost — OG call preserved');
+    return;
+  }
+
+  seenThisMessage.add(storageKey);
+
+  const ageStr = getTokenAgeFlag(token.pairCreatedAt);
+  const posterLine = ageStr
+    ? 'Posted by **' + message.author.username + '** · ' + ageStr
+    : 'Posted by **' + message.author.username + '**';
+
+  const descParts = [posterLine, 'MCap: **' + fmtUsd(token.marketCap) + '**'];
+  if (token.platform === 'pumpfun' && !token.complete) {
+    descParts.push('⏳ Bonding curve: **' + (token.bondingProgress ? token.bondingProgress.toFixed(0) : 0) + '%** to Raydium');
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(0x00ccff)
+    .setAuthor({
+      name: chainBadge('solana') + ' 📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')',
+    })
+    .setDescription(descParts.join('\n'))
+    .setFooter({ text: chainLabel(token.chain) })
+    .setTimestamp();
+  if (token.imageUrl) embed.setThumbnail(token.imageUrl);
+  await message.channel.send({ embeds: [embed] });
+
+  db.tokens[storageKey] = buildTrackedEntry(token, storageKey, message, ageStr);
+  saveDB(db);
+  console.log('[tracked] ' + token.name + ' (' + token.symbol + ') [' + chainLabel(token.chain) + '] — posted by ' + message.author.username);
 }
 
 async function fetchDexScreener(address, chainHint) {
@@ -634,158 +832,16 @@ async function fetchDeepForensics(mint, creator, deadline) {
   return out;
 }
 
-async function autoTrack(address, message, seenThisMessage = new Set()) {
-  const db = ensureDBSchema(loadDB());
-
-  if (db.tokens[address]) {
-    console.log('[autotrack] already tracking (exact key) ' + address.slice(0, 8) + '...');
-    return;
-  }
-
-  let token = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    token = await fetchTokenData(address, message.content, { autotrack: true });
-    if (token) break;
-    if (attempt < 2) {
-      console.log('[autotrack] retry ' + (attempt + 2) + '/3 for ' + address.slice(0, 10) + '...');
-      await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
-    }
-  }
-  if (!token) {
-    console.log('[skip] ' + address.slice(0, 8) + '... — not found');
-    if (!shouldSilenceAlerts()) {
-      await message.channel.send({
-        embeds: [{
-          color: 0xff4444,
-          description:
-            '⚠️ Could not find token data for `' + address + '` — not added to tracking\n\n' +
-            'No DexScreener/pump.fun listing yet, or temporary API timeout — **try again in a moment.**',
-          footer: { text: enabledChainsFooter() },
-        }],
-      }).catch(() => null);
-    }
-    return;
-  }
-
-  const storageKey = storageKeyForMint(address, token);
-
-  if (seenThisMessage.has(storageKey)) {
-    console.log('[autotrack] duplicate mint in same message: ' + storageKey.slice(0, 8) + '...');
-    return;
-  }
-
-  const existingCanonical = resolveTokenKey(db, storageKey);
-  if (existingCanonical || db.tokens[storageKey]) {
-    const key = existingCanonical || storageKey;
-    if (key !== storageKey && !isEvmAddress(storageKey)) {
-      const og = db.tokens[key];
-      db.tokens[storageKey] = { ...og, address: storageKey };
-      delete db.tokens[key];
-      saveDB(db);
-      console.log(
-        '[repair] fixed mint case for ' + (og.symbol || storageKey.slice(0, 8)) +
-        ' — OG call preserved, polling restored',
-      );
-    } else {
-      const sym = db.tokens[key]?.symbol || storageKey.slice(0, 8);
-      console.log('[autotrack] already tracking ' + sym + ' (canonical mint — OG call preserved)');
-    }
-    return;
-  }
-
-  const archivedKey = resolveArchivedKey(db, storageKey);
-  if (archivedKey) {
-    const og = db.archived[archivedKey];
-    const newKey = archivedKey !== storageKey && !isEvmAddress(storageKey) ? storageKey : archivedKey;
-    db.tokens[newKey] = { ...og, address: newKey };
-    delete db.archived[archivedKey];
-    saveDB(db);
-    console.log('[repair] un-archived ' + (og.symbol || newKey.slice(0, 8)) + ' on repost — OG call preserved');
-    return;
-  }
-
-  seenThisMessage.add(storageKey);
-
-  const ageStr = getTokenAgeFlag(token.pairCreatedAt);
-  const posterLine = ageStr
-    ? 'Posted by **' + message.author.username + '** · ' + ageStr
-    : 'Posted by **' + message.author.username + '**';
-
-  const descParts = [
-    posterLine,
-    'MCap: **' + fmtUsd(token.marketCap) + '**',
-  ];
-
-  if (token.platform === 'pumpfun' && !token.complete) {
-    descParts.push('⏳ Bonding curve: **' + (token.bondingProgress ? token.bondingProgress.toFixed(0) : 0) + '%** to Raydium');
-  }
-
-  const embed = new EmbedBuilder()
-    .setColor(0x00ccff)
-    .setAuthor({ name: '📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')' })
-    .setDescription(descParts.join('\n'))
-    .setFooter({ text: chainLabel(token.chain) })
-    .setTimestamp();
-
-  if (token.imageUrl) embed.setThumbnail(token.imageUrl);
-
-  await message.channel.send({ embeds: [embed] });
-
-  const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
-  let buyPressurePct = null;
-  if (totalTxns > 0) buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
-
-  db.tokens[storageKey] = {
-    address: storageKey,
-    name: token.name,
-    symbol: token.symbol,
-    chain: token.chain || 'solana',
-    platform: token.platform,
-    postedBy: message.author.username,
-    postedByUserId: message.author.id,
-    postedAt: Date.now(),
-    calledInGuild: message.guildId,
-    alertChannelId: message.channelId,
-    priceAtCall: token.price || null,
-    mcapAtCall: token.marketCap || null,
-    volumeAtCall: token.volume24h || 0,
-    lastPrice: token.price || null,
-    lastVolume: token.volume24h || 0,
-    lastChecked: Date.now(),
-    peakMultiple: 1.0,
-    peakAt: Date.now(),
-    milestonesFired: [],
-    lowMultStreak: 0,
-    takeProfitFired: false,
-    gainAlertFired: false,
-    bondingProgress: token.bondingProgress || 0,
-    graduationAlertFired: false,
-    bondingAlertFired: false,
-    tokenAge: ageStr || 'unknown',
-    dexUrl: token.dexUrl,
-    imageUrl: token.imageUrl || null,
-    devWallet: token.creator || null,
-    devHoldingAtCall: 0,
-    devLastKnownHolding: 0,
-    devDumpAlertFired: false,
-    buyPressure: buyPressurePct || 0,
-    sellPressure: buyPressurePct !== null ? 100 - buyPressurePct : 0,
-  };
-
-  saveDB(db);
-  console.log('[tracked] ' + token.name + ' (' + token.symbol + ') [' + chainLabel(token.chain) + '] — posted by ' + message.author.username);
-}
-
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
-  const addresses = extractAddresses(message.content);
-  if (addresses.length === 0) return;
-  console.log('[detect] Found ' + addresses.length + ' address(es) from ' + message.author.username);
+  const refs = extractAddresses(message.content);
+  if (refs.length === 0) return;
+  console.log('[detect] Found ' + refs.length + ' address(es) from ' + message.author.username);
   const seenThisMessage = new Set();
-  for (const address of addresses) {
-    await autoTrack(address, message, seenThisMessage).catch(e =>
-      console.error('[autotrack] Error for ' + address + ':', e.message)
+  for (const ref of refs) {
+    await autoTrack(ref, message, seenThisMessage).catch((e) =>
+      console.error('[autotrack] Error for ' + ref.raw + ':', e.message),
     );
   }
 });
@@ -1004,7 +1060,7 @@ async function handleCalls(interaction) {
         (mult >= 2 ? '**' : '') +
         stale + backfillMark;
     }
-    return '**' + entry.name + ' (' + entry.symbol + ')** — ' + multStr +
+    return chainBadge(entry.chain) + ' **' + entry.name + ' (' + entry.symbol + ')** — ' + multStr +
            '\n└ **' + entry.postedBy + '** · ' + fmtTime(entry.postedAt);
   });
 
@@ -1025,7 +1081,7 @@ async function handleCalls(interaction) {
 async function handleRemove(interaction) {
   const address = interaction.options.getString('address').trim();
   const db = ensureDBSchema(loadDB());
-  const key = resolveTokenKey(db, address);
+  const key = resolveUserInputToKey(db, address);
   if (!key) {
     return interaction.reply({ content: 'Not tracking `' + address + '`', ephemeral: true });
   }
@@ -1034,31 +1090,28 @@ async function handleRemove(interaction) {
   delete db.tokens[key];
   markRemovedThisCycle(key);
   saveDB(db);
-  await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')**');
+  await interaction.reply('Stopped tracking **' + name + ' (' + symbol + ')** · `' + key + '`');
 }
 
+/** Solana-only case-insensitive key lookup (mint-case repair). */
 function resolveTokenKey(db, rawAddress) {
   const trimmed = rawAddress.trim();
   if (db.tokens[trimmed]) return trimmed;
   const lower = trimmed.toLowerCase();
   if (db.tokens[lower]) return lower;
-  return Object.keys(db.tokens).find((k) => k.toLowerCase() === lower) || null;
-}
-
-function resolveArchivedKey(db, rawAddress) {
-  if (!db.archived) return null;
-  const trimmed = rawAddress.trim();
-  if (db.archived[trimmed]) return trimmed;
-  const lower = trimmed.toLowerCase();
-  if (db.archived[lower]) return lower;
-  return Object.keys(db.archived).find((k) => k.toLowerCase() === lower) || null;
+  return (
+    Object.keys(db.tokens).find((k) => {
+      const p = parseStorageKey(k);
+      return p.chainId === 'solana' && k.toLowerCase() === lower;
+    }) || null
+  );
 }
 
 /** Emergency untrack when a token spams alerts — same as /remove, public confirmation. */
 async function handlePelpaFkedup(interaction) {
   const address = interaction.options.getString('address').trim();
   const db = ensureDBSchema(loadDB());
-  const key = resolveTokenKey(db, address);
+  const key = resolveUserInputToKey(db, address);
   if (!key) {
     return interaction.reply({
       content: '🤷 Not tracking `' + address + '` — nothing to yeet.',

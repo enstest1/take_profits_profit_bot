@@ -8,8 +8,8 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
-import { chainLabel, isEvmAddress, isBrokenSolKey } from './chains.js';
-import { batchFetchSolana } from './dexBatch.js';
+import { chainLabel, isBrokenSolKey, parseStorageKey, isLegacyEvmKey, enabledChains, chainBadge } from './chains.js';
+import { batchFetch, batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import {
@@ -590,24 +590,29 @@ export async function pollTokens(client) {
     let warmCount = 0;
     let coldCount = 0;
     let inactiveCount = 0;
-    let skippedChainCount = 0;
+    let legacySkipCount = 0;
+    let disabledChainCount = 0;
     let brokenCount = 0;
-    for (const address of ordered) {
-      const entry = db.tokens[address];
+    for (const storageKey of ordered) {
+      const entry = db.tokens[storageKey];
       if (!entry) continue;
-      const entryChain = (entry.chain || 'solana').toLowerCase();
-      if (entryChain !== 'solana' || isEvmAddress(address)) {
-        skippedChainCount += 1;
+      const { chainId } = parseStorageKey(storageKey);
+      if (isLegacyEvmKey(storageKey)) {
+        legacySkipCount += 1;
         continue;
       }
-      if (isBrokenSolKey(address, entry)) brokenCount += 1;
+      if (!enabledChains().includes(chainId)) {
+        disabledChainCount += 1;
+        continue;
+      }
+      if (chainId === 'solana' && isBrokenSolKey(storageKey, entry)) brokenCount += 1;
       if (isInactiveForPolling(entry)) inactiveCount += 1;
       const tier = pollTierForEntry(entry);
       if (tier === 'hot') hotCount += 1;
       else if (tier === 'warm') warmCount += 1;
       else coldCount += 1;
-      if (shouldPollAddressThisCycle(address, entry, cycleNum)) {
-        scheduled.push(address);
+      if (shouldPollAddressThisCycle(storageKey, entry, cycleNum)) {
+        scheduled.push(storageKey);
       }
     }
 
@@ -620,40 +625,55 @@ export async function pollTokens(client) {
       );
     }
 
-    function milestoneOptsFor(address) {
+    function milestoneOptsFor(storageKey) {
       const milestoneOpts = {};
       if (runMilestoneBootstrap) {
-        if (newest5Set.has(address)) milestoneOpts.tier1OnlyBootstrap = true;
+        if (newest5Set.has(storageKey)) milestoneOpts.tier1OnlyBootstrap = true;
         else milestoneOpts.suppressTierX = true;
       }
       return milestoneOpts;
     }
 
-    const dexMints = [];
+    const byChain = new Map();
     const pumpMints = [];
-    for (const address of scheduled) {
-      const entry = db.tokens[address];
-      if (isBrokenSolKey(address, entry)) continue;
-      if (entry?.platform === 'pumpfun' && !entry.graduationAlertFired) {
-        pumpMints.push(address);
-      } else {
-        dexMints.push(address);
+    for (const storageKey of scheduled) {
+      const entry = db.tokens[storageKey];
+      const { chainId, address } = parseStorageKey(storageKey);
+      if (isLegacyEvmKey(storageKey)) continue;
+      if (!enabledChains().includes(chainId)) continue;
+      if (chainId === 'solana' && isBrokenSolKey(storageKey, entry)) continue;
+      if (chainId === 'solana' && entry?.platform === 'pumpfun' && !entry.graduationAlertFired) {
+        pumpMints.push(storageKey);
+        continue;
       }
+      const arr = byChain.get(chainId) || [];
+      arr.push({ key: storageKey, address });
+      byChain.set(chainId, arr);
     }
 
-    dexMints.sort((a, b) => tierRank(db.tokens[a]) - tierRank(db.tokens[b]));
+    for (const [, items] of byChain) {
+      items.sort((a, b) => tierRank(db.tokens[a.key]) - tierRank(db.tokens[b.key]));
+    }
 
-    const liveMap = await batchFetchSolana(dexMints);
+    const chainBatchCounts = {};
     let dexProcessed = 0;
-    for (const address of dexMints) {
-      const live = liveMap.get(address);
-      if (!live) continue;
-      try {
-        await processTokenWithLive(client, address, db, live, milestoneOptsFor(address));
-        dexProcessed += 1;
-      } catch (e) {
-        console.error('[poll] Error processing ' + address + ':', e.message);
+    for (const [chainId, items] of byChain) {
+      const addrs = items.map((i) => i.address);
+      const liveMap = await batchFetch(chainId, addrs);
+      let chainProcessed = 0;
+      for (const { key, address } of items) {
+        const lookup = chainId === 'solana' ? address : address.toLowerCase();
+        const live = liveMap.get(lookup);
+        if (!live) continue;
+        try {
+          await processTokenWithLive(client, key, db, live, milestoneOptsFor(key));
+          chainProcessed += 1;
+          dexProcessed += 1;
+        } catch (e) {
+          console.error('[poll] Error processing ' + key + ':', e.message);
+        }
       }
+      chainBatchCounts[chainId] = chainProcessed + '/' + items.length;
     }
 
     await runPollBatch(pumpMints, async (address) => {
@@ -682,11 +702,15 @@ export async function pollTokens(client) {
 
     const elapsed = Math.round((Date.now() - tCycle) / 1000);
     const rateStats = rateLimiter.stats();
+    const batchSummary = Object.entries(chainBatchCounts)
+      .map(([c, n]) => c + '=' + n)
+      .join(' ');
     console.log(
       '[poll] Cycle #' + cycleNum + ' done in ' + elapsed + 's — scheduled ' + scheduled.length +
       '/' + ordered.length + ' (hot=' + hotCount + ', warm=' + warmCount + ', cold=' + coldCount +
-      ', inactive=' + inactiveCount + ', skippedChain=' + skippedChainCount + ', broken=' + brokenCount +
-      ', dexBatch=' + dexProcessed + '/' + dexMints.length + ', pump=' + pumpMints.length +
+      ', inactive=' + inactiveCount + ', legacy=' + legacySkipCount +
+      ', disabled=' + disabledChainCount + ', broken=' + brokenCount +
+      ', batch ' + (batchSummary || 'none') + ', pump=' + pumpMints.length +
       ') rate=' + JSON.stringify(rateStats),
     );
   } finally {
@@ -791,7 +815,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     const thumb = tokenThumbnail(entry, live);
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
-      .setTitle('📈 ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
+      .setTitle('📈 ' + chainBadge(entry.chain) + ' ' + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
       .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
     if (thumb) embed.setThumbnail(thumb);
 
@@ -845,7 +869,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
         const thumb = tokenThumbnail(entry, live);
         const embed = new EmbedBuilder()
           .setColor(0xffd700)
-          .setTitle('🎯 ' + alertTier + 'x — ' + entry.name + ' (' + entry.symbol + ')')
+          .setTitle('🎯 ' + alertTier + 'x — ' + chainBadge(entry.chain) + ' ' + entry.name + ' (' + entry.symbol + ')')
           .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
         if (thumb) embed.setThumbnail(thumb);
 
@@ -898,7 +922,12 @@ async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}
   const live = await fetchLiveData(address, entry, solPriceUsd);
   if (!live) return;
 
-  // Graduation check
+  if (entry.chain === 'robinhood') {
+    await evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts);
+    return;
+  }
+
+  // Graduation check (Solana pump.fun only)
   if (live.source === 'pumpfun' && live.rawPump) {
     const pumpData = live.rawPump;
     if (pumpData.complete === true && !graduationAlertFired) {
