@@ -145,6 +145,13 @@ export function resolveArchivedKey(db, storageKey, rawInput) {
   );
 }
 
+/** Skip 0x matches embedded in dexscreener.com/<other-chain>/ URLs (spec test #7). */
+function isForeignDexScreenerContext(body, startIndex, rawLen) {
+  const chunk = body.slice(Math.max(0, startIndex - 60), startIndex + rawLen);
+  const hit = chunk.match(/dexscreener\.com\/([a-z0-9_-]+)\/0x[a-fA-F0-9]{40}$/i);
+  return hit && hit[1].toLowerCase() !== 'robinhood';
+}
+
 /**
  * Chain-tagged address extraction from chat text.
  * With ENABLED_CHAINS=solana only, 0x strings produce zero matches (unchanged behavior).
@@ -173,6 +180,9 @@ export function extractAddresses(text) {
       let raw = m[0];
       if (chainId === 'solana') {
         if (!/\d/.test(raw) || /[0OIl]/.test(raw)) continue;
+      }
+      if (chain.kind === 'evm' && isForeignDexScreenerContext(body, m.index ?? 0, raw.length)) {
+        continue;
       }
       const dedupeKey = chainId + ':' + (chain.kind === 'evm' ? raw.toLowerCase() : raw);
       if (seen.has(dedupeKey)) continue;
