@@ -1,6 +1,6 @@
 /** Channel alert send — respects alertGate; shared by poller + v3 signals. */
-import { shouldSilenceAlerts, getAlertSilenceStatus } from '../alertGate.js';
-import { notifyWatchSubscribers } from '../subscriptions.js';
+import { shouldSilenceAlerts, getAlertSilenceStatus } from './alertGate.js';
+import { notifyWatchSubscribers } from './subscriptions.js';
 
 export async function sendChannelAlert(client, channelId, embed, label = 'alert') {
   if (shouldSilenceAlerts()) {
