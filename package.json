@@ -4,7 +4,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node start.mjs",
     "start:warden": "node warden/index.js",
     "warden:test": "node warden/tests/acceptance.mjs",
     "inspect": "node scripts/inspect-tracked.mjs",
