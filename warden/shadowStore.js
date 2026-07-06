@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isBrokenSolKey, parseStorageKey } from '../../chains.js';
+import { allEntries } from '../lib/entries.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const DATA_DIR = fs.existsSync('/data/warden') ? '/data/warden' : path.join(ROOT, '.warden-data');
@@ -8,6 +10,7 @@ export const DATA_DIR = fs.existsSync('/data/warden') ? '/data/warden' : path.jo
 const SNAPSHOTS_DIR = path.join(DATA_DIR, 'snapshots');
 const DAILY_DIR = path.join(DATA_DIR, 'daily');
 const LEGACY_KEYS_PATH = path.join(DATA_DIR, 'legacyEvmKeys.json');
+const BROKEN_KEYS_PATH = path.join(DATA_DIR, 'frozenBrokenKeys.json');
 const META_PATH = path.join(DATA_DIR, 'meta.json');
 
 function ensureDirs() {
@@ -144,4 +147,25 @@ export function loadLegacyEvmKeys() {
   initShadowStore();
   if (!fs.existsSync(LEGACY_KEYS_PATH)) return null;
   return JSON.parse(fs.readFileSync(LEGACY_KEYS_PATH, 'utf8'));
+}
+
+/** Frozen mangled-mint keys at first snapshot — steady-state keys don't re-alert REG-2. */
+export function initFrozenBrokenKeys(snap) {
+  initShadowStore();
+  if (fs.existsSync(BROKEN_KEYS_PATH)) {
+    return JSON.parse(fs.readFileSync(BROKEN_KEYS_PATH, 'utf8'));
+  }
+  const keys = [];
+  for (const [key, entry] of allEntries(snap)) {
+    if (parseStorageKey(key).chainId === 'solana' && isBrokenSolKey(key, entry)) keys.push(key);
+  }
+  fs.writeFileSync(BROKEN_KEYS_PATH, JSON.stringify(keys, null, 2));
+  console.log('[warden] frozen broken Solana keys: ' + keys.length);
+  return keys;
+}
+
+export function loadFrozenBrokenKeys() {
+  initShadowStore();
+  if (!fs.existsSync(BROKEN_KEYS_PATH)) return null;
+  return JSON.parse(fs.readFileSync(BROKEN_KEYS_PATH, 'utf8'));
 }

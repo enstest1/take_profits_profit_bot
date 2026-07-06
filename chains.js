@@ -94,13 +94,35 @@ export function evmEnabledChains() {
   return enabledChains().filter((c) => c !== 'solana');
 }
 
-/** Solana key with letters but zero uppercase = mangled by the lowercase bug. */
+/** Base58 in dexUrl matching key case-insensitively but not literally = mangled mint key. */
+function mixedCaseEvidenceInDexUrl(key, dexUrl) {
+  if (!dexUrl || !key) return false;
+  const re = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+  let m;
+  while ((m = re.exec(dexUrl)) !== null) {
+    const s = m[0];
+    if (s.toLowerCase() === key.toLowerCase() && s !== key) return true;
+  }
+  return false;
+}
+
+/**
+ * Solana key mangled by the old lowercase bug — NOT merely "all lowercase".
+ * pump.fun mints are often legitimately all-lowercase base58; only flag when
+ * entry.address or dexUrl proves a mixed-case canonical exists for this mint.
+ */
 export function isBrokenSolKey(key, entry) {
   const { chainId, address } = parseStorageKey(key);
   if (chainId !== 'solana') return false;
   if ((entry?.chain || 'solana').toLowerCase() !== 'solana') return false;
   if (/^0x/i.test(address)) return false;
-  return /[a-z]/.test(address) && !/[A-Z]/.test(address);
+  if (!/[a-z]/.test(address) || /[A-Z]/.test(address)) return false;
+
+  const addr = entry?.address || key;
+  if (addr !== key && addr.toLowerCase() === key.toLowerCase() && /[A-Z]/.test(addr)) return true;
+  if (mixedCaseEvidenceInDexUrl(key, entry?.dexUrl)) return true;
+
+  return false;
 }
 
 /**

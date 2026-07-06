@@ -40,6 +40,40 @@ function collect(fn, prev, curr) {
   assert.equal(issues.length, 0, 'repair twin should not alert');
 }
 
+// Test 8b: legit all-lowercase pump.fun mint — not REG-2
+{
+  const key = 'mgwxsefhmcuxxgj1vh9hdtrtjjmkmg1zdnbbq2vpump';
+  const db = snap({
+    [key]: {
+      address: key,
+      chain: 'solana',
+      alertChannelId: '1',
+      postedAt: Date.now() - 1e6,
+      lastChecked: Date.now(),
+      dexUrl: 'https://dexscreener.com/solana/' + key,
+    },
+  });
+  const issues = [];
+  checkKeyHygiene(db, (id, sev) => issues.push({ id, sev }), { legacyFrozen: [], frozenBroken: [], prevSnap: null });
+  assert.equal(issues.filter((i) => i.id === 'REG-2').length, 0, 'lowercase pump mint should not REG-2');
+}
+
+// Test 8c: truly mangled mint — mixed case in dexUrl
+{
+  const key = 'mgwxsefhmcuxxgj1vh9hdtrtjjmkmg1zdnbbq2vpump';
+  const canonical = 'MgWxsefhmcuxxgj1vh9hdtrtjjmkmg1zdnbbq2vpump';
+  const db = snap({
+    [key]: {
+      address: key,
+      alertChannelId: '1',
+      dexUrl: 'https://dexscreener.com/solana/' + canonical,
+    },
+  });
+  const issues = [];
+  checkKeyHygiene(db, (id, sev) => issues.push({ id, sev }), { legacyFrozen: [], frozenBroken: [], prevSnap: null });
+  assert.ok(issues.some((i) => i.id === 'REG-2'), 'mangled mint with mixed-case dexUrl should REG-2');
+}
+
 // Test 8: valid robinhood
 {
   const key = 'robinhood:0xabc1234567890123456789012345678901234';

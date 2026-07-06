@@ -1,5 +1,5 @@
 import { runLiveAudit } from './checks/runChecks.js';
-import { loadLegacyEvmKeys } from './shadowStore.js';
+import { loadLegacyEvmKeys, loadFrozenBrokenKeys } from './shadowStore.js';
 
 /**
  * Run Layer-1 checks on live DB for /audit slash command.
@@ -8,12 +8,13 @@ import { loadLegacyEvmKeys } from './shadowStore.js';
 export function auditDatabase(db, statusBroken = 0) {
   const issues = [];
   const legacyFrozen = loadLegacyEvmKeys();
+  const frozenBroken = loadFrozenBrokenKeys();
 
   const raise = (checkId, severity, mint, message, diff) => {
     issues.push({ checkId, severity, mint: mint || 'global', message, diff });
   };
 
-  runLiveAudit(db, raise, { legacyFrozen, statusBroken, prevBroken: statusBroken });
+  runLiveAudit(db, raise, { legacyFrozen, frozenBroken, statusBroken, prevBroken: statusBroken });
 
   const critical = issues.filter((i) => i.severity === 'CRITICAL');
   return { issues, ok: critical.length === 0, criticalCount: critical.length, warnCount: issues.length - critical.length };

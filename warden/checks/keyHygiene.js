@@ -1,7 +1,7 @@
 import { CHAINS, parseStorageKey, isBrokenSolKey } from '../../chains.js';
 import { allEntries } from '../lib/entries.js';
 
-export function checkKeyHygiene(snap, raise, { legacyFrozen, statusBroken, prevBroken, prevSnap }) {
+export function checkKeyHygiene(snap, raise, { legacyFrozen, frozenBroken, statusBroken, prevBroken, prevSnap }) {
   if (!snap) return;
   const keysByLower = new Map();
 
@@ -12,8 +12,9 @@ export function checkKeyHygiene(snap, raise, { legacyFrozen, statusBroken, prevB
       if (key !== (entry?.address || key)) {
         raise('C3', 'CRITICAL', key, 'Solana key !== entry.address', { key, address: entry?.address });
       }
-      if (isBrokenSolKey(key, entry)) {
-        raise('REG-2', 'CRITICAL', key, 'Lowercase Solana mint regression', { key });
+      // REG-2 per-key: only new mangled keys (frozen set from first snapshot) — not steady-state pump mints
+      if (isBrokenSolKey(key, entry) && !(frozenBroken || []).includes(key)) {
+        raise('REG-2', 'CRITICAL', key, 'New lowercase Solana mint regression', { key });
       }
       const lower = key.toLowerCase();
       const dup = keysByLower.get('sol:' + lower);

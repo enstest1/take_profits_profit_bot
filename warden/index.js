@@ -12,6 +12,8 @@ import {
   storeSnapshot,
   initLegacyEvmKeys,
   loadLegacyEvmKeys,
+  initFrozenBrokenKeys,
+  loadFrozenBrokenKeys,
   loadMeta,
 } from './shadowStore.js';
 import * as alerts from './alerts.js';
@@ -96,6 +98,7 @@ async function onSnapshot() {
   const prevEnvelope = loadPreviousSnapshot();
   const prevDb = prevEnvelope?.db || null;
   if (!loadLegacyEvmKeys()) initLegacyEvmKeys(db);
+  if (!loadFrozenBrokenKeys()) initFrozenBrokenKeys(db);
 
   const stored = storeSnapshot(db, { hash: pulled.hash, gitSha });
   if (!stored.changed) return;
@@ -105,6 +108,7 @@ async function onSnapshot() {
   const raise = makeRaise(gitSha, stored.envelope?.pulledAt || Date.now());
   const ctx = {
     legacyFrozen: loadLegacyEvmKeys(),
+    frozenBroken: loadFrozenBrokenKeys(),
     statusBroken: lastStatus?.broken ?? 0,
     prevBroken,
     prevSnap: prevDb,
