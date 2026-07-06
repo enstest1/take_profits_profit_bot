@@ -1,8 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { isBrokenSolKey, parseStorageKey } from '../../chains.js';
-import { allEntries } from '../lib/entries.js';
+import { isBrokenSolKey, parseStorageKey } from '../chains.js';
+import { allEntries } from './lib/entries.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const DATA_DIR = fs.existsSync('/data/warden') ? '/data/warden' : path.join(ROOT, '.warden-data');
