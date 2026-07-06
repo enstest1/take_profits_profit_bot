@@ -7,6 +7,7 @@
     "start": "node start.mjs",
     "start:warden": "node warden/index.js",
     "warden:test": "node warden/tests/acceptance.mjs",
+    "test:x": "node scripts/test-x-social.mjs",
     "inspect": "node scripts/inspect-tracked.mjs",
     "test:summary": "node scripts/test-daily-summary.mjs",
     "tp:sample": "node scripts/send-tp-sample-embeds.mjs"

@@ -8,6 +8,7 @@ import { notifyFollowSubscribers } from './subscriptions.js';
 import { recordChannelSighting } from './signals/confluence.js';
 import { subscribeDevWallet } from './webhooks/devSell.js';
 import { saveDB } from './dbStore.js';
+import { xHistoryLine, indexXAccount } from './xSocial.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -39,6 +40,10 @@ export function buildTrackingDescription(message, ageStr, token, db, storageKey)
   }
   const devLine = token.creator ? deployerHistoryLine(db, token.creator, storageKey) : '';
   if (devLine) parts.push(devLine);
+  if (token.xHandle) {
+    const xLine = xHistoryLine(db, token.xHandle, storageKey);
+    if (xLine) parts.push(xLine);
+  }
   return parts.join('\n');
 }
 
@@ -61,6 +66,7 @@ export async function sendTrackingEmbed(message, token, storageKey, db, buildEnt
   const entry = buildEntryFn();
   if (token.liquidity > 0) entry.liquidityAtCall = token.liquidity;
   db.tokens[storageKey] = entry;
+  if (entry.xHandle) indexXAccount(db, entry.xHandle, storageKey);
   saveDB(db);
 
   if (entry.devWallet) {

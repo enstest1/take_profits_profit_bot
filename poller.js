@@ -21,6 +21,7 @@ import { evaluateLiquidityDivergence } from './signals/liquidity.js';
 import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
 import { evaluatePersonalPositions } from './positions.js';
 import { sendChannelAlert, sendTokenAlert } from './channelAlert.js';
+import { indexXAccount } from './xSocial.js';
 import { checkWeeklyRecap } from './recap.js';
 import { CFG } from './signals/config.js';
 import {
@@ -950,6 +951,10 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
   db.tokens[address].lastPrice = String(livePrice);
   db.tokens[address].lastVolume = live.volume24h || 0;
   db.tokens[address].lastChecked = Date.now();
+  if (entry.xHandle === undefined && live.xHandle) {
+    db.tokens[address].xHandle = live.xHandle;
+    indexXAccount(db, live.xHandle, address);
+  }
   db.tokens[address].peakMultiple = newPeak;
   if (newPeak > storedPeak) {
     db.tokens[address].athLedger = {

@@ -1,5 +1,6 @@
 import { parseEnabledChains } from './chains.js';
 import { rateLimiter } from './rateLimiter.js';
+import { xHandleFromPair } from './xSocial.js';
 
 function normalizeChainId(chainId) {
   return String(chainId || '').toLowerCase();
@@ -78,6 +79,7 @@ function pairToToken(pair, address) {
     imageUrl: (pair.info && pair.info.imageUrl) || null,
     pairCreatedAt: pair.pairCreatedAt || null,
     source: 'dexscreener',
+    xHandle: xHandleFromPair(pair),
   };
 }
 

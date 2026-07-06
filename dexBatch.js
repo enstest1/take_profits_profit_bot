@@ -1,5 +1,6 @@
 import { rateLimiter } from './rateLimiter.js';
 import { CHAINS } from './chains.js';
+import { xHandleFromPair } from './xSocial.js';
 
 const BATCH_SIZE = 30;
 
@@ -53,6 +54,7 @@ function pairToLive(pair, mint, chainId) {
     dexUrl: pair.url || null,
     imageUrl: pair.info?.imageUrl || null,
     source: 'dexscreener',
+    xHandle: xHandleFromPair(pair),
   };
 }
 
