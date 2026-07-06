@@ -3,6 +3,8 @@ node_modules/
 tracked.json
 .tp_milestone_bootstrap_v2
 backups/
+.warden-data/
+warden/.warden-data/
 *.log
 .DS_Store
 Thumbs.db

@@ -11,6 +11,7 @@ import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
 import { chainLabel, isBrokenSolKey, parseStorageKey, isLegacyEvmKey, enabledChains, chainBadge } from './chains.js';
 import { batchFetch, batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
+import { recordCycle, markSummaryPosted } from './cycleStats.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import { rebuildCallerStats, updateCallerStatsForUser } from './callerStats.js';
 import { deriveLifecycle, lifecyclePrefix } from './signals/lifecycle.js';
@@ -566,6 +567,7 @@ async function postDailySummary(client) {
     }
     const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
     await channel.send({ embeds: [embed] });
+    markSummaryPosted();
     console.log('[summary] Posted successfully');
   } catch (e) {
     console.error('[summary] Failed to post:', e.message);
@@ -737,11 +739,28 @@ export async function pollTokens(client) {
       }
     }
 
+    let scheduledSol = 0;
+    let scheduledRh = 0;
+    for (const k of scheduled) {
+      const { chainId } = parseStorageKey(k);
+      if (chainId === 'solana') scheduledSol += 1;
+      else if (chainId === 'robinhood') scheduledRh += 1;
+    }
+
     saveDB(db);
     tickComebackAfterPollCycle();
 
-    const elapsed = Math.round((Date.now() - tCycle) / 1000);
+    const elapsedMs = Date.now() - tCycle;
     const rateStats = rateLimiter.stats();
+    recordCycle({
+      ms: elapsedMs,
+      scheduledSol,
+      scheduledRh,
+      broken: brokenCount,
+      rate429Streak: rateStats.consecutive429,
+    });
+
+    const elapsed = Math.round(elapsedMs / 1000);
     const batchSummary = Object.entries(chainBatchCounts)
       .map(([c, n]) => c + '=' + n)
       .join(' ');

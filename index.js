@@ -61,7 +61,9 @@ import {
   buildMyBagsLines,
 } from './positions.js';
 import { parseTagsInput, validateTags, applyTags } from './metaTags.js';
-import { startHeliusServer } from './webhooks/heliusServer.js';
+import { startHttpServer } from './httpServer.js';
+import { auditDatabase, formatAuditTable } from './warden/auditRunner.js';
+import { cycleStats } from './cycleStats.js';
 
 const client = new Client({
   intents: [
@@ -945,6 +947,9 @@ const commands = [
     .setDescription('Tag a tracked token (max 3 meta tags)')
     .addStringOption((opt) => opt.setName('ca').setDescription('Contract address').setRequired(true))
     .addStringOption((opt) => opt.setName('tags').setDescription('Comma-separated tags').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('audit')
+    .setDescription('Run Warden Layer-1 DB invariant checks (ephemeral)'),
 ].map(c => c.toJSON());
 
 async function registerCommands() {
@@ -1299,6 +1304,13 @@ async function handleTag(interaction) {
   applyTags(db.tokens[mint], v.tags);
   saveDB(db);
   await interaction.editReply('Tagged **$' + db.tokens[mint].symbol + '**: ' + v.tags.join(', '));
+}
+
+async function handleAudit(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const db = ensureDBSchema(loadDB());
+  const result = auditDatabase(db, cycleStats.broken || 0);
+  await interaction.editReply(formatAuditTable(result));
 }
 
 /** Solana-only case-insensitive key lookup (mint-case repair). */
@@ -1912,6 +1924,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'watch') return handleWatch(interaction);
     if (interaction.commandName === 'unwatch') return handleUnwatch(interaction);
     if (interaction.commandName === 'tag') return handleTag(interaction);
+    if (interaction.commandName === 'audit') return handleAudit(interaction);
     if (interaction.commandName === 'x') return handleX(interaction);
     if (interaction.commandName === 'rug') return handleRug(interaction);
     if (interaction.commandName === 'rugdeep') return handleRug(interaction, 'deep');
@@ -1960,7 +1973,7 @@ client.once('ready', async () => {
     console.error('[inspect] boot report failed:', e.message);
   }
   void runTokenPollLoop(client);
-  startHeliusServer(client, () => ensureDBSchema(loadDB()));
+  startHttpServer(client, () => ensureDBSchema(loadDB()));
 });
 
 const LOGIN_TIMEOUT_MS = 45_000;
