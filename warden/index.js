@@ -110,7 +110,9 @@ async function onSnapshot() {
     prevSnap: prevDb,
   };
 
-  runSnapshotChecks(prevDb, db, raise, ctx);
+  runSnapshotChecks(prevDb, db, (id, sev, key, msg, diff, opts) => {
+    void raise(id, sev, key, msg, diff, opts).catch((e) => console.error('[warden] alert:', e.message));
+  }, ctx);
 
   if (lastStatus) checkCanariesOnly();
 

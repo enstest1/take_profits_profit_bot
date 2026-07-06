@@ -67,7 +67,13 @@ async function postDiscord(payload) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error('webhook ' + res.status);
+    if (!res.ok) {
+      if (res.status === 429) {
+        console.warn('[warden] webhook rate limited — alert skipped');
+        return;
+      }
+      throw new Error('webhook ' + res.status);
+    }
     return;
   }
   if (!BOT_TOKEN) throw new Error('WARDEN_WEBHOOK_URL or DISCORD_TOKEN required');
@@ -81,6 +87,10 @@ async function postDiscord(payload) {
   });
   if (!res.ok) {
     const t = await res.text();
+    if (res.status === 429) {
+      console.warn('[warden] Discord rate limited — alert skipped:', t.slice(0, 120));
+      return;
+    }
     throw new Error('channel post ' + res.status + ': ' + t.slice(0, 200));
   }
 }
