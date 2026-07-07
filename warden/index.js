@@ -121,7 +121,7 @@ async function onSnapshot() {
   if (lastStatus) checkCanariesOnly();
 
   const now = Date.now();
-  if (now - lastPriceTruthAt >= PRICE_TRUTH_INTERVAL_MS) {
+  if (lastStatus && now - lastPriceTruthAt >= PRICE_TRUTH_INTERVAL_MS) {
     lastPriceTruthAt = now;
     await runLayer2Checks(db, lastStatus, raise, {
       pollIntervalMs: lastStatus.pollIntervalMs,
