@@ -70,8 +70,12 @@ export function checkHeartbeat(status, state, raise) {
 export function checkPerformance(status, state, raise) {
   if (!status) return;
   let fail = false;
+  let reason = '';
 
-  if (status.lastCycleMs > 120_000) fail = true;
+  if (status.lastCycleMs > 120_000) {
+    fail = true;
+    reason = 'cycle took ' + Math.round(status.lastCycleMs / 1000) + 's (>120s)';
+  }
 
   if (status.rate429Streak > 3) {
     raise('C10', 'WARN', 'global', 'rate429Streak elevated: ' + status.rate429Streak);
@@ -79,18 +83,33 @@ export function checkPerformance(status, state, raise) {
 
   pushRolling(state.scheduledSolHistory, status.scheduledSol || 0);
   pushRolling(state.scheduledRhHistory, status.scheduledRh || 0);
+
+  // Scheduled count swings with hot/warm/cold tiers — only flag sustained DROPS (pipeline stuck).
+  const MIN_SCHEDULED_SAMPLES = 60;
   const medSol = median(state.scheduledSolHistory);
   const medRh = median(state.scheduledRhHistory);
-  if (medSol > 5 && Math.abs((status.scheduledSol || 0) - medSol) / medSol > 0.3) fail = true;
-  if (medRh > 5 && Math.abs((status.scheduledRh || 0) - medRh) / medRh > 0.3) fail = true;
+  const sol = status.scheduledSol || 0;
+  const rh = status.scheduledRh || 0;
+
+  if (state.scheduledSolHistory.length >= MIN_SCHEDULED_SAMPLES && medSol > 20 && sol < medSol * 0.7) {
+    fail = true;
+    reason = reason || 'scheduledSol dropped to ' + sol + ' (median ~' + Math.round(medSol) + ')';
+  }
+  if (state.scheduledRhHistory.length >= MIN_SCHEDULED_SAMPLES && medRh > 3 && rh < medRh * 0.7) {
+    fail = true;
+    reason = reason || 'scheduledRh dropped to ' + rh + ' (median ~' + Math.round(medRh) + ')';
+  }
 
   if (fail) {
     state.perfFailStreak += 1;
-    const sev = state.perfFailStreak >= 3 ? 'CRITICAL' : 'WARN';
-    raise('C10', sev, 'global', 'Performance regression (cycle slow or scheduled count anomaly)', {
+    const slowCycle = status.lastCycleMs > 120_000;
+    const sev = slowCycle && state.perfFailStreak >= 3 ? 'CRITICAL' : 'WARN';
+    raise('C10', sev, 'global', 'Performance regression: ' + (reason || 'anomaly'), {
       lastCycleMs: status.lastCycleMs,
-      scheduledSol: status.scheduledSol,
-      scheduledRh: status.scheduledRh,
+      scheduledSol: sol,
+      scheduledRh: rh,
+      medianSol: Math.round(medSol),
+      medianRh: Math.round(medRh),
       streak: state.perfFailStreak,
     });
   } else {

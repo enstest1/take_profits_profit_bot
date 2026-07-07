@@ -8,7 +8,7 @@ export const cycleStats = {
   broken: 0,
   rate429Streak: 0,
   alertsSentToday: 0,
-  gitSha: process.env.GIT_SHA || 'unknown',
+  gitSha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || 'unknown',
   lastSummaryAt: 0,
   pollIntervalMs: Number(process.env.TOKEN_POLL_INTERVAL_MS) || 3 * 60 * 1000,
 };
