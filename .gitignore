@@ -1,4 +1,5 @@
 node_modules/
+.deploy-sha
 .env
 tracked.json
 .tp_milestone_bootstrap_v2

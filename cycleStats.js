@@ -1,4 +1,5 @@
 /** In-memory poll / alert stats exposed on GET /warden/status. */
+import { resolveGitSha } from './deploySha.js';
 
 export const cycleStats = {
   lastCycleAt: 0,
@@ -8,10 +9,14 @@ export const cycleStats = {
   broken: 0,
   rate429Streak: 0,
   alertsSentToday: 0,
-  gitSha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || 'unknown',
+  gitSha: resolveGitSha(),
   lastSummaryAt: 0,
   pollIntervalMs: Number(process.env.TOKEN_POLL_INTERVAL_MS) || 3 * 60 * 1000,
 };
+
+export function refreshGitSha() {
+  cycleStats.gitSha = resolveGitSha();
+}
 
 let alertDay = null;
 

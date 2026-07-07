@@ -2,7 +2,7 @@
 import http from 'http';
 import crypto from 'crypto';
 import { loadDB } from './dbStore.js';
-import { cycleStats } from './cycleStats.js';
+import { cycleStats, refreshGitSha } from './cycleStats.js';
 import { processHeliusPayload, isDevSellEnabled } from './webhooks/devSell.js';
 
 function pathOnly(url) {
@@ -56,6 +56,7 @@ export function routeRequest(req, res, client, getDb) {
       return;
     }
     if (path === '/warden/status') {
+      refreshGitSha();
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ...cycleStats, now: Date.now() }));
       return;
