@@ -22,7 +22,7 @@ import { startFibWatchLoop } from './fib/watchLoop.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
 import { runMintCaseRepair } from './scripts/repair-mint-case.mjs';
-import { fetchDexPair, resolveRobinhoodToken, tokenDataFromRobinhoodPair } from './dexPair.js';
+import { fetchDexPair, resolveEvmChainToken, tokenDataFromEvmPair } from './dexPair.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import {
   DATA_DIR,
@@ -33,6 +33,7 @@ import {
   markRemovedThisCycle,
 } from './dbStore.js';
 import {
+  CHAINS,
   chainLabel,
   chainBadge,
   enabledChainsFooter,
@@ -46,6 +47,7 @@ import {
   resolveArchivedKey,
   parseStorageKey,
 } from './chains.js';
+import { enrichWithB20 } from './b20.js';
 import { computeInlineCallerStats, formatDurationMins } from './callerStats.js';
 import { lifecyclePrefix } from './signals/lifecycle.js';
 import { onAlreadyTracking, sendTrackingEmbed } from './autotrackHelpers.js';
@@ -165,13 +167,13 @@ function getTokenAgeFlag(createdAtMs) {
 
 function buildTrackedEntry(token, storageKey, message, ageStr) {
   const { chainId } = parseStorageKey(storageKey);
-  const isRh = chainId === 'robinhood';
+  const isEvm = CHAINS[chainId]?.kind === 'evm';
   const totalTxns = (token.buys24h || 0) + (token.sells24h || 0);
   let buyPressurePct = null;
   if (totalTxns > 0) buyPressurePct = Math.round((token.buys24h / totalTxns) * 100);
 
   return {
-    address: isRh ? token.address : storageKey,
+    address: isEvm ? token.address : storageKey,
     name: token.name,
     symbol: token.symbol,
     chain: token.chain || chainId,
@@ -193,39 +195,56 @@ function buildTrackedEntry(token, storageKey, message, ageStr) {
     lowMultStreak: 0,
     takeProfitFired: false,
     gainAlertFired: false,
-    bondingProgress: isRh ? null : (token.bondingProgress || 0),
-    graduationAlertFired: isRh ? null : false,
-    bondingAlertFired: isRh ? null : false,
+    bondingProgress: isEvm ? null : (token.bondingProgress || 0),
+    graduationAlertFired: isEvm ? null : false,
+    bondingAlertFired: isEvm ? null : false,
     tokenAge: ageStr || 'unknown',
     dexUrl: token.dexUrl,
     imageUrl: token.imageUrl || null,
-    devWallet: isRh ? null : (token.creator || null),
+    devWallet: isEvm ? null : (token.creator || null),
     devHoldingAtCall: 0,
     devLastKnownHolding: 0,
     devDumpAlertFired: false,
     buyPressure: buyPressurePct || 0,
     sellPressure: buyPressurePct !== null ? 100 - buyPressurePct : 0,
     xHandle: token.xHandle || null,
+    ...(token.b20 ? { b20: token.b20 } : {}),
   };
 }
 
 async function autoTrack(ref, message, seenThisMessage = new Set()) {
   const { chainId, raw } = ref;
-  if (chainId === 'robinhood') return autoTrackRobinhood(raw, message, seenThisMessage);
+  if (CHAINS[chainId]?.kind === 'evm') return autoTrackEvm(chainId, raw, message, seenThisMessage);
   return autoTrackSolana(raw, message, seenThisMessage);
 }
 
-async function autoTrackRobinhood(raw, message, seenThisMessage) {
+async function autoTrackEvm(chainId, raw, message, seenThisMessage) {
   const db = ensureDBSchema(loadDB());
-  const resolved = await resolveRobinhoodToken(raw);
+  const resolved = await resolveEvmChainToken(chainId, raw);
   if (!resolved) {
-    console.log('[autotrack] 0x ' + raw.slice(0, 10) + '… has no robinhood pair — ignored');
+    console.log('[autotrack] 0x ' + raw.slice(0, 10) + '… has no ' + chainId + ' pair — ignored');
     return;
   }
 
-  const storageKey = makeStorageKey('robinhood', resolved.tokenAddress);
+  const storageKey = makeStorageKey(chainId, resolved.tokenAddress);
+
+  // Cross-EVM dedupe: a bare 0x matches every enabled EVM chain, so the same token
+  // can arrive here once per chain. If it is already tracked — or was already handled
+  // earlier in this same message — on another EVM chain, skip instead of double-tracking.
+  for (const otherId of Object.keys(CHAINS)) {
+    if (CHAINS[otherId].kind !== 'evm' || otherId === chainId) continue;
+    const otherKey = makeStorageKey(otherId, resolved.tokenAddress);
+    if (seenThisMessage.has(otherKey) || db.tokens[otherKey]) {
+      console.log(
+        '[autotrack] ' + resolved.tokenAddress.slice(0, 10) + '… already handled on ' +
+        otherId + ' — skipping ' + chainId,
+      );
+      return;
+    }
+  }
+
   if (seenThisMessage.has(storageKey)) {
-    console.log('[autotrack] duplicate robinhood mint in same message: ' + storageKey.slice(0, 20) + '…');
+    console.log('[autotrack] duplicate ' + chainId + ' mint in same message: ' + storageKey.slice(0, 20) + '…');
     return;
   }
   if (db.tokens[storageKey]) {
@@ -237,7 +256,9 @@ async function autoTrackRobinhood(raw, message, seenThisMessage) {
   const archivedKey = resolveArchivedKey(db, storageKey, raw);
   if (archivedKey) {
     const og = db.archived[archivedKey];
-    db.tokens[storageKey] = { ...og, address: resolved.tokenAddress };
+    // chain: chainId override matters when an archived entry is restored under a
+    // different EVM chain key — keeps entry.chain consistent with the storage key.
+    db.tokens[storageKey] = { ...og, address: resolved.tokenAddress, chain: chainId };
     delete db.archived[archivedKey];
     saveDB(db);
     console.log('[repair] un-archived ' + (og.symbol || storageKey) + ' on repost — OG call preserved');
@@ -245,11 +266,12 @@ async function autoTrackRobinhood(raw, message, seenThisMessage) {
   }
 
   seenThisMessage.add(storageKey);
-  const token = tokenDataFromRobinhoodPair(resolved.pair, resolved.tokenAddress);
+  const token = tokenDataFromEvmPair(chainId, resolved.pair, resolved.tokenAddress);
   token.xHandle = xHandleFromPair(resolved.pair);
   const ageStr = getTokenAgeFlag(token.pairCreatedAt);
   token.ageStr = ageStr;
   token.liquidity = resolved.pair?.liquidity?.usd || token.liquidity || 0;
+  await enrichWithB20(token);
 
   await sendTrackingEmbed(message, token, storageKey, db, () =>
     buildTrackedEntry(token, storageKey, message, ageStr),

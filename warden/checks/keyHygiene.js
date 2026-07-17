@@ -43,19 +43,19 @@ export function checkKeyHygiene(snap, raise, { legacyFrozen, frozenBroken, statu
       continue;
     }
 
-    if (chainId === 'robinhood') {
-      const suffix = key.slice('robinhood:'.length);
+    if (CHAINS[chainId]?.kind === 'evm') {
+      const suffix = key.slice((chainId + ':').length);
       if (suffix !== suffix.toLowerCase()) {
-        raise('C3', 'CRITICAL', key, 'Robinhood key suffix must be lowercase hex', { key });
+        raise('C3', 'CRITICAL', key, chainId + ' key suffix must be lowercase hex', { key });
       }
       if ((entry?.address || '') !== suffix) {
-        raise('C3', 'CRITICAL', key, 'Robinhood entry.address mismatch', { key, address: entry?.address });
+        raise('C3', 'CRITICAL', key, chainId + ' entry.address mismatch', { key, address: entry?.address });
       }
-      if (entry?.chain && entry.chain !== 'robinhood') {
-        raise('C3', 'CRITICAL', key, 'Robinhood entry.chain must be robinhood', { chain: entry.chain });
+      if (entry?.chain && entry.chain !== chainId) {
+        raise('C3', 'CRITICAL', key, chainId + ' entry.chain must be ' + chainId, { chain: entry.chain });
       }
       if (entry?.bondingProgress != null || entry?.graduationAlertFired) {
-        raise('C5', 'WARN', key, 'Robinhood entry has bonding/graduation fields', {
+        raise('C5', 'WARN', key, chainId + ' entry has bonding/graduation fields', {
           bondingProgress: entry.bondingProgress,
           graduationAlertFired: entry.graduationAlertFired,
         });

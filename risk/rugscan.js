@@ -58,7 +58,7 @@ export function rugScanLine(scan) {
 }
 
 export async function scanOnTrack(_client, db, mint, entry, sentMsg) {
-  if (!mint || entry.chain === 'robinhood') return;
+  if (!mint || (entry.chain || 'solana') !== 'solana') return;
   if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint) && !mint.includes(':')) {
     const parsed = mint;
     if (parsed.includes(':')) return;

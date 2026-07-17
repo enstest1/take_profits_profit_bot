@@ -48,9 +48,9 @@ export function checkSchemaBounds(snap, raise) {
       raise('C5b', 'WARN', key, 'milestonesFired exceeds cap', { len: entry.milestonesFired.length });
     }
 
-    if (chainId === 'robinhood') {
-      if (entry.rugScan) raise('C5', 'WARN', key, 'Robinhood entry has rugScan (Solana-only)');
-      if (entry.devWallet) raise('C5', 'WARN', key, 'Robinhood entry has devWallet');
+    if (chainId === 'robinhood' || chainId === 'base') {
+      if (entry.rugScan) raise('C5', 'WARN', key, chainId + ' entry has rugScan (Solana-only)');
+      if (entry.devWallet) raise('C5', 'WARN', key, chainId + ' entry has devWallet');
     }
   }
 }

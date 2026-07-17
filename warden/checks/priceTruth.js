@@ -26,7 +26,7 @@ function pickSample(snap, chainId, n = 30) {
 
 export async function checkPriceTruth(snap, status, raise, { pollIntervalMs }) {
   if (!snap) return;
-  const chains = ['solana', 'robinhood'];
+  const chains = ['solana', 'robinhood', 'base'];
   const freshMs = (pollIntervalMs || 180_000) * 2;
 
   for (const chainId of chains) {

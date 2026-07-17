@@ -8,7 +8,8 @@ import {
   tickComebackAfterPollCycle,
 } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain } from './dexPair.js';
-import { chainLabel, isBrokenSolKey, parseStorageKey, isLegacyEvmKey, enabledChains, chainBadge } from './chains.js';
+import { chainLabel, isBrokenSolKey, parseStorageKey, isLegacyEvmKey, enabledChains, chainBadge, isEvmChain } from './chains.js';
+import { formatB20Badge } from './b20.js';
 import { batchFetch, batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
 import { recordCycle, markSummaryPosted } from './cycleStats.js';
@@ -105,7 +106,8 @@ function trenchTradeUrl(mint) {
   return 'https://trench.com/trade/monitor?mint=' + encodeURIComponent(mint);
 }
 
-function takeProfitDescription(mint, postedBy, postedAt) {
+function takeProfitDescription(mint, postedBy, postedAt, entry) {
+  const b20Badge = formatB20Badge(entry?.b20);
   return (
     '💰💰💰 **Take Profit** 💰💰💰\n' +
     '`' +
@@ -120,7 +122,8 @@ function takeProfitDescription(mint, postedBy, postedAt) {
     luteTradeUrl(mint) +
     ') · [Trench](' +
     trenchTradeUrl(mint) +
-    ')'
+    ')' +
+    (b20Badge ? '\n' + b20Badge : '')
   );
 }
 
@@ -877,7 +880,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     const embed = new EmbedBuilder()
       .setColor(0x00ff88)
       .setTitle('📈 ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
-      .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+      .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt, entry));
     if (thumb) embed.setThumbnail(thumb);
 
     await sendTokenAlert(client, db, address, embed, 'gain75', '+75%');
@@ -931,7 +934,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
         const embed = new EmbedBuilder()
           .setColor(0xffd700)
           .setTitle('🎯 ' + alertTier + 'x — ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ')')
-          .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt));
+          .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt, entry));
         if (thumb) embed.setThumbnail(thumb);
 
         await sendTokenAlert(client, db, address, embed, 'tier' + alertTier, alertTier + 'x');
@@ -1015,7 +1018,7 @@ async function processToken(client, address, db, solPriceUsd, milestoneOpts = {}
   const live = await fetchLiveData(address, entry, solPriceUsd);
   if (!live) return;
 
-  if (entry.chain === 'robinhood') {
+  if (isEvmChain(entry.chain)) {
     await evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts);
     return;
   }

@@ -8,6 +8,14 @@ export const CHAINS = {
     dexScreenerSlug: 'solana',
     addressRegex: /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/g,
   },
+  base: {
+    id: 'base',
+    kind: 'evm',
+    emoji: '🔵',
+    label: 'BASE',
+    dexScreenerSlug: 'base',
+    addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
+  },
   robinhood: {
     id: 'robinhood',
     kind: 'evm',
@@ -132,8 +140,11 @@ export function isBrokenSolKey(key, entry) {
 export function resolveUserInputToKey(db, rawInput) {
   const raw = String(rawInput || '').trim();
   if (/^0x[a-fA-F0-9]{40}$/.test(raw)) {
-    const key = makeStorageKey('robinhood', raw);
-    if (db.tokens[key]) return key;
+    for (const chainId of Object.keys(CHAINS)) {
+      if (CHAINS[chainId].kind !== 'evm') continue;
+      const key = makeStorageKey(chainId, raw);
+      if (db.tokens[key]) return key;
+    }
     return null;
   }
   if (raw.includes(':') && db.tokens[raw]) return raw;
@@ -154,8 +165,12 @@ export function resolveArchivedKey(db, storageKey, rawInput) {
   if (db.archived[storageKey]) return storageKey;
   const raw = String(rawInput || storageKey || '').trim();
   if (/^0x[a-fA-F0-9]{40}$/.test(raw)) {
-    const key = makeStorageKey('robinhood', raw);
-    return db.archived[key] ? key : null;
+    for (const chainId of Object.keys(CHAINS)) {
+      if (CHAINS[chainId].kind !== 'evm') continue;
+      const key = makeStorageKey(chainId, raw);
+      if (db.archived[key]) return key;
+    }
+    return null;
   }
   const lower = raw.toLowerCase();
   if (db.archived[lower]) return lower;
@@ -168,10 +183,10 @@ export function resolveArchivedKey(db, storageKey, rawInput) {
 }
 
 /** Skip 0x matches embedded in dexscreener.com/<other-chain>/ URLs (spec test #7). */
-function isForeignDexScreenerContext(body, startIndex, rawLen) {
+function isForeignDexScreenerContext(body, startIndex, rawLen, chainId) {
   const chunk = body.slice(Math.max(0, startIndex - 60), startIndex + rawLen);
   const hit = chunk.match(/dexscreener\.com\/([a-z0-9_-]+)\/0x[a-fA-F0-9]{40}$/i);
-  return hit && hit[1].toLowerCase() !== 'robinhood';
+  return hit && hit[1].toLowerCase() !== chainId;
 }
 
 /**
@@ -203,7 +218,7 @@ export function extractAddresses(text) {
       if (chainId === 'solana') {
         if (!/\d/.test(raw) || /[0OIl]/.test(raw)) continue;
       }
-      if (chain.kind === 'evm' && isForeignDexScreenerContext(body, m.index ?? 0, raw.length)) {
+      if (chain.kind === 'evm' && isForeignDexScreenerContext(body, m.index ?? 0, raw.length, chainId)) {
         continue;
       }
       const dedupeKey = chainId + ':' + (chain.kind === 'evm' ? raw.toLowerCase() : raw);

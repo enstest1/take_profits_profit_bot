@@ -1,4 +1,4 @@
-import { parseEnabledChains } from './chains.js';
+import { parseEnabledChains, CHAINS } from './chains.js';
 import { rateLimiter } from './rateLimiter.js';
 import { xHandleFromPair } from './xSocial.js';
 
@@ -268,14 +268,17 @@ export async function fetchDexPair(address, options = {}) {
 }
 
 /**
- * Resolve 0x on Robinhood Chain only — pool-in, token-out (prevents v1 bug #1).
- * No cross-chain fallback (prevents v1 bug #2).
+ * Resolve 0x on ONE specific EVM chain — pool-in, token-out (prevents v1 bug #1).
+ * No cross-chain fallback (prevents v1 bug #2). Generalized from the robinhood-only
+ * resolver so base (and future EVM chains) reuse identical logic.
  */
-export async function resolveRobinhoodToken(rawAddr) {
+export async function resolveEvmChainToken(chainId, rawAddr) {
+  const slug = CHAINS[chainId]?.dexScreenerSlug;
+  if (!slug) return null;
   const addr = rawAddr.toLowerCase();
 
   let res = await rateLimiter.fetch(
-    'https://api.dexscreener.com/token-pairs/v1/robinhood/' + addr,
+    'https://api.dexscreener.com/token-pairs/v1/' + slug + '/' + addr,
     { signal: AbortSignal.timeout(10_000) },
   );
   if (res.ok) {
@@ -288,7 +291,7 @@ export async function resolveRobinhoodToken(rawAddr) {
   }
 
   res = await rateLimiter.fetch(
-    'https://api.dexscreener.com/latest/dex/pairs/robinhood/' + addr,
+    'https://api.dexscreener.com/latest/dex/pairs/' + slug + '/' + addr,
     { signal: AbortSignal.timeout(10_000) },
   );
   if (res.ok) {
@@ -296,7 +299,7 @@ export async function resolveRobinhoodToken(rawAddr) {
     const pair = data?.pairs?.[0] || data?.pair;
     if (pair?.baseToken?.address) {
       console.log(
-        '[robinhood] pool address resolved to token ' + pair.baseToken.address +
+        '[' + chainId + '] pool address resolved to token ' + pair.baseToken.address +
         ' (input was pair ' + addr.slice(0, 10) + '…)',
       );
       return { tokenAddress: pair.baseToken.address.toLowerCase(), pair };
@@ -306,13 +309,17 @@ export async function resolveRobinhoodToken(rawAddr) {
   return null;
 }
 
-/** Build autotrack token object from a resolved Robinhood DexScreener pair. */
-export function tokenDataFromRobinhoodPair(pair, tokenAddress) {
+/** Build autotrack token object from a resolved EVM DexScreener pair. */
+export function tokenDataFromEvmPair(chainId, pair, tokenAddress) {
   const token = pairToToken(pair, tokenAddress);
   return {
     ...token,
     platform: 'dexscreener',
-    chain: 'robinhood',
+    chain: chainId,
     address: tokenAddress,
   };
 }
+
+/** @deprecated back-compat wrappers — robinhood behavior byte-identical to before. */
+export const resolveRobinhoodToken = (rawAddr) => resolveEvmChainToken('robinhood', rawAddr);
+export const tokenDataFromRobinhoodPair = (pair, addr) => tokenDataFromEvmPair('robinhood', pair, addr);

@@ -106,7 +106,7 @@ async function processOneTx(client, db, tx) {
   const ts = tx.timestamp ? Number(tx.timestamp) * 1000 : Date.now();
   const transfers = tx.tokenTransfers || [];
   for (const [mint, entry] of Object.entries(db.tokens || {})) {
-    if (!entry.devWallet || entry.chain === 'robinhood') continue;
+    if (!entry.devWallet || (entry.chain || 'solana') !== 'solana') continue;
     if (ts - (entry.devSellAlertAt || 0) < DEV_SELL_COOLDOWN_MS) continue;
 
     const dev = entry.devWallet;

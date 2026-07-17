@@ -9,6 +9,7 @@ import { recordChannelSighting } from './signals/confluence.js';
 import { subscribeDevWallet } from './webhooks/devSell.js';
 import { saveDB } from './dbStore.js';
 import { xHistoryLine, indexXAccount } from './xSocial.js';
+import { formatB20Badge } from './b20.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -44,6 +45,8 @@ export function buildTrackingDescription(message, ageStr, token, db, storageKey)
     const xLine = xHistoryLine(db, token.xHandle, storageKey);
     if (xLine) parts.push(xLine);
   }
+  const b20Badge = formatB20Badge(token.b20);
+  if (b20Badge) parts.push(b20Badge);
   return parts.join('\n');
 }
 
