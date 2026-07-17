@@ -11,12 +11,15 @@
     "test:x": "node scripts/test-x-social.mjs",
     "inspect": "node scripts/inspect-tracked.mjs",
     "test:summary": "node scripts/test-daily-summary.mjs",
-    "tp:sample": "node scripts/send-tp-sample-embeds.mjs"
+    "tp:sample": "node scripts/send-tp-sample-embeds.mjs",
+    "test:fib": "node --test fib/tests/engine.test.mjs fib/tests/swingDetector.test.mjs fib/tests/minuteBars.test.mjs",
+    "fib:simulate": "node scripts/fib-simulate.mjs"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5",
     "node-cron": "^3.0.3",

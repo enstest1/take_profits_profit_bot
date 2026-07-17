@@ -51,6 +51,7 @@ export function ensureDBSchema(db) {
   if (!db.wallets) db.wallets = {};
   if (!db.archived) db.archived = {};
   if (!db.xAccounts) db.xAccounts = {};
+  if (!db.fibWatch) db.fibWatch = {};
   return db;
 }
 

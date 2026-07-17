@@ -19,6 +19,7 @@ import { currentMultipleFromLive } from './signals/mult.js';
 import { evaluateVelocity } from './signals/velocity.js';
 import { evaluateLiquidityDivergence } from './signals/liquidity.js';
 import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
+import { evaluateFib } from './fib/evaluate.js';
 import { evaluatePersonalPositions } from './positions.js';
 import { sendChannelAlert, sendTokenAlert } from './channelAlert.js';
 import { indexXAccount } from './xSocial.js';
@@ -995,6 +996,12 @@ async function processTokenWithLive(client, address, db, live, milestoneOpts = {
     } catch (e) {
       console.error('[signals] ' + address + ':', e.message);
     }
+  }
+
+  try {
+    await evaluateFib(client, db, address, entry, live);
+  } catch (e) {
+    console.error('[fib] ' + address + ':', e.message);
   }
 }
 

@@ -17,6 +17,8 @@ import {
 } from 'discord.js';
 import { pollTokens } from './poller.js';
 import { initAlertGate, shouldSilenceAlerts } from './alertGate.js';
+import { fibtrackCommand, handleFibtrack } from './fibCommands.js';
+import { startFibWatchLoop } from './fib/watchLoop.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
 import { runMintCaseRepair } from './scripts/repair-mint-case.mjs';
@@ -836,6 +838,7 @@ client.on('messageCreate', async (message) => {
 });
 
 const commands = [
+  fibtrackCommand,
   new SlashCommandBuilder()
     .setName('calls')
     .setDescription('Show all tracked tokens and their current performance'),
@@ -1678,6 +1681,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'unwatch') return handleUnwatch(interaction);
     if (interaction.commandName === 'tag') return handleTag(interaction);
     if (interaction.commandName === 'audit') return handleAudit(interaction);
+    if (interaction.commandName === 'fibtrack') return handleFibtrack(interaction, client);
     if (interaction.commandName === 'x') {
       return handleX(interaction, { loadDB, ensureDBSchema });
     }
@@ -1728,6 +1732,7 @@ client.once('ready', async () => {
     console.error('[inspect] boot report failed:', e.message);
   }
   void runTokenPollLoop(client);
+  startFibWatchLoop(client);
   startHttpServer(client, () => ensureDBSchema(loadDB()));
 });
 

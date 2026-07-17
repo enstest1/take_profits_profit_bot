@@ -3,7 +3,7 @@ import { shouldSilenceAlerts, getAlertSilenceStatus } from './alertGate.js';
 import { notifyWatchSubscribers } from './subscriptions.js';
 import { bumpAlertSent } from './cycleStats.js';
 
-export async function sendChannelAlert(client, channelId, embed, label = 'alert') {
+export async function sendChannelAlert(client, channelId, embed, label = 'alert', files = null) {
   if (shouldSilenceAlerts()) {
     const st = getAlertSilenceStatus();
     const title = embed?.data?.title || label;
@@ -12,7 +12,7 @@ export async function sendChannelAlert(client, channelId, embed, label = 'alert'
   }
   try {
     const channel = await client.channels.fetch(channelId);
-    await channel.send({ embeds: [embed] });
+    await channel.send(files && files.length ? { embeds: [embed], files } : { embeds: [embed] });
     bumpAlertSent();
     return true;
   } catch (e) {
@@ -22,14 +22,14 @@ export async function sendChannelAlert(client, channelId, embed, label = 'alert'
 }
 
 /** Send channel alert + optional watch-token DMs. */
-export async function sendTokenAlert(client, db, mint, embed, alertKind, label = 'alert') {
+export async function sendTokenAlert(client, db, mint, embed, alertKind, label = 'alert', files = null) {
   const entry = db.tokens[mint];
   if (entry?.canary) {
     console.log('[canary] suppressed alert for ' + mint);
     return false;
   }
   const sent = entry?.alertChannelId
-    ? await sendChannelAlert(client, entry.alertChannelId, embed, label)
+    ? await sendChannelAlert(client, entry.alertChannelId, embed, label, files)
     : false;
   if (sent && entry) {
     notifyWatchSubscribers(client, db, mint, embed, alertKind, entry.postedByUserId).catch((e) =>
