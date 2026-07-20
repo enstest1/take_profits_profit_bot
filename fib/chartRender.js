@@ -28,17 +28,37 @@ async function getCanvas() {
     try {
       const { GlobalFonts } = canvasMod;
       const fs = await import('fs');
-      const paths = [
+      const { fileURLToPath } = await import('url');
+      const pathMod = await import('path');
+      const here = pathMod.dirname(fileURLToPath(import.meta.url));
+      // Repo-bundled fonts FIRST (Railway/nixpacks containers ship no system fonts —
+      // without this every label, tag, and axis value silently renders as nothing).
+      const bundled = [
+        pathMod.join(here, 'assets', 'DejaVuSans.ttf'),
+        pathMod.join(here, 'assets', 'DejaVuSans-Bold.ttf'),
+      ];
+      const system = [
         '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
         '/usr/share/fonts/dejavu/DejaVuSans.ttf',
         '/usr/share/fonts/TTF/DejaVuSans.ttf',
       ];
-      for (const p of paths) {
+      let registered = false;
+      for (const p of bundled) {
         if (fs.existsSync(p)) {
           GlobalFonts.registerFromPath(p, 'FibSans');
-          break;
+          registered = true;
         }
       }
+      if (!registered) {
+        for (const p of system) {
+          if (fs.existsSync(p)) {
+            GlobalFonts.registerFromPath(p, 'FibSans');
+            registered = true;
+            break;
+          }
+        }
+      }
+      if (!registered) console.warn('[fib/chart] no chart font found — labels will be missing');
     } catch {
       /* label font falls back to whatever the platform has */
     }
@@ -112,9 +132,11 @@ export async function renderFibChart({ candles, state, symbol = '', currentValue
     if (!mod || !candles?.length || !state?.levels || !state?.anchors) return null;
 
     // ---- x-range: start at the swing-low anchor (the origin of the pull) ----
-    let startIdx = candles.findIndex((c) => c.t >= state.anchors.low.t);
-    if (startIdx < 0) startIdx = 0;
-    startIdx = Math.max(0, startIdx - 4);
+    let lowIdx = candles.findIndex((c) => c.t >= state.anchors.low.t);
+    if (lowIdx < 0) lowIdx = 0;
+    // show where the bottom was pulled FROM: ~20% of the post-low span (min 12 candles)
+    const pre = Math.max(12, Math.round((candles.length - lowIdx) * 0.2));
+    let startIdx = Math.max(0, lowIdx - pre);
     startIdx = Math.min(startIdx, Math.max(0, candles.length - 60));
     const data = candles.slice(startIdx);
 
@@ -224,19 +246,10 @@ export async function renderFibChart({ candles, state, symbol = '', currentValue
       ctx.fillText(fmtUsdShort(val), padL + plotW + 6, gy + 3);
     }
 
-    // anchor trendline low → high (dotted diagonal, like the manual pull)
+    // anchor positions (used by the hi/lo tags — the pull itself reads through the
+    // horizontal 0 and 1 lines, no diagonal)
     const iLow = data.findIndex((c) => c.t >= state.anchors.low.t);
     const iHigh = data.findIndex((c) => c.t >= state.anchors.high.t);
-    if (iLow >= 0 && iHigh > iLow) {
-      ctx.strokeStyle = C.anchor;
-      ctx.setLineDash([3, 5]);
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(x(iLow), y(low));
-      ctx.lineTo(x(iHigh), y(high));
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
 
     // candles
     for (let i = 0; i < data.length; i++) {
@@ -261,7 +274,7 @@ export async function renderFibChart({ candles, state, symbol = '', currentValue
       for (let i = 0; i < data.length; i++) {
         const c = data[i];
         if (!Number.isFinite(c.v) || c.v <= 0) continue;
-        const bh = Math.max(1, (c.v / vMax) * hVol);
+        const bh = Math.max(1, Math.sqrt(c.v / vMax) * hVol);
         ctx.fillStyle = c.c >= c.o ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)';
         ctx.fillRect(x(i) - cw / 2, volTop + hVol - bh, cw, bh);
       }
