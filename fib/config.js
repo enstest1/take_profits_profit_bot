@@ -62,6 +62,10 @@ export const FIB = {
    */
   HIGH_CONFIRM_RATIO: envNum('FIB_HIGH_CONFIRM_RATIO', 0.786),
 
+  /** Anchor the swing low at the ORIGIN of the impulse chain (manual-pull style):
+   *  walk back through prior pivot lows while each interim high was broken. */
+  ANCHOR_ORIGIN: envBool('FIB_ANCHOR_ORIGIN', true),
+
   /**
    * Downward alert levels below the golden zone, highest first.
    * The LOWEST ratio is the ENTRY level (chart alert + arms target mode).

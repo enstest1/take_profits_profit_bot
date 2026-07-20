@@ -113,6 +113,7 @@ export function detectImpulse(candles, opts = {}) {
     pivotStrength: opts.pivotStrength ?? 3,
     reversalPct: opts.reversalPct ?? 0.3,
     atrMult: opts.atrMult ?? 3,
+    anchorOrigin: opts.anchorOrigin ?? true,
     goldenUpper: opts.goldenUpper ?? 0.786,
     launchFallback: opts.launchFallback ?? true,
   };
@@ -193,7 +194,7 @@ export function detectImpulse(candles, opts = {}) {
     if (piv.v <= 0) continue;
     const gain = hiV / piv.v - 1;
     if (gain >= o.minImpulsePct) {
-      best = { lowIdx: piv.idx, lowV: piv.v, hiIdx: hiI, hiV, gain };
+      best = { lowIdx: piv.idx, lowV: piv.v, hiIdx: hiI, hiV, gain, pIdx: p };
       break;
     }
   }
@@ -206,6 +207,34 @@ export function detectImpulse(candles, opts = {}) {
         'No confirmed pivot low with a ≥' + fmtX(o.minImpulsePct + 1) + ' leg (zigzag threshold ' +
         (reversal * 100).toFixed(1) + '%, ' + pivots.length + ' pivots).',
     };
+  }
+
+  // ---- extend to the impulse ORIGIN (manual-pull anchoring) ----
+  // While the prior pivot low is strictly deeper AND the interim pivot high between
+  // them was broken by the final top, the legs chain into ONE impulse (higher-lows
+  // into higher-highs) — anchor where the whole move started, exactly like dragging
+  // the fib from the base by hand. A prior cycle high that was never broken stops
+  // the walk, so we never anchor into a dead regime.
+  let originHops = 0;
+  if (o.anchorOrigin) {
+    let k = best.pIdx;
+    while (k >= 2 && pivots[k - 1].kind === 'high' && pivots[k - 2].kind === 'low') {
+      const interimHigh = pivots[k - 1];
+      const priorLow = pivots[k - 2];
+      if (best.hiV <= interimHigh.v) break; // unbroken prior high → older regime, hard stop
+      if (priorLow.v > 0 && priorLow.v < best.lowV) {
+        // deeper low inside a broken-high chain → the impulse started earlier; extend.
+        // (max high after the earlier low is unchanged: everything between priorLow and
+        // the old anchor tops out at interimHigh, which is below best.hiV.)
+        best.lowIdx = priorLow.idx;
+        best.lowV = priorLow.v;
+        originHops++;
+      }
+      // not deeper → an intrabar/step pivot inside the same chain: step through it.
+      // Giant memecoin candles emit same-candle pivot pairs; they must not end the walk.
+      k -= 2;
+    }
+    if (originHops) best.gain = best.hiV / best.lowV - 1;
   }
 
   const candlesAfterHigh = lastIdx - best.hiIdx;
@@ -222,6 +251,7 @@ export function detectImpulse(candles, opts = {}) {
       '%, ATR ' + (atrPct * 100).toFixed(1) + '%×' + o.atrMult + ')): pivot low @ candle ' + best.lowIdx +
       ' → high @ candle ' + best.hiIdx + ', impulse ' + fmtX(best.gain + 1) +
       ', ' + candlesAfterHigh + ' candles since high' +
+      (originHops ? ', origin-extended ' + originHops + ' leg(s) back to candle ' + best.lowIdx + ' (interim highs broken)' : '') +
       (highConfirmed ? '' : ' (high not yet confirmed)'),
   };
 }

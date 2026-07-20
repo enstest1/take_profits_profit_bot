@@ -73,3 +73,34 @@ test('atrPercent and zigzagPivots behave sanely on a spike', () => {
   const piv = zigzagPivots(candles, 0.3);
   assert.ok(piv.length >= 1, 'expected at least one pivot, got ' + piv.length);
 });
+
+// The two origin-extension tests pin the walk-back rule itself, so they zero out the
+// ATR contribution (atrMult: 0 → flat 30% zigzag threshold) for full determinism.
+const OPTS_FLAT = { ...OPTS, atrMult: 0 };
+
+test('extends the anchor to the impulse origin when interim highs are broken', () => {
+  const base = Array(12).fill(100_000);
+  const leg1 = [140_000, 200_000, 280_000];
+  const pull = [200_000, 165_000]; // -41% → pivot low ABOVE the base
+  const leg2 = [240_000, 340_000, 480_000, 650_000, 900_000]; // breaks the 280k interim high
+  const retrace = [810_000, 730_000, 660_000, 610_000];
+  const det = detectImpulse(candlesFrom([...base, ...leg1, ...pull, ...leg2, ...retrace]), OPTS_FLAT);
+  assert.equal(det.ok, true, det.reason);
+  assert.ok(det.low.v < 110_000, 'anchored at the base origin, got ' + det.low.v);
+  assert.ok(det.high.v > 850_000, 'high stays at the final top, got ' + det.high.v);
+  assert.match(det.reason, /origin-extended/);
+});
+
+test('does not extend across an unbroken prior cycle high (dead regime)', () => {
+  const oldCycle = [500_000, 510_000, 800_000, 1_300_000, 2_000_000, 1_400_000, 900_000, 500_000, 300_000, 200_000];
+  const base = [190_000, 195_000, 188_000, 192_000];
+  const pump = [270_000, 380_000, 540_000, 760_000, 1_050_000, 1_400_000]; // never breaks the 2M top
+  const retrace = [1_250_000, 1_100_000, 980_000, 900_000];
+  const det = detectImpulse(candlesFrom([...oldCycle, ...base, ...pump, ...retrace]), OPTS_FLAT);
+  assert.equal(det.ok, true, det.reason);
+  // Extension MAY hop through the pump's own intrabar pivots — what must hold is that
+  // it never crosses into the dead regime: anchor stays at the post-crash base, and the
+  // high stays below the old unbroken top.
+  assert.ok(det.low.v > 150_000 && det.low.v < 250_000, 'anchored at the post-crash base, got ' + det.low.v);
+  assert.ok(det.high.v < 2_000_000, 'high stays in the current regime, got ' + det.high.v);
+});
