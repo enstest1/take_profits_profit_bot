@@ -246,10 +246,33 @@ export async function renderFibChart({ candles, state, symbol = '', currentValue
       ctx.fillText(fmtUsdShort(val), padL + plotW + 6, gy + 3);
     }
 
-    // anchor positions (used by the hi/lo tags — the pull itself reads through the
-    // horizontal 0 and 1 lines, no diagonal)
+    // ---- the fib pull: grey dashed diagonal low → high with anchor handles ----
     const iLow = data.findIndex((c) => c.t >= state.anchors.low.t);
     const iHigh = data.findIndex((c) => c.t >= state.anchors.high.t);
+    if (iLow >= 0 && iHigh >= iLow) {
+      const x1 = x(iLow);
+      const y1 = y(low);
+      const x2 = x(iHigh);
+      const y2 = y(high);
+      ctx.strokeStyle = C.anchor;
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // anchor handles (TradingView-style drag points)
+      for (const [hx, hy] of [[x1, y1], [x2, y2]]) {
+        ctx.beginPath();
+        ctx.arc(hx, hy, 4, 0, Math.PI * 2);
+        ctx.fillStyle = C.bg;
+        ctx.fill();
+        ctx.strokeStyle = C.anchor;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
+    }
 
     // candles
     for (let i = 0; i < data.length; i++) {
