@@ -158,8 +158,17 @@ export async function renderFibChart({ candles, state, symbol = '', currentValue
     };
 
     line(high, C.high, [2, 3], '1  ' + fmtUsdShort(high));
-    line(lv.goldenUpper, C.golden, [6, 4], '0.786  ' + fmtUsdShort(lv.goldenUpper));
-    line(lv.goldenLower, C.golden, [6, 4], '0.618  ' + fmtUsdShort(lv.goldenLower));
+    {
+      const gu = Number(FIB.GOLDEN_UPPER);
+      const gl = Number(FIB.GOLDEN_LOWER);
+      const gLabel = (r) => String(r).replace(/0+$/, '').replace(/\.$/, '');
+      if (gu === gl) {
+        line(lv.goldenUpper, C.golden, [6, 4], gLabel(gu) + '  ' + fmtUsdShort(lv.goldenUpper));
+      } else {
+        line(lv.goldenUpper, C.golden, [6, 4], gLabel(gu) + '  ' + fmtUsdShort(lv.goldenUpper));
+        line(lv.goldenLower, C.golden, [6, 4], gLabel(gl) + '  ' + fmtUsdShort(lv.goldenLower));
+      }
+    }
     const ratios = Object.keys(lv.alerts)
       .map(Number)
       .sort((a, b) => b - a);

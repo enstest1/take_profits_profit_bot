@@ -43,15 +43,26 @@ const KINDS = {
     color: 0x14b8a6,
     emoji: '🌗',
     title: (s, c) => c.symbol + ' entered the golden zone',
-    line: (ev, s) =>
-      'Retraced into the **' + ratioLabel(FIBG().u) + ' – ' + ratioLabel(FIBG().l) + '** band (' +
-      fmtUsd(s.levels.goldenUpper) + ' → ' + fmtUsd(s.levels.goldenLower) + ').',
+    line: (ev, s) => {
+      const u = FIBG().u;
+      const l = FIBG().l;
+      if (u === l) {
+        return (
+          'Retraced into the **' + ratioLabel(u) + '** golden level (' +
+          fmtUsd(s.levels.goldenUpper) + ').'
+        );
+      }
+      return (
+        'Retraced into the **' + ratioLabel(u) + ' – ' + ratioLabel(l) + '** band (' +
+        fmtUsd(s.levels.goldenUpper) + ' → ' + fmtUsd(s.levels.goldenLower) + ').'
+      );
+    },
   },
   level: {
     color: 0xf59e0b,
     emoji: '📉',
     title: (s, c, ev) => c.symbol + ' broke the ' + ratioLabel(ev.ratio) + ' fib',
-    line: (ev) => 'Crossed below **' + ratioLabel(ev.ratio) + '** (' + fmtUsd(ev.level) + ') — golden zone lost.',
+    line: (ev) => 'Crossed below **' + ratioLabel(ev.ratio) + '** (' + fmtUsd(ev.level) + ') — continuing the retrace.',
   },
   entry_touch: {
     color: 0xef4444,

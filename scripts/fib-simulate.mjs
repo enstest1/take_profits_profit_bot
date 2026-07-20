@@ -98,7 +98,7 @@ armCycle(state, det, null);
 
 console.log('\nanchors : low ' + usd(det.low.v) + ' (' + new Date(det.low.t).toISOString() + ')');
 console.log('          high ' + usd(det.high.v) + ' (' + new Date(det.high.t).toISOString() + ')');
-console.log('golden  : ' + usd(state.levels.goldenUpper) + ' (0.786) → ' + usd(state.levels.goldenLower) + ' (0.618)');
+console.log('golden  : ' + usd(state.levels.goldenUpper) + ' (' + FIB.GOLDEN_UPPER + ') → ' + usd(state.levels.goldenLower) + ' (' + FIB.GOLDEN_LOWER + ')');
 for (const r of Object.keys(state.levels.alerts).map(Number).sort((a, b) => b - a)) {
   console.log('level   : ' + r + ' → ' + usd(state.levels.alerts[String(r)]) + (r === state.entryRatio ? '   ← ENTRY (chart alert)' : ''));
 }

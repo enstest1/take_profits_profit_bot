@@ -51,7 +51,7 @@ function detectorOpts(state) {
     pivotStrength: FIB.PIVOT_STRENGTH,
     reversalPct: FIB.REVERSAL_PCT,
     atrMult: FIB.ATR_MULT,
-    goldenUpper: FIB.GOLDEN_UPPER,
+    goldenUpper: FIB.HIGH_CONFIRM_RATIO,
     launchFallback: fast,
   };
 }

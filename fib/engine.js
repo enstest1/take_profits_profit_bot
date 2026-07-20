@@ -6,8 +6,8 @@
  *   fibValue(r) = low + (high − low) × r
  *
  * Alert flow (one cycle):
- *   DOWN:  golden-zone entry (≤ GOLDEN_UPPER) → mid levels (e.g. 0.382) → ENTRY level (lowest
- *          ratio, e.g. 0.236 — instant on wick touch, carries the chart image) → entry-held
+ *   DOWN:  golden-zone entry (≤ GOLDEN_UPPER, default 0.382) → mid levels (if any) → ENTRY
+ *          (lowest ALERT_RATIOS, default 0.236 — instant wick + chart) → entry-held
  *          (CONFIRM_CLOSES consecutive 1m closes back above entry).
  *   UP  :  reclaim (back at swing high) → TP1 (low + 1.618 × range) → TP2 (high + 1.236 × (high − entry)).
  *   ANY :  1m close below swing low ⇒ invalidated.

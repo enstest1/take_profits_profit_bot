@@ -220,7 +220,7 @@ async function subAdd(interaction) {
       '**' + res.name + '** on ' + res.chainId + '\n' +
       'Timeframe **' + tf + '** · mode **' + mode + '** · mcap ' + fmtUsd(res.marketCap) + '\n' +
       'Detecting the last major impulse now — alerts will land in this channel:\n' +
-      '`golden zone → 0.382 → entry touch (chart) → entry held → reclaim → TP1 → TP2`',
+      '`golden 0.382 → entry touch 0.236 (chart) → entry held → reclaim → TP1 → TP2`',
     )
     .setFooter({ text: 'Levels are market structure, not financial advice · fib v1' })
     .setTimestamp();

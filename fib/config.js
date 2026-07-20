@@ -46,15 +46,26 @@ export const FIB = {
   DEFAULT_TIMEFRAME: envStr('FIB_DEFAULT_TIMEFRAME', '1h'),
   FAST_TIMEFRAME: envStr('FIB_FAST_TIMEFRAME', '5m'),
 
-  /** Golden zone band (values as low-anchored ratios, matching the BasedBot/Photon fib convention). */
-  GOLDEN_UPPER: envNum('FIB_GOLDEN_UPPER', 0.786),
-  GOLDEN_LOWER: envNum('FIB_GOLDEN_LOWER', 0.618),
+  /**
+   * Golden-zone alert (text). Pelpa convention: golden = enter 0.382.
+   * Upper/lower equal → single-level golden; set a spread via env if you want a band.
+   */
+  GOLDEN_UPPER: envNum('FIB_GOLDEN_UPPER', 0.382),
+  GOLDEN_LOWER: envNum('FIB_GOLDEN_LOWER', 0.382),
+
+  /**
+   * Retrace ratio used only by the swing detector to confirm the impulse high
+   * (pivot candles OR price already back to this level). Kept at classic 0.786 so
+   * changing the golden *alert* level does not delay arming.
+   */
+  HIGH_CONFIRM_RATIO: envNum('FIB_HIGH_CONFIRM_RATIO', 0.786),
 
   /**
    * Downward alert levels below the golden zone, highest first.
    * The LOWEST ratio is the ENTRY level (chart alert + arms target mode).
+   * Default: chart fires at 0.236 only (0.50 re-pull / 1.618 exit dialed later).
    */
-  ALERT_RATIOS: envRatios('FIB_ALERT_LEVELS', [0.382, 0.236]),
+  ALERT_RATIOS: envRatios('FIB_ALERT_LEVELS', [0.236]),
 
   /** Swing detection */
   MIN_IMPULSE_PCT: envNum('FIB_MIN_IMPULSE_PCT', 1.0), // low→high gain ≥ 100% (2x) to count as a major impulse

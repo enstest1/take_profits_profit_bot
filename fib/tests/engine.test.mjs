@@ -35,12 +35,11 @@ test('armCycle computes low-anchored levels and both targets', () => {
   const { s } = armed();
   assert.equal(s.status, 'armed');
   assert.equal(s.cycleId, 1);
-  assert.ok(Math.abs(s.levels.goldenUpper - lvl(0.786)) < 1e-6);
-  assert.ok(Math.abs(s.levels.goldenLower - lvl(0.618)) < 1e-6);
-  assert.ok(Math.abs(s.levels.alerts['0.382'] - lvl(0.382)) < 1e-6);
+  assert.ok(Math.abs(s.levels.goldenUpper - lvl(0.382)) < 1e-6);
+  assert.ok(Math.abs(s.levels.goldenLower - lvl(0.382)) < 1e-6);
   assert.ok(Math.abs(s.levels.alerts['0.236'] - lvl(0.236)) < 1e-6);
+  assert.equal(s.levels.alerts['0.382'], undefined);
   assert.equal(s.entryRatio, 0.236);
-  // TP1 = low + 1.618 × range ; TP2 = high + 1.236 × (high − entry)
   assert.ok(Math.abs(s.targets.tp1 - (LOW + 1.618 * RANGE)) < 1e-6);
   assert.ok(Math.abs(s.targets.tp2 - (HIGH + 1.236 * (HIGH - lvl(0.236)))) < 1e-6);
 });
@@ -48,47 +47,45 @@ test('armCycle computes low-anchored levels and both targets', () => {
 test('standard mode: golden needs consecutive confirming 1m closes; a recovery close cancels', () => {
   const { s } = armed('standard');
   tick(s, HIGH * 0.99, 10_000);
-  let ev = tick(s, lvl(0.75), 11_000); // wick into the zone
+  let ev = tick(s, lvl(0.35), 11_000); // wick into/through the 0.382 golden
   assert.equal(ev.length, 0, 'no instant fire in standard mode');
   assert.equal(s.pending.golden, 0);
 
-  ev = barClose(s, lvl(0.80), 12_000); // closes back above → wick filtered
+  ev = barClose(s, lvl(0.45), 12_000); // closes back above → wick filtered
   assert.equal(ev.length, 0);
   assert.equal(s.pending.golden, undefined);
 
-  tick(s, lvl(0.80), 12_500); // price actually recovered (bars are built from these samples)
-  tick(s, lvl(0.75), 13_000); // re-cross arms pending again
-  ev = barClose(s, lvl(0.75), 14_000);
+  tick(s, lvl(0.45), 12_500);
+  tick(s, lvl(0.35), 13_000);
+  ev = barClose(s, lvl(0.35), 14_000);
   assert.equal(ev.length, 0);
-  ev = barClose(s, lvl(0.74), 15_000);
+  ev = barClose(s, lvl(0.34), 15_000);
   assert.equal(ev.length, 1);
   assert.equal(ev[0].kind, 'golden');
   assert.ok(s.fired.golden);
 
-  // once per cycle
   tick(s, HIGH * 0.9, 16_000);
-  ev = tick(s, lvl(0.7), 17_000);
+  ev = tick(s, lvl(0.33), 17_000);
   assert.equal(ev.filter((e) => e.kind === 'golden').length, 0);
 });
 
-test('fast mode: golden and mid levels fire instantly on the live cross', () => {
+test('fast mode: golden fires instantly on the live cross; entry is separate', () => {
   const { s } = armed('fast');
   tick(s, HIGH * 0.99, 10_000);
-  let ev = tick(s, lvl(0.7), 11_000);
+  let ev = tick(s, lvl(0.35), 11_000);
   assert.deepEqual(ev.map((e) => e.kind), ['golden']);
-  ev = tick(s, lvl(0.35), 12_000);
-  assert.deepEqual(ev.map((e) => e.kind), ['level']);
-  assert.equal(ev[0].ratio, 0.382);
+  ev = tick(s, lvl(0.20), 12_000);
+  assert.deepEqual(ev.map((e) => e.kind), ['entry_touch']);
+  assert.equal(ev[0].ratio, 0.236);
 });
 
 test('entry touch is instant even in standard mode and sweep-fires skipped levels in order', () => {
   const { s } = armed('standard');
   tick(s, HIGH * 0.99, 10_000);
-  const ev = tick(s, lvl(0.20), 11_000); // one sample gaps through everything
-  assert.deepEqual(ev.map((e) => e.kind), ['golden', 'level', 'entry_touch']);
-  assert.equal(ev[2].ratio, 0.236);
+  const ev = tick(s, lvl(0.20), 11_000);
+  assert.deepEqual(ev.map((e) => e.kind), ['golden', 'entry_touch']);
+  assert.equal(ev[1].ratio, 0.236);
   assert.equal(s.status, 'target_mode');
-  // nothing re-fires
   const again = tick(s, lvl(0.19), 12_000);
   assert.equal(again.length, 0);
 });
@@ -96,7 +93,7 @@ test('entry touch is instant even in standard mode and sweep-fires skipped level
 test('entry_held: consecutive closes back above entry, reset on a failed close', () => {
   const { s } = armed('standard');
   tick(s, HIGH * 0.99, 10_000);
-  tick(s, lvl(0.20), 11_000); // entry touched
+  tick(s, lvl(0.20), 11_000);
   let ev = barClose(s, lvl(0.30), 12_000);
   assert.equal(ev.length, 0);
   ev = barClose(s, lvl(0.22), 13_000); // dipped back under entry → reset
@@ -111,7 +108,7 @@ test('entry_held: consecutive closes back above entry, reset on a failed close',
 test('target mode: reclaim → tp1 → tp2 fire in order on a gap, cycle completes', () => {
   const { s } = armed('standard');
   tick(s, HIGH * 0.99, 10_000);
-  tick(s, lvl(0.20), 11_000); // arm targets via entry touch
+  tick(s, lvl(0.20), 11_000);
   const ev = tick(s, s.targets.tp2 * 1.01, 12_000);
   assert.deepEqual(ev.map((e) => e.kind), ['reclaim', 'tp1', 'tp2']);
   assert.equal(s.status, 'completed');
@@ -130,17 +127,17 @@ test('invalidation: 1m close below the swing low ends the cycle', () => {
 test('pre-alert new high just extends the anchors (no event, levels move)', () => {
   const { s } = armed('standard');
   tick(s, HIGH * 0.99, 10_000);
-  const ev = tick(s, HIGH * 1.4, 11_000); // +40%, but nothing fired yet
+  const ev = tick(s, HIGH * 1.4, 11_000);
   assert.equal(ev.length, 0);
   assert.ok(Math.abs(s.anchors.high.v - HIGH * 1.4) < 1e-6);
-  assert.ok(s.levels.goldenUpper > lvl(0.786), 'levels recomputed upward');
+  assert.ok(s.levels.goldenUpper > lvl(0.382), 'levels recomputed upward');
 });
 
 test('post-alert new high ≤ threshold extends and KEEPS fired flags', () => {
   const { s } = armed('fast');
   tick(s, HIGH * 0.99, 10_000);
-  tick(s, lvl(0.7), 11_000); // golden fired
-  const ev = tick(s, HIGH * 1.1, 12_000); // +10% < 25%
+  tick(s, lvl(0.35), 11_000); // golden fired
+  const ev = tick(s, HIGH * 1.1, 12_000);
   assert.equal(ev.length, 0);
   assert.ok(s.fired.golden, 'golden stays fired');
   assert.ok(Math.abs(s.anchors.high.v - HIGH * 1.1) < 1e-6);
@@ -149,7 +146,7 @@ test('post-alert new high ≤ threshold extends and KEEPS fired flags', () => {
 test('post-alert new high > threshold requests a new cycle', () => {
   const { s } = armed('fast');
   tick(s, HIGH * 0.99, 10_000);
-  tick(s, lvl(0.7), 11_000); // golden fired
+  tick(s, lvl(0.35), 11_000);
   const ev = tick(s, HIGH * (1 + FIB.REANCHOR_THRESHOLD) * 1.02, 12_000);
   assert.deepEqual(ev.map((e) => e.kind), ['new_cycle']);
 });
@@ -157,30 +154,30 @@ test('post-alert new high > threshold requests a new cycle', () => {
 test('restart resume: persisted lastValue prevents duplicate fires after a reboot', () => {
   const { s } = armed('fast');
   tick(s, HIGH * 0.99, 10_000);
-  tick(s, lvl(0.7), 11_000); // golden fired pre-"reboot"
-  const revived = JSON.parse(JSON.stringify(s)); // what dbStore would reload
-  const ev = liveTick(revived, revived.lastValue, lvl(0.69), 12_000);
-  assert.equal(ev.length, 0, 'still inside the zone → nothing re-fires');
+  tick(s, lvl(0.35), 11_000);
+  const revived = JSON.parse(JSON.stringify(s));
+  const ev = liveTick(revived, revived.lastValue, lvl(0.34), 12_000);
+  assert.equal(ev.length, 0, 'still inside/through golden → nothing re-fires');
 });
 
-test('arm-on-deepest: value already in the golden band announces golden only', () => {
-  const { events, s } = armed('standard', lvl(0.7));
+test('arm-on-deepest: value already on the golden level announces golden only', () => {
+  const { events, s } = armed('standard', lvl(0.382));
   assert.deepEqual(events.map((e) => e.kind), ['golden']);
   assert.ok(s.fired.golden);
-  assert.ok(!s.fired.alerts['0.382']);
+  assert.ok(!s.fired.alerts['0.236']);
 });
 
 test('arm-on-deepest: value already below entry sweep-announces the whole ladder', () => {
   const { events, s } = armed('standard', lvl(0.1));
-  assert.deepEqual(events.map((e) => e.kind), ['golden', 'level', 'entry_touch']);
+  assert.deepEqual(events.map((e) => e.kind), ['golden', 'entry_touch']);
   assert.equal(s.status, 'target_mode');
 });
 
-test('arm-on-deepest: value between the zone floor and 0.382 marks golden silently', () => {
-  const { events, s } = armed('standard', lvl(0.5));
+test('arm-on-deepest: value below golden but above entry marks golden silently', () => {
+  const { events, s } = armed('standard', lvl(0.30));
   assert.equal(events.length, 0);
   assert.ok(s.fired.golden, 'golden marked as passed, silently');
-  assert.ok(!s.fired.alerts['0.382']);
+  assert.ok(!s.fired.alerts['0.236']);
 });
 
 test('recomputeDerived keeps entry value in sync when the high slides', () => {
