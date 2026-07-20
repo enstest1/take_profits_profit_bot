@@ -411,7 +411,7 @@ async function subSimulate(interaction) {
     pivotStrength: FIB.PIVOT_STRENGTH,
     reversalPct: FIB.REVERSAL_PCT,
     atrMult: FIB.ATR_MULT,
-    goldenUpper: FIB.GOLDEN_UPPER,
+    goldenUpper: FIB.HIGH_CONFIRM_RATIO,
     launchFallback: true,
   });
   if (!det.ok) return interaction.editReply('**' + res.symbol + '** (' + tf + '): no cycle — ' + det.reason);
