@@ -41,6 +41,7 @@ const MODE_CHOICES = [
 ];
 const CHAIN_CHOICES = [
   { name: 'solana', value: 'solana' },
+  { name: 'base', value: 'base' },
   { name: 'robinhood', value: 'robinhood' },
 ];
 

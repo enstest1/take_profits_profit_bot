@@ -98,6 +98,7 @@ export const FIB = {
   /** GeckoTerminal network slugs per chain id (override if GT names them differently). */
   GT_NETWORKS: {
     solana: envStr('FIB_GT_NETWORK_SOLANA', 'solana'),
+    base: envStr('FIB_GT_NETWORK_BASE', 'base'),
     robinhood: envStr('FIB_GT_NETWORK_ROBINHOOD', 'robinhood'),
   },
 
