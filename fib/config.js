@@ -48,10 +48,12 @@ export const FIB = {
 
   /**
    * Golden-zone alert (text). Pelpa convention: golden = enter 0.382.
-   * Upper/lower equal → single-level golden; set a spread via env if you want a band.
+   * Lower 0.236 = the FULL pocket box on the chart (0.382 → entry), i.e. the classic
+   * 0.618–0.786 retracement zone on low-anchored labels. Arming inside it announces
+   * golden. Set both equal for a single line and no box.
    */
   GOLDEN_UPPER: envNum('FIB_GOLDEN_UPPER', 0.382),
-  GOLDEN_LOWER: envNum('FIB_GOLDEN_LOWER', 0.382),
+  GOLDEN_LOWER: envNum('FIB_GOLDEN_LOWER', 0.236),
 
   /**
    * Retrace ratio used only by the swing detector to confirm the impulse high

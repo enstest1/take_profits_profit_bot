@@ -36,7 +36,7 @@ test('armCycle computes low-anchored levels and both targets', () => {
   assert.equal(s.status, 'armed');
   assert.equal(s.cycleId, 1);
   assert.ok(Math.abs(s.levels.goldenUpper - lvl(0.382)) < 1e-6);
-  assert.ok(Math.abs(s.levels.goldenLower - lvl(0.382)) < 1e-6);
+  assert.ok(Math.abs(s.levels.goldenLower - lvl(0.236)) < 1e-6);
   assert.ok(Math.abs(s.levels.alerts['0.236'] - lvl(0.236)) < 1e-6);
   assert.equal(s.levels.alerts['0.382'], undefined);
   assert.equal(s.entryRatio, 0.236);
@@ -173,10 +173,10 @@ test('arm-on-deepest: value already below entry sweep-announces the whole ladder
   assert.equal(s.status, 'target_mode');
 });
 
-test('arm-on-deepest: value below golden but above entry marks golden silently', () => {
+test('arm-on-deepest: value inside the pocket announces golden', () => {
   const { events, s } = armed('standard', lvl(0.30));
-  assert.equal(events.length, 0);
-  assert.ok(s.fired.golden, 'golden marked as passed, silently');
+  assert.deepEqual(events.map((e) => e.kind), ['golden']);
+  assert.ok(s.fired.golden);
   assert.ok(!s.fired.alerts['0.236']);
 });
 
