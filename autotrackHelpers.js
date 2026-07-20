@@ -10,6 +10,7 @@ import { subscribeDevWallet } from './webhooks/devSell.js';
 import { saveDB } from './dbStore.js';
 import { xHistoryLine, indexXAccount } from './xSocial.js';
 import { formatB20Badge } from './b20.js';
+import { stampEntryValuation, logValuationAudit, valuationFromLive } from './valuationAudit.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -68,6 +69,10 @@ export async function sendTrackingEmbed(message, token, storageKey, db, buildEnt
   const sentMsg = await message.channel.send({ embeds: [embed] });
   const entry = buildEntryFn();
   if (token.liquidity > 0) entry.liquidityAtCall = token.liquidity;
+  if (token.fdv != null) entry.fdvAtCall = token.fdv;
+  if (token.pairAddress) entry.pairAddress = token.pairAddress;
+  stampEntryValuation(entry, token);
+  logValuationAudit('autotrack', token.symbol || storageKey, valuationFromLive(token));
   db.tokens[storageKey] = entry;
   if (entry.xHandle) indexXAccount(db, entry.xHandle, storageKey);
   saveDB(db);

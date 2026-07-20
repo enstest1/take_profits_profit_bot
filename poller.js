@@ -34,6 +34,7 @@ import {
   clearActivePollTrackedKeys,
   clearRemovedThisCycle,
 } from './dbStore.js';
+import { stampEntryValuation } from './valuationAudit.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
 /** One-time per volume: first poll after deploy only newest 5 mints may emit 🎯1x; all others skip 🎯 this cycle (avoids flood). Delete file to repeat. */
@@ -785,6 +786,8 @@ export async function pollTokens(client) {
 
 /** +75% window, 1x–20x milestones, and peak/lastPrice updates (uses USD price vs priceAtCall). */
 async function evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts = {}) {
+  stampEntryValuation(entry, live);
+
   const livePrice =
     live.price == null || live.price === '' ? null : Number(live.price);
   let callPx =
@@ -981,6 +984,8 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
 async function processTokenWithLive(client, address, db, live, milestoneOpts = {}) {
   const entry = db.tokens[address];
   if (!entry) return;
+
+  stampEntryValuation(entry, live);
 
   if (live.source === 'dexscreener' && entry.platform === 'pumpfun') {
     db.tokens[address].platform = 'dexscreener';

@@ -1,6 +1,7 @@
 import { parseEnabledChains, CHAINS } from './chains.js';
 import { rateLimiter } from './rateLimiter.js';
 import { xHandleFromPair } from './xSocial.js';
+import { enrichLiveFromPair } from './valuationAudit.js';
 
 function normalizeChainId(chainId) {
   return String(chainId || '').toLowerCase();
@@ -62,13 +63,15 @@ function pairToToken(pair, address) {
     ((pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0) +
     ((pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0);
 
-  return {
+  const token = {
     address: chain === 'solana' ? addr : addr.toLowerCase(),
     chain,
     name: meta.name,
     symbol: meta.symbol,
     price: pair.priceUsd != null ? String(pair.priceUsd) : null,
     marketCap: pair.marketCap ?? null,
+    fdv: pair.fdv ?? null,
+    pairAddress: pair.pairAddress || null,
     volume24h: (pair.volume && pair.volume.h24) || 0,
     liquidity: (pair.liquidity && pair.liquidity.usd) || 0,
     buys24h: (pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0,
@@ -81,6 +84,7 @@ function pairToToken(pair, address) {
     source: 'dexscreener',
     xHandle: xHandleFromPair(pair),
   };
+  return enrichLiveFromPair(token, pair);
 }
 
 /** DexScreener URLs in chat: dexscreener.com/{chain}/{address} */

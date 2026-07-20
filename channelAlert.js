@@ -2,6 +2,7 @@
 import { shouldSilenceAlerts, getAlertSilenceStatus } from './alertGate.js';
 import { notifyWatchSubscribers } from './subscriptions.js';
 import { bumpAlertSent } from './cycleStats.js';
+import { logValuationAudit } from './valuationAudit.js';
 
 export async function sendChannelAlert(client, channelId, embed, label = 'alert', files = null) {
   if (shouldSilenceAlerts()) {
@@ -28,6 +29,9 @@ export async function sendTokenAlert(client, db, mint, embed, alertKind, label =
     console.log('[canary] suppressed alert for ' + mint);
     return false;
   }
+  const snap = entry?.lastValuation || null;
+  logValuationAudit(alertKind || label, entry?.symbol || mint, snap);
+
   const sent = entry?.alertChannelId
     ? await sendChannelAlert(client, entry.alertChannelId, embed, label, files)
     : false;

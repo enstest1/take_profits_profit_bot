@@ -1,6 +1,7 @@
 import { rateLimiter } from './rateLimiter.js';
 import { CHAINS } from './chains.js';
 import { xHandleFromPair } from './xSocial.js';
+import { enrichLiveFromPair } from './valuationAudit.js';
 
 const BATCH_SIZE = 30;
 
@@ -41,12 +42,14 @@ function pairToLive(pair, mint, chainId) {
   const buys = pair.txns?.h24?.buys || 0;
   const sells = pair.txns?.h24?.sells || 0;
   const total = buys + sells;
-  return {
+  const live = {
     address: mint,
     name: meta?.name || meta?.symbol || 'Unknown',
     symbol: meta?.symbol || '?',
     price: pair.priceUsd != null ? String(pair.priceUsd) : null,
     marketCap: pair.marketCap ?? null,
+    fdv: pair.fdv ?? null,
+    pairAddress: pair.pairAddress || null,
     volume24h: pair.volume?.h24 || 0,
     liquidity: pair.liquidity?.usd || 0,
     buyPct: total > 0 ? Math.round((buys / total) * 100) : null,
@@ -56,6 +59,7 @@ function pairToLive(pair, mint, chainId) {
     source: 'dexscreener',
     xHandle: xHandleFromPair(pair),
   };
+  return enrichLiveFromPair(live, pair);
 }
 
 /**
