@@ -3,6 +3,7 @@ import { shouldSilenceAlerts, getAlertSilenceStatus } from './alertGate.js';
 import { notifyWatchSubscribers } from './subscriptions.js';
 import { bumpAlertSent } from './cycleStats.js';
 import { logValuationAudit } from './valuationAudit.js';
+import { renderEmbedForTelegram, sendTelegramMessage } from './notifier.js';
 
 export async function sendChannelAlert(client, channelId, embed, label = 'alert', files = null) {
   if (shouldSilenceAlerts()) {
@@ -10,6 +11,16 @@ export async function sendChannelAlert(client, channelId, embed, label = 'alert'
     const title = embed?.data?.title || label;
     console.log('[silence/' + st.reason + '] skipped: ' + title);
     return false;
+  }
+  if (process.env.PLATFORM === 'telegram') {
+    const payload = renderEmbedForTelegram(embed);
+    if (files && files.length && files[0]?.attachment) {
+      payload.photoBuffer = files[0].attachment;
+      payload.photoName = files[0].name || 'chart.png';
+    }
+    const ok = await sendTelegramMessage(channelId, payload);
+    if (ok) bumpAlertSent();
+    return ok;
   }
   try {
     const channel = await client.channels.fetch(channelId);
@@ -35,7 +46,7 @@ export async function sendTokenAlert(client, db, mint, embed, alertKind, label =
   const sent = entry?.alertChannelId
     ? await sendChannelAlert(client, entry.alertChannelId, embed, label, files)
     : false;
-  if (sent && entry) {
+  if (sent && entry && process.env.PLATFORM !== 'telegram') {
     notifyWatchSubscribers(client, db, mint, embed, alertKind, entry.postedByUserId).catch((e) =>
       console.error('[subscriptions] watch notify:', e.message),
     );

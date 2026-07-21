@@ -398,11 +398,8 @@ async function pollWallets(client) {
         .setTimestamp();
 
       try {
-        const channel = await client.channels.fetch(wallet.alertChannelId);
-        if (shouldSilenceAlerts()) {
-          console.log('[silence] skipped wallet alert: ' + wallet.label + ' ' + (isBuy ? 'buy' : 'sell') + ' ' + tokenSymbol);
-        } else {
-          await channel.send({ embeds: [embed] });
+        const sent = await sendChannelAlert(client, wallet.alertChannelId, embed, 'wallet');
+        if (sent) {
           console.log('[wallet] ' + wallet.label + ' ' + (isBuy ? 'bought' : 'sold') + ' ' + tokenSymbol);
           if (isBuy && boughtMint) {
             await maybeWalletConfluence(client, db, boughtMint, wallet, boughtMint);
@@ -567,14 +564,11 @@ async function postDailySummary(client) {
   }
 
   try {
-    if (shouldSilenceAlerts()) {
-      console.log('[silence] skipped daily summary (' + parts.tokenCount + ' tokens)');
-      return;
+    const ok = await sendChannelAlert(client, SUMMARY_CHANNEL_ID, embed, 'daily-summary');
+    if (ok) {
+      markSummaryPosted();
+      console.log('[summary] Posted successfully');
     }
-    const channel = await client.channels.fetch(SUMMARY_CHANNEL_ID);
-    await channel.send({ embeds: [embed] });
-    markSummaryPosted();
-    console.log('[summary] Posted successfully');
   } catch (e) {
     console.error('[summary] Failed to post:', e.message);
   }
