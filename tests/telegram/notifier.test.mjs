@@ -37,12 +37,17 @@ describe('renderEmbedForTelegram', () => {
     assert.equal(photoUrl, null);
   });
 
-  it('keeps http thumbnail/image as photoUrl', () => {
+  it('keeps http embed image as photoUrl; omits thumbnail', () => {
     const embed = new EmbedBuilder()
       .setTitle('T')
-      .setThumbnail('https://example.com/t.png');
+      .setImage('https://example.com/chart.png');
     const { photoUrl } = renderEmbedForTelegram(embed);
-    assert.equal(photoUrl, 'https://example.com/t.png');
+    assert.equal(photoUrl, 'https://example.com/chart.png');
+
+    const thumbOnly = new EmbedBuilder()
+      .setTitle('T')
+      .setThumbnail('https://example.com/t.png');
+    assert.equal(renderEmbedForTelegram(thumbOnly).photoUrl, null);
   });
 
   it('lays out fields and footer', () => {

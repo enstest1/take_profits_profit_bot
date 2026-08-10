@@ -53,7 +53,9 @@ export function renderEmbedForTelegram(embed) {
     parts.push('<i>' + discordMdToTelegramHtml(data.footer.text) + '</i>');
   }
 
-  const rawUrl = data.image?.url ?? data.thumbnail?.url ?? null;
+  // Telegram: use full embed image only (e.g. charts); the token thumbnail/logo is
+  // intentionally omitted on Telegram per group preference. Discord keeps its thumbnail.
+  const rawUrl = data.image?.url ?? null;
   const photoUrl = rawUrl && String(rawUrl).startsWith('http') ? String(rawUrl) : null;
 
   return { text: parts.join('\n'), photoUrl };
