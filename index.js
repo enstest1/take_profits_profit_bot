@@ -18,6 +18,7 @@ import {
 import { pollTokens } from './poller.js';
 import { initAlertGate } from './alertGate.js';
 import { fibtrackCommand, handleFibtrack } from './fibCommands.js';
+import { startMintScan } from './mintscan/index.js';
 import { startFibWatchLoop } from './fib/watchLoop.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
@@ -1430,6 +1431,7 @@ client.once('ready', async () => {
   }
   void runTokenPollLoop(client);
   startFibWatchLoop(client);
+  void startMintScan(client);
   startHttpServer(client, () => ensureDBSchema(loadDB()));
 });
 

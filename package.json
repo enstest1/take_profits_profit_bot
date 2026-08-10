@@ -13,7 +13,8 @@
     "test:summary": "node scripts/test-daily-summary.mjs",
     "tp:sample": "node scripts/send-tp-sample-embeds.mjs",
     "test:fib": "node --test fib/tests/engine.test.mjs fib/tests/swingDetector.test.mjs fib/tests/minuteBars.test.mjs",
-    "test:tg": "node --test tests/telegram",
+    "test:tg": "node --test tests/telegram/*.test.mjs",
+    "test:mintscan": "node --test tests/mintscan.test.mjs",
     "fib:simulate": "node scripts/fib-simulate.mjs"
   },
   "engines": {
