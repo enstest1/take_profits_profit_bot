@@ -9,6 +9,9 @@
  * because mint cards EDIT in place as a collection heats up, and editing needs
  * the message handle. Telegram is not wired for this feature — the edit model
  * has no clean Telegram equivalent yet.
+ *
+ * MINT_SCANNER_CHANNEL_IDS (comma list) posts the same card to every channel;
+ * tier escalations edit each channel's message in place.
  */
 
 import { getMintScannerConfig } from './config.js';
@@ -22,8 +25,8 @@ export async function startMintScan(client) {
     console.log('[mintscan] disabled (MINT_SCANNER_ENABLED not true)');
     return;
   }
-  if (!cfg.channelId) {
-    console.error('[mintscan] MINT_SCANNER_CHANNEL_ID not set — refusing to start');
+  if (!cfg.channelIds.length) {
+    console.error('[mintscan] MINT_SCANNER_CHANNEL_ID(S) not set — refusing to start');
     return;
   }
   if (!process.env.OPENSEA_API_KEY?.trim()) {
@@ -35,20 +38,34 @@ export async function startMintScan(client) {
 
   const send = async (alert, existing) => {
     const embed = buildMintCard(alert, cfg.chain);
-    const channel = await client.channels.fetch(cfg.channelId);
+    const messageIds = { ...(existing?.messageIds || {}) };
 
-    // Escalating tier → edit the existing card so one collection = one message.
-    if (existing?.messageId) {
-      try {
-        const msg = await channel.messages.fetch(existing.messageId);
-        await msg.edit({ embeds: [embed] });
-        return existing.messageId;
-      } catch {
-        // Message deleted or too old — fall through and post a fresh one.
-      }
+    // Legacy single-channel card shape — migrate on first edit.
+    if (existing?.messageId && existing?.channelId && !messageIds[existing.channelId]) {
+      messageIds[existing.channelId] = existing.messageId;
     }
-    const sent = await channel.send({ embeds: [embed] });
-    return sent.id;
+
+    for (const channelId of cfg.channelIds) {
+      const channel = await client.channels.fetch(channelId);
+      const prevId = messageIds[channelId] || null;
+
+      // Escalating tier → edit the existing card so one collection = one message per channel.
+      if (prevId && existing?.tier) {
+        try {
+          const msg = await channel.messages.fetch(prevId);
+          await msg.edit({ embeds: [embed] });
+          messageIds[channelId] = prevId;
+          continue;
+        } catch {
+          // Message deleted or too old — fall through and post a fresh one.
+        }
+      }
+
+      const sent = await channel.send({ embeds: [embed] });
+      messageIds[channelId] = sent.id;
+    }
+
+    return messageIds;
   };
 
   startMintScanner(send);

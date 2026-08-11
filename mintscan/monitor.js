@@ -143,10 +143,9 @@ export async function mintScanOnce(send) {
     };
 
     try {
-      const messageId = await send(alert, existing);
+      const messageIds = await send(alert, existing);
       setCard(contract, {
-        messageId: messageId || existing?.messageId || null,
-        channelId: cfg.channelId,
+        messageIds,
         tier,
         lastUpdated: Date.now(),
       });
@@ -197,7 +196,8 @@ export function startMintScanner(send) {
   console.log(
     '[mintscan] started on ' + cfg.chain.label + ' — every ' + cfg.intervalSec + 's · window ' +
       cfg.windowBlocks + ' blocks · warm ' + cfg.warmMints + '/hot ' + cfg.hotMints + '/moon ' +
-      cfg.moonMints + ' · min ' + cfg.minUnique + ' unique · requireOpenSea ' + cfg.requireOpenSea,
+      cfg.moonMints + ' · min ' + cfg.minUnique + ' unique · requireOpenSea ' + cfg.requireOpenSea +
+      ' · channels ' + cfg.channelIds.join(','),
   );
 }
 

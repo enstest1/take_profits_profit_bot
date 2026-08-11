@@ -410,3 +410,199 @@ export async function renderFibChart({ candles, state, symbol = '', currentValue
     return null;
   }
 }
+
+/**
+ * Price-only trencher chart — candles, call line, hi/lo tags, volume. No fib overlay.
+ * renderPriceChart({ candles, symbol, timeframe, callValue, currentValue }) → Buffer | null
+ */
+export async function renderPriceChart({
+  candles,
+  symbol = '',
+  timeframe = '1h',
+  callValue = null,
+  currentValue = null,
+}) {
+  try {
+    const mod = await getCanvas();
+    if (!mod || !candles?.length) return null;
+
+    const data = candles.length > 80 ? candles.slice(-80) : candles.slice();
+
+    const W = 900;
+    const H = 460;
+    const padL = 14;
+    const padR = 108;
+    const padT = 34;
+    const hVol = 38;
+    const hTime = 18;
+    const gap = 5;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - hVol - hTime - gap * 2;
+    const volTop = padT + plotH + gap;
+
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    for (const c of data) {
+      if (c.l < yMin) yMin = c.l;
+      if (c.h > yMax) yMax = c.h;
+    }
+    if (callValue != null && Number.isFinite(callValue)) {
+      yMin = Math.min(yMin, callValue);
+      yMax = Math.max(yMax, callValue);
+    }
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return null;
+
+    yMin = Math.max(0, yMin);
+    const spanPad = Math.max((yMax - yMin) * 0.1, yMax * 0.05, 1);
+    yMin = Math.max(0, yMin - spanPad);
+    yMax += spanPad;
+    if (yMax <= yMin) yMax = yMin + 1;
+
+    const y = (v) => padT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+    const x = (i) => padL + (plotW * (i + 0.5)) / data.length;
+    const cw = Math.max(1.2, Math.min(11, (plotW / data.length) * 0.66));
+
+    const canvas = mod.createCanvas(W, H);
+    const ctx = canvas.getContext('2d');
+    const FONT = 'FibSans, DejaVu Sans, sans-serif';
+
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const gridRows = [];
+    ctx.strokeStyle = C.grid;
+    ctx.lineWidth = 1;
+    for (let g = 0; g <= 4; g++) {
+      const gy = padT + (plotH * g) / 4;
+      gridRows.push(gy);
+      ctx.beginPath();
+      ctx.moveTo(padL, gy);
+      ctx.lineTo(padL + plotW, gy);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = C.ghost;
+    ctx.font = 'bold 52px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.fillText(symbol, padL + plotW / 2, padT + plotH / 2 + 16);
+    ctx.textAlign = 'left';
+
+    ctx.font = '10px ' + FONT;
+    ctx.fillStyle = C.axis;
+    for (const gy of gridRows) {
+      const val = yMin + ((padT + plotH - gy) / plotH) * (yMax - yMin);
+      if (val >= 0) ctx.fillText(fmtUsdShort(val), padL + plotW + 6, gy + 3);
+    }
+
+    if (callValue != null && Number.isFinite(callValue) && callValue >= yMin && callValue <= yMax) {
+      ctx.strokeStyle = '#38bdf8';
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(padL, y(callValue));
+      ctx.lineTo(padL + plotW, y(callValue));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#38bdf8';
+      ctx.font = 'bold 10px ' + FONT;
+      ctx.fillText('CALL ' + fmtUsdShort(callValue), padL + 4, y(callValue) - 4);
+    }
+
+    for (let i = 0; i < data.length; i++) {
+      const c = data[i];
+      const up = c.c >= c.o;
+      ctx.strokeStyle = up ? C.up : C.down;
+      ctx.fillStyle = up ? C.up : C.down;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x(i), y(c.h));
+      ctx.lineTo(x(i), y(c.l));
+      ctx.stroke();
+      const top = y(Math.max(c.o, c.c));
+      const hgt = Math.max(1, Math.abs(y(c.o) - y(c.c)));
+      ctx.fillRect(x(i) - cw / 2, top, cw, hgt);
+    }
+
+    let vMax = 0;
+    for (const c of data) if (Number.isFinite(c.v) && c.v > vMax) vMax = c.v;
+    if (vMax > 0) {
+      for (let i = 0; i < data.length; i++) {
+        const c = data[i];
+        if (!Number.isFinite(c.v) || c.v <= 0) continue;
+        const bh = Math.max(1, Math.sqrt(c.v / vMax) * hVol);
+        ctx.fillStyle = c.c >= c.o ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)';
+        ctx.fillRect(x(i) - cw / 2, volTop + hVol - bh, cw, bh);
+      }
+    }
+
+    ctx.fillStyle = C.axis;
+    ctx.font = '10px ' + FONT;
+    ctx.textAlign = 'center';
+    const spanMs = data[data.length - 1].t - data[0].t;
+    for (let k = 0; k <= 4; k++) {
+      const i = Math.round((k * (data.length - 1)) / 4);
+      ctx.fillText(fmtTime(data[i].t, spanMs), x(i), volTop + hVol + 14);
+    }
+    ctx.textAlign = 'left';
+
+    const tag = (px, py, text, border, above) => {
+      ctx.font = 'bold 11px ' + FONT;
+      const tw = ctx.measureText(text).width + 12;
+      const th = 18;
+      let tx = Math.min(Math.max(px - tw / 2, padL + 2), padL + plotW - tw - 2);
+      let ty = above ? py - th - 8 : py + 8;
+      ty = Math.min(Math.max(ty, padT + 2), padT + plotH - th - 2);
+      ctx.fillStyle = C.tagBg;
+      ctx.strokeStyle = border;
+      ctx.lineWidth = 1.2;
+      roundedRect(ctx, tx, ty, tw, th, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#e5e7eb';
+      ctx.textAlign = 'center';
+      ctx.fillText(text, tx + tw / 2, ty + 13);
+      ctx.textAlign = 'left';
+    };
+
+    let hiI = 0;
+    let loI = 0;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i].h > data[hiI].h) hiI = i;
+      if (data[i].l < data[loI].l) loI = i;
+    }
+    const callRef = callValue > 0 ? data[hiI].h / callValue : null;
+    const hiLabel = fmtUsdShort(data[hiI].h) + (callRef != null && callRef > 1.05 ? ' · ' + callRef.toFixed(1) + 'x' : '');
+    tag(x(hiI), y(data[hiI].h), hiLabel, C.up, true);
+    tag(x(loI), y(data[loI].l), fmtUsdShort(data[loI].l), C.low, false);
+
+    const cur = currentValue ?? data[data.length - 1].c;
+    ctx.strokeStyle = C.price;
+    ctx.setLineDash([2, 3]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padL, y(cur));
+    ctx.lineTo(padL + plotW, y(cur));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = 'bold 11px ' + FONT;
+    const pText = fmtUsdShort(cur);
+    const pw = ctx.measureText(pText).width + 10;
+    const pyy = Math.min(Math.max(y(cur) - 9, padT), padT + plotH - 18);
+    ctx.fillStyle = C.tagBg;
+    ctx.strokeStyle = C.price;
+    roundedRect(ctx, padL + plotW + 3, pyy, pw, 18, 4);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = C.price;
+    ctx.fillText(pText, padL + plotW + 8, pyy + 13);
+
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = 'bold 15px ' + FONT;
+    ctx.fillText(symbol + ' · ' + timeframe, padL, 22);
+
+    return canvas.toBuffer('image/png');
+  } catch (e) {
+    console.error('[fib/chart] price render failed:', e.message);
+    return null;
+  }
+}

@@ -23,6 +23,7 @@ import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
 import { evaluateFib } from './fib/evaluate.js';
 import { evaluatePersonalPositions } from './positions.js';
 import { sendChannelAlert, sendTokenAlert } from './channelAlert.js';
+import { isAlertCardsEnabledForChannel, sendMilestoneAlert } from './alertCards/index.js';
 import { indexXAccount } from './xSocial.js';
 import { checkWeeklyRecap } from './recap.js';
 import { CFG } from './signals/config.js';
@@ -873,14 +874,22 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
 
   // Check A: +75% — only fires between 1.75x and 2x (before tier 1 at 2× price)
   if (currentMultiple >= 1.75 && currentMultiple < 2.0 && !curGainAlert) {
-    const thumb = tokenThumbnail(entry, live);
-    const embed = new EmbedBuilder()
-      .setColor(0x00ff88)
-      .setTitle('📈 ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
-      .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt, entry));
-    if (thumb) embed.setThumbnail(thumb);
+    if (isAlertCardsEnabledForChannel(entry.alertChannelId)) {
+      await sendMilestoneAlert(client, db, address, entry, live, {
+        alertKind: 'gain75',
+        label: '+75%',
+        sendTokenAlert,
+      });
+    } else {
+      const thumb = tokenThumbnail(entry, live);
+      const embed = new EmbedBuilder()
+        .setColor(0x00ff88)
+        .setTitle('📈 ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ') — up 75% · MCap: ' + fmtUsd(live.marketCap))
+        .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt, entry));
+      if (thumb) embed.setThumbnail(thumb);
 
-    await sendTokenAlert(client, db, address, embed, 'gain75', '+75%');
+      await sendTokenAlert(client, db, address, embed, 'gain75', '+75%');
+    }
     db.tokens[address].gainAlertFired = true;
     saveDB(db);
     console.log('[+75%] ' + entry.name);
@@ -927,14 +936,23 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
       }
 
       if (alertTier != null) {
-        const thumb = tokenThumbnail(entry, live);
-        const embed = new EmbedBuilder()
-          .setColor(0xffd700)
-          .setTitle('🎯 ' + alertTier + 'x — ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ')')
-          .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt, entry));
-        if (thumb) embed.setThumbnail(thumb);
+        if (isAlertCardsEnabledForChannel(entry.alertChannelId)) {
+          await sendMilestoneAlert(client, db, address, entry, live, {
+            alertKind: 'tier' + alertTier,
+            tier: alertTier,
+            label: alertTier + 'x',
+            sendTokenAlert,
+          });
+        } else {
+          const thumb = tokenThumbnail(entry, live);
+          const embed = new EmbedBuilder()
+            .setColor(0xffd700)
+            .setTitle('🎯 ' + alertTier + 'x — ' + chainBadge(entry.chain) + lifecyclePrefix(entry) + entry.name + ' (' + entry.symbol + ')')
+            .setDescription(takeProfitDescription(address, entry.postedBy, entry.postedAt, entry));
+          if (thumb) embed.setThumbnail(thumb);
 
-        await sendTokenAlert(client, db, address, embed, 'tier' + alertTier, alertTier + 'x');
+          await sendTokenAlert(client, db, address, embed, 'tier' + alertTier, alertTier + 'x');
+        }
         latest = [...new Set([...latest, alertTier])].sort((a, b) => a - b);
         db.tokens[address].milestonesFired = latest;
         db.tokens[address].gainAlertFired = true;

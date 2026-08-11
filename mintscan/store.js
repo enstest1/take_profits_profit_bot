@@ -4,7 +4,7 @@
  *
  * db.mintScanner = {
  *   lastScannedBlock: number,
- *   cards: { "<contract>": { messageId, channelId, tier, lastUpdated } },
+ *   cards: { "<contract>": { messageIds, tier, lastUpdated } },
  * }
  *
  * `cards` lets a rising collection EDIT its existing card (WARM → HOT →

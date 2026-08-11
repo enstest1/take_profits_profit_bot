@@ -16,6 +16,10 @@
     "test:tg": "node --test tests/telegram/*.test.mjs",
     "test:mintscan": "node --test tests/mintscan.test.mjs",
     "test:xfeed": "node --test tests/xfeed.test.mjs",
+    "test:alert-cards": "node --test tests/alertCards/*.test.mjs",
+    "alert-cards:revert": "node scripts/revert-alert-cards.mjs",
+    "trencher:mock": "node scripts/send-trencher-mock-alerts.mjs",
+    "trencher:chart": "node scripts/render-trencher-mock-chart.mjs",
     "fib:simulate": "node scripts/fib-simulate.mjs"
   },
   "engines": {

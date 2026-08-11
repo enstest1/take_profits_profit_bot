@@ -23,6 +23,19 @@ function envBool(name, fallback) {
   return fallback;
 }
 
+/** Comma-separated MINT_SCANNER_CHANNEL_IDS, else single MINT_SCANNER_CHANNEL_ID. */
+function parseMintScannerChannelIds() {
+  const multi = process.env.MINT_SCANNER_CHANNEL_IDS?.trim();
+  if (multi) {
+    return multi
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  const single = process.env.MINT_SCANNER_CHANNEL_ID?.trim();
+  return single ? [single] : [];
+}
+
 /**
  * Chain registry. Robinhood Chain is an Arbitrum Orbit L2 — same EVM log
  * format as Ethereum, so the scanner logic is unchanged; only endpoints,
@@ -98,7 +111,9 @@ export function getMintScannerConfig() {
     cardEditIntervalSec: envInt('MINT_SCANNER_CARD_EDIT_INTERVAL_SEC', 60),
     rpcTimeoutMs: envInt('MINT_SCANNER_RPC_TIMEOUT_MS', 8000),
     debug: envBool('MINT_SCANNER_DEBUG', false),
-    channelId: process.env.MINT_SCANNER_CHANNEL_ID || '',
+    /** @deprecated use channelIds — kept for logs/backward compat */
+    channelId: parseMintScannerChannelIds()[0] || '',
+    channelIds: parseMintScannerChannelIds(),
     /**
      * Require an OpenSea listing before alerting. This is the primary spam
      * filter — without it every junk factory contract alerts. Defaults on when

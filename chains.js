@@ -94,6 +94,13 @@ export function chainLabel(chain) {
   return key.toUpperCase();
 }
 
+/** Title-case chain name for embed author rows (e.g. robinhood → Robinhood). */
+export function chainAuthorName(chainId) {
+  const label = CHAINS[String(chainId || 'solana').toLowerCase()]?.label;
+  if (!label) return String(chainId || 'solana');
+  return label.charAt(0) + label.slice(1).toLowerCase();
+}
+
 export function enabledChainsFooter() {
   return enabledChains().map((id) => chainLabel(id)).join(' · ');
 }

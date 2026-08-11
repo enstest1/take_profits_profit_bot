@@ -11,6 +11,7 @@ import { saveDB } from './dbStore.js';
 import { xHistoryLine, indexXAccount } from './xSocial.js';
 import { formatB20Badge } from './b20.js';
 import { stampEntryValuation, logValuationAudit, valuationFromLive } from './valuationAudit.js';
+import { isAlertCardsEnabledForChannel, buildAutotrackPayload } from './alertCards/index.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -56,17 +57,26 @@ export async function sendTrackingEmbed(message, token, storageKey, db, buildEnt
   const { chainId } = parseStorageKey(storageKey);
   const chainKey = token.chain || chainId;
 
-  const embed = new EmbedBuilder()
-    .setColor(0x00ccff)
-    .setAuthor({
-      name: chainBadge(chainKey) + ' 📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')',
-    })
-    .setDescription(buildTrackingDescription(message, ageStr, token, db, storageKey))
-    .setFooter({ text: chainLabel(chainKey) })
-    .setTimestamp();
-  if (token.imageUrl) embed.setThumbnail(token.imageUrl);
+  let embed;
+  let files = null;
+  if (isAlertCardsEnabledForChannel(message.channelId)) {
+    ({ embed, files } = buildAutotrackPayload(message, token, storageKey));
+  } else {
+    embed = new EmbedBuilder()
+      .setColor(0x00ccff)
+      .setAuthor({
+        name: chainBadge(chainKey) + ' 📡 Auto-tracking: ' + token.name + ' (' + token.symbol + ')',
+      })
+      .setDescription(buildTrackingDescription(message, ageStr, token, db, storageKey))
+      .setFooter({ text: chainLabel(chainKey) })
+      .setTimestamp();
+    if (token.imageUrl) embed.setThumbnail(token.imageUrl);
+  }
 
-  const sentMsg = await message.channel.send({ embeds: [embed] });
+  const sentMsg =
+    files?.length
+      ? await message.channel.send({ embeds: [embed], files })
+      : await message.channel.send({ embeds: [embed] });
   const entry = buildEntryFn();
   if (token.liquidity > 0) entry.liquidityAtCall = token.liquidity;
   if (token.fdv != null) entry.fdvAtCall = token.fdv;
