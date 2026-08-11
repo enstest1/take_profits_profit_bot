@@ -107,6 +107,12 @@ export function getMintScannerConfig() {
     hotMints: envInt('MINT_SCANNER_HOT_MINTS', 60),
     moonMints: envInt('MINT_SCANNER_MOON_MINTS', 120),
     minUnique: envInt('MINT_SCANNER_MIN_UNIQUE', 15),
+    /**
+     * Discord alerts only fire once a collection is this % of max supply.
+     * Sub-threshold tier hits are still recorded as near-misses for review.
+     */
+    minMintPct: envInt('MINT_SCANNER_MIN_MINT_PCT', 40),
+    logNearMisses: envBool('MINT_SCANNER_LOG_NEAR_MISSES', true),
     blockFactory: envBool('MINT_SCANNER_BLOCK_FACTORY', true),
     cardEditIntervalSec: envInt('MINT_SCANNER_CARD_EDIT_INTERVAL_SEC', 60),
     rpcTimeoutMs: envInt('MINT_SCANNER_RPC_TIMEOUT_MS', 8000),

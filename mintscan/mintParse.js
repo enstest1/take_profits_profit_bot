@@ -94,6 +94,15 @@ export function parseMintEvents(logs) {
   return out;
 }
 
+/**
+ * Hype-mint gate — alerts require a known mint % at or above the configured floor.
+ * Unknown max supply (mintPct null) is treated as below threshold.
+ */
+export function meetsMintPctGate(mintPct, minMintPct) {
+  if (mintPct == null || !Number.isFinite(mintPct)) return false;
+  return mintPct >= minMintPct;
+}
+
 /** Heat tier from the rolling window, or null if it doesn't qualify. */
 export function tierFor(mints, unique, cfg) {
   if (unique < cfg.minUnique) return null;

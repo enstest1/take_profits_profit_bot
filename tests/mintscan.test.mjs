@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  parseMintEvents, tierFor, windowMintCount, pruneWindow, safeQty, parse1155BatchTotal,
+  parseMintEvents, tierFor, windowMintCount, pruneWindow, safeQty, parse1155BatchTotal, meetsMintPctGate,
   TOPIC_ERC721_TRANSFER, TOPIC_ERC1155_SINGLE, ZERO_TOPIC,
 } from '../mintscan/mintParse.js';
 import { buildMintCard, marketLines, formatEth } from '../mintscan/card.js';
@@ -129,4 +129,12 @@ test('tier colour and emoji differ across tiers', () => {
   const moon = buildMintCard(alert({ tier: 'MOONING' }), CHAIN_PRESETS.robinhood).data;
   assert.notEqual(warm.color, moon.color);
   assert.match(moon.title, /🚀/);
+});
+
+test('mint pct gate blocks alerts below the configured floor', () => {
+  assert.equal(meetsMintPctGate(45, 40), true);
+  assert.equal(meetsMintPctGate(40, 40), true);
+  assert.equal(meetsMintPctGate(19.7, 40), false);
+  assert.equal(meetsMintPctGate(null, 40), false, 'unknown max supply must not alert');
+  assert.equal(meetsMintPctGate(undefined, 40), false);
 });

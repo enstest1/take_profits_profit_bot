@@ -16,12 +16,12 @@
 import { getBlockNumber, getLogs } from './rpc.js';
 import { getMintScannerConfig } from './config.js';
 import {
-  parseMintEvents, tierFor, windowMintCount, pruneWindow, safeQty,
+  parseMintEvents, tierFor, windowMintCount, pruneWindow, safeQty, meetsMintPctGate,
   TOPIC_ERC721_TRANSFER, TOPIC_ERC1155_SINGLE, TOPIC_ERC1155_BATCH, ZERO_TOPIC,
 } from './mintParse.js';
 import { resolveMintCollectionMeta } from './metadata.js';
 import { isBlockedMint, blockReason } from './blocklist.js';
-import { getLastScannedBlock, setLastScannedBlock, getCard, setCard, pruneCards } from './store.js';
+import { getLastScannedBlock, setLastScannedBlock, getCard, setCard, pruneCards, recordNearMiss } from './store.js';
 
 const TIER_RANK = { WARM: 1, HOT: 2, MOONING: 3 };
 const CARD_TTL_MS = 24 * 60 * 60 * 1000;
@@ -75,6 +75,7 @@ export async function mintScanOnce(send) {
   let alerted = 0;
   let blocked = 0;
   let unlisted = 0;
+  let nearMisses = 0;
 
   for (const [contract, w] of Object.entries(windows)) {
     pruneWindow(w, minKeep);
@@ -142,6 +143,33 @@ export async function mintScanOnce(send) {
       windowBlocks: cfg.windowBlocks,
     };
 
+    // Hype-mint gate: velocity tier alone isn't enough — collection must be
+    // materially sold through before we ping Discord. Sub-threshold hits are
+    // still persisted so we can tune the floor if we miss runners.
+    if (!meetsMintPctGate(meta.mintPct, cfg.minMintPct)) {
+      nearMisses++;
+      if (cfg.logNearMisses) {
+        recordNearMiss({
+          contract,
+          collectionName: meta.displayName,
+          tier,
+          mints,
+          unique,
+          mintPct: meta.mintPct,
+          totalSupply: meta.totalSupply,
+          maxSupply: meta.maxSupply,
+          openSeaSlug: meta.openSeaSlug,
+        });
+        const pctLabel = meta.mintPct != null ? meta.mintPct.toFixed(1) + '%' : 'unknown';
+        console.log(
+          '[mintscan] near-miss: ' + meta.displayName + ' — ' + tier +
+            ' (' + mints + ' mints, ' + unique + ' unique) · ' + pctLabel +
+            ' minted (need ' + cfg.minMintPct + '%)',
+        );
+      }
+      continue;
+    }
+
     try {
       const messageIds = await send(alert, existing);
       setCard(contract, {
@@ -158,14 +186,15 @@ export async function mintScanOnce(send) {
   setLastScannedBlock(toBlock);
   pruneCards(CARD_TTL_MS);
 
-  if (cfg.debug && (events.length || alerted)) {
+  if (cfg.debug && (events.length || alerted || nearMisses)) {
     console.log(
       '[mintscan] blocks ' + startBlock + '-' + toBlock + ': ' + events.length + ' mint logs, ' +
-        alerted + ' alert(s), ' + blocked + ' blocked, ' + unlisted + ' unlisted',
+        alerted + ' alert(s), ' + nearMisses + ' near-miss(es), ' + blocked + ' blocked, ' +
+        unlisted + ' unlisted',
     );
   }
 
-  return { scanned: toBlock - startBlock + 1, alerted };
+  return { scanned: toBlock - startBlock + 1, alerted, nearMisses };
 }
 
 let _timer = null;
@@ -196,8 +225,8 @@ export function startMintScanner(send) {
   console.log(
     '[mintscan] started on ' + cfg.chain.label + ' — every ' + cfg.intervalSec + 's · window ' +
       cfg.windowBlocks + ' blocks · warm ' + cfg.warmMints + '/hot ' + cfg.hotMints + '/moon ' +
-      cfg.moonMints + ' · min ' + cfg.minUnique + ' unique · requireOpenSea ' + cfg.requireOpenSea +
-      ' · channels ' + cfg.channelIds.join(','),
+      cfg.moonMints + ' · min ' + cfg.minUnique + ' unique · minMintPct ' + cfg.minMintPct + '%' +
+      ' · requireOpenSea ' + cfg.requireOpenSea + ' · channels ' + cfg.channelIds.join(','),
   );
 }
 
