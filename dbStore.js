@@ -53,6 +53,7 @@ export function ensureDBSchema(db) {
   if (!db.xAccounts) db.xAccounts = {};
   if (!db.fibWatch) db.fibWatch = {};
   if (!db.xRadar) db.xRadar = { users: {}, snapshots: {} };
+  if (!db.xFeed) db.xFeed = { seen: {}, lastPollAt: 0 };
   if (!db.mintScanner) db.mintScanner = { lastScannedBlock: 0, cards: {} };
   return db;
 }
