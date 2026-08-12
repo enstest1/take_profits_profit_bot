@@ -67,6 +67,7 @@ import {
   fetchTokenData,
 } from './tracker.js';
 import { buildCallsEmbed } from './callsView.js';
+import { isBlockedChannel } from './blockedChannels.js';
 
 const client = new Client({
   intents: [
@@ -95,6 +96,11 @@ async function postStartupBanner(client) {
 
   const channelId =
     process.env.LOG_CHANNEL_ID || process.env.SUMMARY_CHANNEL_ID || '1452152164699869298';
+
+  if (isBlockedChannel(channelId)) {
+    console.log('[startup] banner skipped — blocked channel ' + channelId);
+    return;
+  }
 
   const embed = new EmbedBuilder()
     .setColor(0xffd700)
@@ -578,6 +584,7 @@ async function fetchDeepForensics(mint, creator, deadline) {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
+  if (isBlockedChannel(message.channelId)) return;
   const refs = extractAddresses(message.content);
   if (refs.length === 0) return;
   console.log('[detect] Found ' + refs.length + ' address(es) from ' + message.author.username);
@@ -1367,6 +1374,7 @@ async function handleWalletList(interaction) {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+  if (isBlockedChannel(interaction.channelId)) return;
   try {
     if (interaction.commandName === 'calls') return handleCalls(interaction);
     if (interaction.commandName === 'remove') return handleRemove(interaction);

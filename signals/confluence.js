@@ -3,8 +3,10 @@ import { EmbedBuilder } from 'discord.js';
 import { CFG } from './config.js';
 import { sendChannelAlert } from '../channelAlert.js';
 import { saveDB } from '../dbStore.js';
+import { isBlockedChannel } from '../blockedChannels.js';
 
 export async function recordChannelSighting(client, db, mint, channelId, now = Date.now()) {
+  if (isBlockedChannel(channelId)) return;
   const entry = db.tokens[mint];
   if (!entry) return;
 

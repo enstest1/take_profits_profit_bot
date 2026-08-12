@@ -3,7 +3,7 @@
  * Gated by ALERT_CARDS_ENABLED; legacy cards remain in poller/autotrackHelpers when off.
  */
 export { fmtCompactK, fmtClockTime, fmtRick, fmtCallerAgeShort, fmtWindowInline } from './format.js';
-export { buildTradeLinksMarkdown, dexScreenerUrl, basedBotUrl, fomoUrl } from './links.js';
+export { buildTradeLinksMarkdown, dexScreenerUrl, gmgnUrl, basedBotUrl, fomoUrl } from './links.js';
 export { extractVolumeWindowsFromPair, windowsFrom5mCandles, resolveVolumeWindows } from './windows.js';
 export { buildMilestoneAlert, sendMilestoneAlert } from './milestone.js';
 export { buildAutotrackPayload, buildAutotrackDescription } from './autotrack.js';
