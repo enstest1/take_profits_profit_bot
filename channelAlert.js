@@ -4,8 +4,12 @@ import { notifyWatchSubscribers } from './subscriptions.js';
 import { bumpAlertSent } from './cycleStats.js';
 import { logValuationAudit } from './valuationAudit.js';
 import { renderEmbedForTelegram, sendTelegramMessage } from './notifier.js';
+import { isBlockedChannel } from './blockedChannels.js';
 
 export async function sendChannelAlert(client, channelId, embed, label = 'alert', files = null) {
+  if (isBlockedChannel(channelId)) {
+    return false;
+  }
   if (shouldSilenceAlerts()) {
     const st = getAlertSilenceStatus();
     const title = embed?.data?.title || label;

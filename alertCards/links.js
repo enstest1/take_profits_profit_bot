@@ -1,5 +1,25 @@
 import { CHAINS, parseStorageKey } from '../chains.js';
 
+/** GMGN chain slug — differs from our registry id for solana (`sol`). */
+function gmgnChainSlug(chainId) {
+  const id = String(chainId || 'solana').toLowerCase();
+  if (id === 'solana') return 'sol';
+  if (id === 'ethereum') return 'eth';
+  return id;
+}
+
+/**
+ * GMGN token page.
+ * @example https://gmgn.ai/robinhood/token/0x91554e79...
+ */
+export function gmgnUrl(chainId, address) {
+  const slug = gmgnChainSlug(chainId);
+  const addr = CHAINS[String(chainId || '').toLowerCase()]?.kind === 'evm'
+    ? String(address).toLowerCase()
+    : address;
+  return 'https://gmgn.ai/' + slug + '/token/' + addr;
+}
+
 /**
  * DexScreener page for a token.
  * @example https://dexscreener.com/robinhood/0x91554e79...
@@ -35,6 +55,8 @@ export function buildTradeLinksMarkdown(chainId, address) {
   return (
     '[DEX](' +
     dexScreenerUrl(chainId, address) +
+    ') · [GMGN](' +
+    gmgnUrl(chainId, address) +
     ') · [BasedBot](' +
     basedBotUrl(chainId, address) +
     ') · [FOMO](' +

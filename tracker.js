@@ -20,6 +20,7 @@ import {
 import { enrichWithB20 } from './b20.js';
 import { onAlreadyTracking, sendTrackingEmbed } from './autotrackHelpers.js';
 import { xHandleFromPair } from './xSocial.js';
+import { isBlockedChannel } from './blockedChannels.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -98,6 +99,7 @@ export function buildTrackedEntry(token, storageKey, message, ageStr) {
 }
 
 export async function autoTrack(ref, message, seenThisMessage = new Set()) {
+  if (isBlockedChannel(message.channelId)) return;
   const { chainId, raw } = ref;
   if (CHAINS[chainId]?.kind === 'evm') return autoTrackEvm(chainId, raw, message, seenThisMessage);
   return autoTrackSolana(raw, message, seenThisMessage);
@@ -238,7 +240,7 @@ export async function autoTrackSolana(address, message, seenThisMessage = new Se
   }
   if (!token) {
     console.log('[skip] ' + address.slice(0, 8) + '... — not found');
-    if (!shouldSilenceAlerts()) {
+    if (!shouldSilenceAlerts() && !isBlockedChannel(message.channelId)) {
       await message.channel.send({
         embeds: [{
           color: 0xff4444,

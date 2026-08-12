@@ -22,7 +22,7 @@ Discord milestone and auto-track cards for channel **1452152164699869298** (and 
 Cash Delivery Bird · 158K
 💎 26K → 158K · 💧 31K
 1h 673K +58.4% · 30m 412K +31.2% · 15m 89K +12.1%
-DEX · BasedBot · FOMO
+DEX · GMGN · BasedBot · FOMO
 
 💰💰💰 Take Profit 💰💰💰
 [900×400 chart]
@@ -51,6 +51,7 @@ Built in `alertCards/links.js`:
 | Service | URL pattern |
 |---------|-------------|
 | DEX | `https://dexscreener.com/{dexScreenerSlug}/{address}` |
+| GMGN | `https://gmgn.ai/{gmgnSlug}/token/{address}` (`sol` for Solana) |
 | BasedBot | `https://basedbot.app/token/{chainId}/{address}` |
 | FOMO | `https://fomo.family/tokens/{chainId}/{address}` |
 
