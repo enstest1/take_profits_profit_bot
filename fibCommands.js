@@ -43,6 +43,8 @@ const CHAIN_CHOICES = [
   { name: 'solana', value: 'solana' },
   { name: 'base', value: 'base' },
   { name: 'robinhood', value: 'robinhood' },
+  { name: 'ink', value: 'ink' },
+  { name: 'hype (HyperEVM)', value: 'hype' },
 ];
 
 export const fibtrackCommand = new SlashCommandBuilder()

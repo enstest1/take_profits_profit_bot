@@ -1,18 +1,7 @@
 /**
  * mintscan/card.js — the mint alert card.
  *
- * Trencher styling to match the rest of the bot: chain identity leads, the
- * numbers that drive a decision come next, links last. Pure function → fully
- * testable without a chain or Discord.
- *
- * Layout:
- *   🔥 Glitch Demon                          [collection image thumb]
- *   HOT · 99 mints in ~25 blocks · 19.8/min
- *   20 unique minters
- *   Supply: 197 / 1,000 (19.7% minted)
- *   Mint: 0.001 ETH · Floor: 0.0033 ETH · Owners: 388
- *   `0x…`
- *   OpenSea · X · Contract · TX
+ * Compact one-liner: supply · unique minters · OpenSea link.
  */
 
 import { EmbedBuilder } from 'discord.js';
@@ -34,7 +23,7 @@ export function formatSupply(n) {
   return Number(n).toLocaleString('en-US');
 }
 
-/** Supply / price / floor lines — omitted entirely when unknown. */
+/** Supply / price / floor lines — kept for tests and optional future use. */
 export function marketLines(meta) {
   const lines = [];
   if (meta.totalSupply != null && meta.maxSupply != null && meta.mintPct != null) {
@@ -58,42 +47,35 @@ export function marketLines(meta) {
 }
 
 /**
- * buildMintCard(alert, chain) → EmbedBuilder
- * alert: { tier, contract, collectionName, openSeaSlug, twitterUsername, imageUrl,
- *          totalSupply, maxSupply, mintPct, mintPriceEth, floorPriceEth, numOwners,
- *          mints, perMin, unique, sampleTx, windowBlocks }
+ * One-line body: supply · unique minters · OpenSea.
+ * @param {object} alert
+ * @returns {string}
  */
-export function buildMintCard(alert, chain) {
-  const style = TIER_STYLE[alert.tier] || TIER_STYLE.WARM;
+export function buildMintCardLine(alert) {
+  const supply =
+    alert.totalSupply != null && alert.maxSupply != null
+      ? formatSupply(alert.totalSupply) + '/' + formatSupply(alert.maxSupply)
+      : alert.totalSupply != null
+        ? formatSupply(alert.totalSupply)
+        : '—';
 
-  const lines = [
-    '**' + alert.tier + '** · **' + formatSupply(alert.mints) + '** mints in ~' +
-      alert.windowBlocks + ' blocks · **' + alert.perMin.toFixed(1) + '/min**',
-    '**' + formatSupply(alert.unique) + '** unique minters',
-    ...marketLines(alert),
-    '`' + alert.contract + '`',
-  ];
-
-  // Links: OpenSea (chain-filtered), project X, explorer contract + tx.
-  const links = [];
+  const parts = ['**' + supply + '** supply', '**' + formatSupply(alert.unique) + '** unique'];
   if (alert.openSeaSlug) {
-    links.push('[OpenSea](https://opensea.io/collection/' + alert.openSeaSlug + ')');
+    parts.push('[OpenSea](https://opensea.io/collection/' + alert.openSeaSlug + ')');
   }
-  if (alert.twitterUsername) {
-    links.push('[X](https://x.com/' + alert.twitterUsername + ')');
-  }
-  links.push('[Contract](' + chain.explorerBase + '/address/' + alert.contract + ')');
-  if (alert.sampleTx) {
-    links.push('[TX](' + chain.explorerBase + '/tx/' + alert.sampleTx + ')');
-  }
-  lines.push(links.join(' · '));
+  return parts.join(' · ');
+}
+
+/**
+ * buildMintCard(alert, chain) → EmbedBuilder
+ */
+export function buildMintCard(alert, _chain) {
+  const style = TIER_STYLE[alert.tier] || TIER_STYLE.WARM;
 
   const embed = new EmbedBuilder()
     .setColor(style.color)
-    .setTitle(style.emoji + ' ' + (alert.collectionName || 'Unknown Collection'))
-    .setDescription(lines.join('\n'))
-    .setFooter({ text: chain.label + ' · mint scanner' })
-    .setTimestamp();
+    .setTitle(style.emoji + ' ' + alert.tier + ' · ' + (alert.collectionName || 'Unknown Collection'))
+    .setDescription(buildMintCardLine(alert));
 
   if (alert.openSeaSlug) embed.setURL('https://opensea.io/collection/' + alert.openSeaSlug);
   if (alert.imageUrl && String(alert.imageUrl).startsWith('http')) embed.setThumbnail(alert.imageUrl);

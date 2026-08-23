@@ -17,6 +17,7 @@
     "test:mintscan": "node --test tests/mintscan.test.mjs",
     "test:xfeed": "node --test tests/xfeed.test.mjs",
     "test:alert-cards": "node --test tests/alertCards/*.test.mjs",
+    "test:chains": "node --test tests/chains.test.mjs",
     "alert-cards:revert": "node scripts/revert-alert-cards.mjs",
     "trencher:mock": "node scripts/send-trencher-mock-alerts.mjs",
     "trencher:chart": "node scripts/render-trencher-mock-chart.mjs",

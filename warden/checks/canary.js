@@ -1,4 +1,4 @@
-import { parseStorageKey } from '../../chains.js';
+import { CHAINS, parseStorageKey } from '../../chains.js';
 import { allEntries } from '../lib/entries.js';
 
 const lastCanaryChecked = new Map();
@@ -11,7 +11,7 @@ export function checkCanaries(snap, status, raise) {
   for (const [key, entry] of allEntries(snap)) {
     if (!entry?.canary && !(entry?.tags || []).includes('canary')) continue;
     const { chainId } = parseStorageKey(key);
-    if (chainId !== 'solana' && chainId !== 'robinhood' && chainId !== 'base') continue;
+    if (chainId !== 'solana' && CHAINS[chainId]?.kind !== 'evm') continue;
 
     const lc = Number(entry.lastChecked) || 0;
     const prev = lastCanaryChecked.get(key) || 0;
