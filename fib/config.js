@@ -117,6 +117,8 @@ export const FIB = {
     solana: envStr('FIB_GT_NETWORK_SOLANA', 'solana'),
     base: envStr('FIB_GT_NETWORK_BASE', 'base'),
     robinhood: envStr('FIB_GT_NETWORK_ROBINHOOD', 'robinhood'),
+    ink: envStr('FIB_GT_NETWORK_INK', 'ink'),
+    hype: envStr('FIB_GT_NETWORK_HYPE', 'hyperevm'),
   },
 
   /** GeckoTerminal free tier ≈ 30 calls/min → min spacing between calls. */

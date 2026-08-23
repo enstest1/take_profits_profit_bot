@@ -5,7 +5,9 @@ function gmgnChainSlug(chainId) {
   const id = String(chainId || 'solana').toLowerCase();
   if (id === 'solana') return 'sol';
   if (id === 'ethereum') return 'eth';
-  return id;
+  // GMGN mirrors DexScreener's HyperEVM slug, not our registry id.
+  if (id === 'hype') return 'hyperevm';
+  return CHAINS[id]?.dexScreenerSlug || id;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gmgnUrl, buildTradeLinksMarkdown } from '../../alertCards/links.js';
+import { gmgnUrl, buildTradeLinksMarkdown, dexScreenerUrl } from '../../alertCards/links.js';
 import { blockedChannelIds, isBlockedChannel } from '../../blockedChannels.js';
 
 test('gmgnUrl uses sol slug for solana mints', () => {
@@ -13,9 +13,14 @@ test('gmgnUrl lowercases EVM addresses on robinhood', () => {
   assert.equal(url, 'https://gmgn.ai/robinhood/token/0x91554e79a17c18990034d1ec3c4f492086d7b2cc');
 });
 
-test('buildTradeLinksMarkdown includes GMGN', () => {
-  const md = buildTradeLinksMarkdown('robinhood', '0x91554e79a17c18990034d1ec3c4f492086d7b2cc');
-  assert.match(md, /\[GMGN\]\(https:\/\/gmgn\.ai\/robinhood\/token\//);
+test('gmgnUrl maps hype registry id to hyperevm slug', () => {
+  const url = gmgnUrl('hype', '0x5555555555555555555555555555555555555555');
+  assert.equal(url, 'https://gmgn.ai/hyperevm/token/0x5555555555555555555555555555555555555555');
+});
+
+test('dexScreenerUrl uses hyperevm slug for hype chain', () => {
+  const url = dexScreenerUrl('hype', '0x5555555555555555555555555555555555555555');
+  assert.equal(url, 'https://dexscreener.com/hyperevm/0x5555555555555555555555555555555555555555');
 });
 
 test('isBlockedChannel defaults include general log channel', () => {

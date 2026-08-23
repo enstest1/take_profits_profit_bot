@@ -1,5 +1,5 @@
 import { batchFetch } from '../../dexBatch.js';
-import { parseStorageKey } from '../../chains.js';
+import { CHAINS, parseStorageKey } from '../../chains.js';
 
 const PERSISTENCE = new Map();
 
@@ -26,7 +26,7 @@ function pickSample(snap, chainId, n = 30) {
 
 export async function checkPriceTruth(snap, status, raise, { pollIntervalMs }) {
   if (!snap) return;
-  const chains = ['solana', 'robinhood', 'base'];
+  const chains = ['solana', ...Object.keys(CHAINS).filter((id) => CHAINS[id]?.kind === 'evm')];
   const freshMs = (pollIntervalMs || 180_000) * 2;
 
   for (const chainId of chains) {

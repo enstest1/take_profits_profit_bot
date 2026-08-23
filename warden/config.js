@@ -4,7 +4,7 @@ export const BOUNDS = {
   callChannels: 10,
   tags: 3,
   positionsPerToken: 200,
-  milestonesFired: 20,
+  milestonesFired: 100,
 };
 
 export const IMMUTABLE = ['postedBy', 'postedByUserId', 'postedAt', 'priceAtCall', 'calledInGuild'];

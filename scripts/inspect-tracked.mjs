@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getAlertSilenceStatus, COMEBACK_STATE_FILE } from '../alertGate.js';
+import { normalizeTakeProfitTiers } from '../milestones.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.join(__dirname, '..');
@@ -13,9 +14,7 @@ const DB_PATH = path.join(DATA_DIR, 'tracked.json');
 const BOOTSTRAP_FILE = path.join(DATA_DIR, '.tp_milestone_bootstrap_v2');
 
 function normalizeMilestones(fired) {
-  if (!Array.isArray(fired) || fired.length === 0) return [];
-  if (fired.every((x) => x >= 1 && x <= 20)) return fired;
-  return fired.filter((x) => x >= 1 && x <= 20);
+  return normalizeTakeProfitTiers(fired);
 }
 
 function loadDb() {

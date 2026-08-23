@@ -1,4 +1,4 @@
-import { parseStorageKey } from '../../chains.js';
+import { CHAINS, parseStorageKey } from '../../chains.js';
 import { BOUNDS } from '../config.js';
 import { allEntries } from '../lib/entries.js';
 
@@ -48,7 +48,7 @@ export function checkSchemaBounds(snap, raise) {
       raise('C5b', 'WARN', key, 'milestonesFired exceeds cap', { len: entry.milestonesFired.length });
     }
 
-    if (chainId === 'robinhood' || chainId === 'base') {
+    if (CHAINS[chainId]?.kind === 'evm') {
       if (entry.rugScan) raise('C5', 'WARN', key, chainId + ' entry has rugScan (Solana-only)');
       if (entry.devWallet) raise('C5', 'WARN', key, chainId + ' entry has devWallet');
     }

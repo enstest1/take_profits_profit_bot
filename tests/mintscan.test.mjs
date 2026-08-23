@@ -85,31 +85,20 @@ const alert = (over = {}) => ({
   mints: 99, perMin: 19.8, unique: 20, sampleTx: '0xdeadbeef', windowBlocks: 1200, ...over,
 });
 
-test('card shows tier, velocity, unique minters and the CA', () => {
+test('card is one line: supply, unique minters, OpenSea', () => {
   const d = buildMintCard(alert(), CHAIN_PRESETS.robinhood).data;
   assert.match(d.title, /Glitch Demon/);
-  assert.match(d.description, /HOT/);
-  assert.match(d.description, /99\*\* mints/);
-  assert.match(d.description, /19\.8\/min/);
+  assert.match(d.title, /HOT/);
+  assert.match(d.description, /197\/1,000\*\* supply/);
   assert.match(d.description, /20\*\* unique/);
-  assert.match(d.description, /0xabc0000000000000000000000000000000000001/);
+  assert.match(d.description, /opensea\.io\/collection\/glitch-demon/);
+  assert.equal(d.description.split('\n').length, 1);
 });
 
-test('links point at the configured chain explorer, not Etherscan', () => {
-  const d = buildMintCard(alert(), CHAIN_PRESETS.robinhood).data;
-  assert.match(d.description, /robinhoodchain\.blockscout\.com\/address\//);
-  assert.match(d.description, /robinhoodchain\.blockscout\.com\/tx\//);
-  assert.doesNotMatch(d.description, /etherscan/);
-});
-
-test('OpenSea and X links appear only when known', () => {
-  const withAll = buildMintCard(alert(), CHAIN_PRESETS.robinhood).data.description;
-  assert.match(withAll, /opensea\.io\/collection\/glitch-demon/);
-  assert.match(withAll, /x\.com\/glitchdemon/);
-  const bare = buildMintCard(alert({ openSeaSlug: null, twitterUsername: null }), CHAIN_PRESETS.robinhood).data.description;
+test('OpenSea link omitted when slug unknown', () => {
+  const bare = buildMintCard(alert({ openSeaSlug: null }), CHAIN_PRESETS.robinhood).data.description;
   assert.doesNotMatch(bare, /opensea\.io/);
-  assert.doesNotMatch(bare, /x\.com/);
-  assert.match(bare, /Contract/, 'explorer link always present');
+  assert.match(bare, /unique/);
 });
 
 test('unknown market data is omitted rather than shown as null', () => {

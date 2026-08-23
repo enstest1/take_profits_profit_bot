@@ -24,13 +24,30 @@ export const CHAINS = {
     dexScreenerSlug: 'robinhood',
     addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
   },
+  ink: {
+    id: 'ink',
+    kind: 'evm',
+    emoji: '🖋️',
+    label: 'INK',
+    dexScreenerSlug: 'ink',
+    addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
+  },
+  hype: {
+    id: 'hype',
+    kind: 'evm',
+    emoji: '💧',
+    label: 'HYPE',
+    // DexScreener lists Hyperliquid HyperEVM pairs under /hyperevm/, not /hype/.
+    dexScreenerSlug: 'hyperevm',
+    addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
+  },
 };
 
 /** @deprecated use CHAINS keys */
 export const SUPPORTED_CHAINS = Object.keys(CHAINS);
 
 /** Legacy EVM chain ids (stored tokens only — not enabled for auto-track). */
-export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract', 'robinhood'];
+export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract', 'robinhood', 'ink', 'hype'];
 
 export function enabledChains() {
   return String(process.env.ENABLED_CHAINS || 'solana')
@@ -189,11 +206,16 @@ export function resolveArchivedKey(db, storageKey, rawInput) {
   );
 }
 
+/** DexScreener URL slug for a chain (may differ from registry id, e.g. hype → hyperevm). */
+function dexScreenerSlugFor(chainId) {
+  return CHAINS[chainId]?.dexScreenerSlug || chainId;
+}
+
 /** Skip 0x matches embedded in dexscreener.com/<other-chain>/ URLs (spec test #7). */
-function isForeignDexScreenerContext(body, startIndex, rawLen, chainId) {
+function isForeignDexScreenerContext(body, startIndex, rawLen, dexSlug) {
   const chunk = body.slice(Math.max(0, startIndex - 60), startIndex + rawLen);
   const hit = chunk.match(/dexscreener\.com\/([a-z0-9_-]+)\/0x[a-fA-F0-9]{40}$/i);
-  return hit && hit[1].toLowerCase() !== chainId;
+  return hit && hit[1].toLowerCase() !== String(dexSlug || '').toLowerCase();
 }
 
 /**
@@ -208,8 +230,10 @@ export function extractAddresses(text) {
   for (const chainId of enabledChains()) {
     const chain = CHAINS[chainId];
 
+    const dexSlug = dexScreenerSlugFor(chainId);
+
     if (chain.kind === 'evm') {
-      const urlRe = new RegExp('dexscreener\\.com\\/' + chainId + '\\/(0x[a-fA-F0-9]{40})', 'gi');
+      const urlRe = new RegExp('dexscreener\\.com\\/' + dexSlug + '\\/(0x[a-fA-F0-9]{40})', 'gi');
       let um;
       while ((um = urlRe.exec(body)) !== null) {
         const raw = um[1];
@@ -225,7 +249,7 @@ export function extractAddresses(text) {
       if (chainId === 'solana') {
         if (!/\d/.test(raw) || /[0OIl]/.test(raw)) continue;
       }
-      if (chain.kind === 'evm' && isForeignDexScreenerContext(body, m.index ?? 0, raw.length, chainId)) {
+      if (chain.kind === 'evm' && isForeignDexScreenerContext(body, m.index ?? 0, raw.length, dexSlug)) {
         continue;
       }
       const dedupeKey = chainId + ':' + (chain.kind === 'evm' ? raw.toLowerCase() : raw);

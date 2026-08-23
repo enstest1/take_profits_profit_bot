@@ -24,6 +24,7 @@ import { evaluateFib } from './fib/evaluate.js';
 import { evaluatePersonalPositions } from './positions.js';
 import { sendChannelAlert, sendTokenAlert } from './channelAlert.js';
 import { isAlertCardsEnabledForChannel, sendMilestoneAlert } from './alertCards/index.js';
+import { MAX_MILESTONE_TIER, normalizeTakeProfitTiers } from './milestones.js';
 import { indexXAccount } from './xSocial.js';
 import { checkWeeklyRecap } from './recap.js';
 import { CFG } from './signals/config.js';
@@ -134,24 +135,6 @@ function tokenThumbnail(entry, live) {
   if (live && live.rawPump && live.rawPump.image_uri) return live.rawPump.image_uri;
   if (live && live.imageUrl) return live.imageUrl;
   return null;
-}
-
-/** Normalize legacy milestonesFired (stored price gates 2,5,10,20) to tier ids 1–20. */
-function normalizeTakeProfitTiers(fired) {
-  if (!Array.isArray(fired) || fired.length === 0) return [];
-  const legacySparse = new Set([2, 5, 10, 20]);
-  if (fired.includes(1) || fired.some((x) => x > 20)) {
-    return [...new Set(fired.filter((x) => x >= 1 && x <= 20))].sort((a, b) => a - b);
-  }
-  if (fired.every((x) => legacySparse.has(x))) {
-    return [...new Set(fired.map((x) => x - 1))].filter((t) => t >= 1 && t <= 20).sort((a, b) => a - b);
-  }
-  if (fired.every((x) => x >= 1 && x <= 20)) {
-    return [...new Set(fired)].sort((a, b) => a - b);
-  }
-  return [...new Set(fired.map((x) => (x >= 2 ? x - 1 : x)))]
-    .filter((t) => t >= 1 && t <= 20)
-    .sort((a, b) => a - b);
 }
 
 const pollingLock = new Set();
@@ -779,7 +762,7 @@ export async function pollTokens(client) {
   }
 }
 
-/** +75% window, 1x–20x milestones, and peak/lastPrice updates (uses USD price vs priceAtCall). */
+/** +75% window, 1x–100x milestones, and peak/lastPrice updates (uses USD price vs priceAtCall). */
 async function evaluateGainAndMilestones(client, address, db, entry, live, milestoneOpts = {}) {
   stampEntryValuation(entry, live);
 
@@ -902,7 +885,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
   }
 
   if (!milestoneOpts.suppressTierX) {
-    const maxTier = milestoneOpts.tier1OnlyBootstrap ? 1 : 20;
+    const maxTier = milestoneOpts.tier1OnlyBootstrap ? 1 : MAX_MILESTONE_TIER;
     const newlyPassed = [];
     for (let tier = 1; tier <= maxTier; tier++) {
       if (!latest.includes(tier) && currentMultiple >= tier + 1) {
