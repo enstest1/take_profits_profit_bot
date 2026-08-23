@@ -42,6 +42,7 @@ const MODE_CHOICES = [
 const CHAIN_CHOICES = [
   { name: 'solana', value: 'solana' },
   { name: 'base', value: 'base' },
+  { name: 'ethereum', value: 'ethereum' },
   { name: 'robinhood', value: 'robinhood' },
   { name: 'ink', value: 'ink' },
   { name: 'hype (HyperEVM)', value: 'hype' },

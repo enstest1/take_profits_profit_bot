@@ -16,6 +16,14 @@ export const CHAINS = {
     dexScreenerSlug: 'base',
     addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
   },
+  ethereum: {
+    id: 'ethereum',
+    kind: 'evm',
+    emoji: 'Ξ',
+    label: 'ETHEREUM',
+    dexScreenerSlug: 'ethereum',
+    addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
+  },
   robinhood: {
     id: 'robinhood',
     kind: 'evm',

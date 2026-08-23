@@ -116,6 +116,7 @@ export const FIB = {
   GT_NETWORKS: {
     solana: envStr('FIB_GT_NETWORK_SOLANA', 'solana'),
     base: envStr('FIB_GT_NETWORK_BASE', 'base'),
+    ethereum: envStr('FIB_GT_NETWORK_ETHEREUM', 'eth'),
     robinhood: envStr('FIB_GT_NETWORK_ROBINHOOD', 'robinhood'),
     ink: envStr('FIB_GT_NETWORK_INK', 'ink'),
     hype: envStr('FIB_GT_NETWORK_HYPE', 'hyperevm'),
