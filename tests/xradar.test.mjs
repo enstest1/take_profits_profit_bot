@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'assert/strict';
 import { diffFollowing, capNewcomers } from '../xradar/diff.js';
-import { buildFollowCard, clip, profileUrl } from '../xradar/card.js';
+import { buildFollowCard, clip, profileUrl, pfpUrl } from '../xradar/card.js';
 import { parseHandleList } from '../xradar/config.js';
 import { targetFeedListId, describeListSync } from '../xradar/listSync.js';
 
@@ -50,14 +50,29 @@ test('parseHandleList normalizes @, commas, and junk', () => {
 
 test('follow card names both accounts and links the new follow', () => {
   const d = buildFollowCard(
-    { username: 'kol' },
-    { username: 'newbie', name: 'Newbie', bio: 'onchain', followersCount: 1200, followingCount: 10 },
+    { username: 'kol', avatarUrl: 'https://pbs.twimg.com/profile_images/1_normal.jpg' },
+    {
+      username: 'newbie', name: 'Newbie', bio: 'onchain',
+      followersCount: 1200, followingCount: 10,
+      avatarUrl: 'https://pbs.twimg.com/profile_images/2_normal.jpg',
+    },
   ).data;
   assert.match(d.author.name, /@kol followed/);
   assert.match(d.description, /@newbie/);
   assert.match(d.description, /Newbie/);
   assert.equal(profileUrl('newbie'), 'https://x.com/newbie');
   assert.ok(clip('x'.repeat(200)).endsWith('…'));
+  assert.match(d.thumbnail.url, /2_400x400/);
+  assert.doesNotMatch(d.thumbnail.url, /apple-touch-icon/);
+  assert.match(d.author.icon_url, /1_400x400/);
+});
+
+test('pfpUrl upgrades _normal avatars and falls back to unavatar', () => {
+  assert.equal(
+    pfpUrl({ avatarUrl: 'https://pbs.twimg.com/profile_images/ab_normal.jpg' }, 'x'),
+    'https://pbs.twimg.com/profile_images/ab_400x400.jpg',
+  );
+  assert.equal(pfpUrl({}, 'InkersonInk'), 'https://unavatar.io/twitter/InkersonInk');
 });
 
 test('targetFeedListId prefers XFEED_SYNC_LIST_ID then the first XFEED_LIST_IDS entry', () => {

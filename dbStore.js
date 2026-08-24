@@ -67,6 +67,34 @@ export function mergePollSnapshot(stagedDb, trackedKeys) {
   return fresh;
 }
 
+/** Atomic write that skips mergePollSnapshot — used by xradar/xfeed side state. */
+function writeDirect(db) {
+  const tmp = DB_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(db));
+  fs.renameSync(tmp, DB_PATH);
+}
+
+/**
+ * Mutate xRadar on disk without losing the write to a concurrent token poll.
+ * Reloads tokens after the mutator so we do not clobber poller price updates.
+ */
+export function patchXRadar(mutator) {
+  const db = ensureDBSchema(loadDB());
+  if (!db.xRadar) db.xRadar = { users: {}, snapshots: {} };
+  if (!db.xRadar.users) db.xRadar.users = {};
+  if (!db.xRadar.snapshots) db.xRadar.snapshots = {};
+  const out = mutator(db.xRadar, db);
+  const xRadar = db.xRadar;
+  const fresh = ensureDBSchema(loadDB());
+  fresh.xRadar = xRadar;
+  try {
+    writeDirect(fresh);
+  } catch (e) {
+    console.error('[DB] patchXRadar failed (' + DB_PATH + '):', e.message);
+  }
+  return out;
+}
+
 export function saveDB(db) {
   try {
     const payload = activePollTrackedKeys

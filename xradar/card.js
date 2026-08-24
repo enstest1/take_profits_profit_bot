@@ -9,7 +9,6 @@
 import { EmbedBuilder } from 'discord.js';
 import { fmtCompact } from '../xSocial.js';
 
-const X_LOGO = 'https://abs.twimg.com/icons/apple-touch-icon-192x192.png';
 const X_BLUE = 0x1d9bf0;
 
 export function clip(text, max = 180) {
@@ -19,6 +18,19 @@ export function clip(text, max = 180) {
 
 export function profileUrl(username) {
   return 'https://x.com/' + (username || '');
+}
+
+/** Prefer the real X CDN avatar; unavatar is fallback only. */
+export function pfpUrl(user, handle) {
+  const raw = String(user?.avatarUrl || '').trim();
+  if (raw && !/default_profile/i.test(raw)) {
+    return raw
+      .replace('_normal.', '_400x400.')
+      .replace('_200x200.', '_400x400.')
+      .replace('_bigger.', '_400x400.');
+  }
+  const h = handle || user?.username || '';
+  return h ? 'https://unavatar.io/twitter/' + h : undefined;
 }
 
 /**
@@ -39,15 +51,21 @@ export function buildFollowCard(watcher, followed) {
   if (bio) lines.push(bio);
   lines.push(followers + ' followers · following ' + following);
 
-  return new EmbedBuilder()
+  const followedPfp = pfpUrl(followed, fHandle);
+  const watcherPfp = pfpUrl(watcher, wHandle);
+
+  const embed = new EmbedBuilder()
     .setColor(X_BLUE)
     .setAuthor({
       name: '@' + wHandle + ' followed someone',
-      iconURL: followed.avatarUrl || 'https://unavatar.io/twitter/' + wHandle,
+      iconURL: watcherPfp || followedPfp,
       url: profileUrl(wHandle),
     })
     .setDescription(lines.join('\n'))
-    .setThumbnail(X_LOGO)
     .setFooter({ text: 'X follow radar' })
     .setTimestamp(new Date());
+
+  if (followedPfp) embed.setThumbnail(followedPfp);
+  return embed;
 }
+

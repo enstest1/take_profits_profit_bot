@@ -16,6 +16,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let _running = false;
 let _timer = null;
 let _backoffUntil = 0;
+/** In-process dedupe so a lost snapshot cannot re-card the same follow this boot. */
+const _alerted = new Map(); // watcherId:followedId → ts
+const ALERT_TTL_MS = 12 * 60 * 60 * 1000;
+
+function alreadyAlerted(watcherId, followedId) {
+  const key = String(watcherId || '') + ':' + String(followedId || '');
+  if (!watcherId || !followedId) return false;
+  const now = Date.now();
+  for (const [k, ts] of _alerted) {
+    if (now - ts > ALERT_TTL_MS) _alerted.delete(k);
+  }
+  if (_alerted.has(key)) return true;
+  _alerted.set(key, now);
+  return false;
+}
 
 async function resolveProfile(handle, cached) {
   if (cached?.id) return cached;
@@ -50,8 +65,13 @@ async function sweepHandle(handle, cached, cfg) {
 
   return {
     handle,
-    watcher: { username: profile.username || handle, name: profile.name, id: profile.id },
-    posted: capped,
+    watcher: {
+      username: profile.username || handle,
+      name: profile.name,
+      id: profile.id,
+      avatarUrl: profile.avatarUrl,
+    },
+    posted: capped.filter((u) => !alreadyAlerted(profile.id, u.id)),
     baseline: false,
   };
 }

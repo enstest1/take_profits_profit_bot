@@ -11,7 +11,7 @@
  * mergePollSnapshot can drop the write.
  */
 
-import { loadDB, saveDB, ensureDBSchema } from '../dbStore.js';
+import { loadDB, ensureDBSchema, patchXRadar } from '../dbStore.js';
 import { normalizeXHandle } from '../xSocial.js';
 
 function read() {
@@ -23,10 +23,7 @@ function read() {
 }
 
 function update(mutator) {
-  const db = read();
-  const out = mutator(db.xRadar, db);
-  saveDB(db);
-  return out;
+  return patchXRadar(mutator);
 }
 
 export function listWatched() {
