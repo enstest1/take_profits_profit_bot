@@ -30,7 +30,7 @@ Do **not** put `OG`, `prod`, or random Railway adjectives (`perpetual-clarity`) 
 | Golden Pocket | Telegram | `TG_1_Golden_Pocket_TPB` | `Golden_Pocket_TG_Take_Profits_Bot` | Legacy name — do not rename |
 | **Genny Run** | **Discord** | **`TPB_Genny_Run`** | **`Discord_Genny_Run`** | New — follow the pattern |
 | Genny Run | Telegram | `TPB_Genny_Run` | `Telegram_Genny_Run` | Create later in the **same** project |
-| **Collective** | **Discord** | **`TPB_Collective`** | **`Discord_Collective`** | Not created yet — X-list feed only when creds arrive |
+| **Collective** | **Discord** | **`TPB_Collective`** | **`Discord_Collective`** | Created — X-list testing in bitecernals; not in Collective yet |
 
 Legacy projects stay as-is so deploys and volumes do not move. New communities follow `TPB_*` / `Discord_*` / `Telegram_*`.
 
@@ -443,35 +443,38 @@ TZ=UTC
 
 ## Appendix C — Collective — X-list feed only
 
-Collective is **not** the TP4APH bot. It gets **posts/comments from one X list**. No follow radar, no mint scanner, no adding their channel to production.
+Railway project **`TPB_Collective`** / service **`Discord_Collective`** / volume **`discord_collective-volume`** at `/data` is already created: [dashboard](https://railway.com/project/e709cea7-4e52-4efc-939b-ff588accb1d9).
 
-When you have the bot token / application id / guild id, follow Parts 1–4 above with:
+GitHub is **not** connected yet (no `DISCORD_TOKEN` — connecting `main` would crash-loop). X feed is pre-wired to the **bitecernals personal test channel** until the Collective bot is invited.
 
 | Piece | Value |
 |---|---|
-| Discord app name | `Take Profits — Collective` |
+| Discord app name | `Take Profits — Collective` (create when you have access) |
 | Railway project | `TPB_Collective` |
 | Service | `Discord_Collective` |
+| Volume | `discord_collective-volume` → `/data` |
 | X list | [`2091750809780592842`](https://x.com/i/lists/2091750809780592842) |
-| Feed channel | `1317657485691191376` |
+| Testing channel (now) | `1541180128564875304` (bitecernals) |
+| Go-live channel | `1317657485691191376` (Collective) |
 
-Then set **on that new service only** (plus the required Discord identity vars from Part 3):
+**When you have a dedicated bot token** (do not reuse prod or Genny Run):
+
+1. Set `DISCORD_TOKEN` + `CLIENT_ID` + `GUILD_ID` on `Discord_Collective` only in Railway Variables
+2. Invite that bot into bitecernals first (Message Content Intent on)
+3. Settings → Source → `enstest1/take_profits_profit_bot` branch `main`
+4. Confirm cards in `1541180128564875304`
+5. Then go live: point routes at Collective and invite the bot there:
 
 ```env
-XFEED_ENABLED=true
-XRADAR_ENABLED=false
-XFEED_WATCH_RADAR_HANDLES=false
-XFEED_LIST_IDS=2091750809780592842
 XFEED_CHANNEL_ID=1317657485691191376
-XFEED_SYNC_LIST_ID=2091750809780592842
+X_SCANNER_CHANNEL_ID=1317657485691191376
 XFEED_ROUTES=2091750809780592842:1317657485691191376
-XFEED_DEBUG=true
-X_COOKIES_JSON=<same cookie account that owns the Collective list>
-MINT_SCANNER_ENABLED=false
-BLOCKED_CHANNEL_IDS=none
-ALERT_CARDS_ENABLED=true
+LOG_CHANNEL_ID=1317657485691191376
+SUMMARY_CHANNEL_ID=1317657485691191376
 ```
 
-`/xwatch add` can still be used on Collective to push a handle onto that list without turning follow-radar on. Leave `XRADAR_ENABLED=false` so they do not get "followed someone" cards.
+Still required on the service: `X_COOKIES_JSON` for the cookie account that owns the Collective list. Leave `XRADAR_ENABLED=false`.
 
-Do **not** set Collective's channel on `perpetual-clarity`. Wait for "go live" + creds before creating the Railway project.
+`/xwatch add` can still be used to push a handle onto that list without turning follow-radar on.
+
+Do **not** set Collective's channel on `perpetual-clarity`.
