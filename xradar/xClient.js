@@ -6,9 +6,10 @@
  * signed GraphQL requests, getUserByScreenName, getFollowingPage.
  *
  * Two access paths live here:
- *   • raw signed GraphQL (following list, user lookup) — X exposes no library
- *     method for these, so we sign requests ourselves
- *   • goat-x-pro's XProClient (list timelines, search) — used by the digest
+ *   • raw signed GraphQL on x.com (following, list members, list tweets) —
+ *     ClientTransaction signing is required; goat-x-pro's pro.x.com list
+ *     endpoint 401s even when these cookies still work
+ *   • goat-x-pro's XProClient (search / user timelines) — leftover digest path
  *
  * Auth model: browser cookies (auth_token + ct0) from an X Premium account,
  * supplied via X_COOKIES_JSON (raw JSON string) or X_COOKIES_PATH (file).
@@ -92,12 +93,6 @@ async function getXClient() {
   await _client.login();
   console.log('[xradar] goat-x-pro client logged in');
   return _client;
-}
-
-/** Tweets from an X list (auto-paginated by goat-x-pro). Used by the digest. */
-export async function getListTimeline(listId, options) {
-  const client = await getXClient();
-  return client.getListTimeline(listId, options);
 }
 
 /** Keyword search. Used as a fallback user-timeline path. */
@@ -260,6 +255,57 @@ const FOLLOWING_QUERY_ID = process.env.X_FOLLOWING_QUERY_ID || 'F42cDX8PDFxkbjjq
 const LIST_MEMBERS_QUERY_ID = process.env.X_LIST_MEMBERS_QUERY_ID || 'BQp2IEYkgxuSxqbTAr1e1g';
 const LIST_ADD_MEMBER_QUERY_ID = process.env.X_LIST_ADD_MEMBER_QUERY_ID || 'EadD8ivrhZhYQr2pDmCpjA';
 const LIST_REMOVE_MEMBER_QUERY_ID = process.env.X_LIST_REMOVE_MEMBER_QUERY_ID || 'B5tMzrMYuFHJex_4EXFTSw';
+// fa0311/twitter-openapi + goat-x-pro still ship this hash; later candidates
+// are tried only if X 401/404s it. Override with X_LIST_TIMELINE_QUERY_ID.
+const LIST_TIMELINE_QUERY_FALLBACKS = [
+  'FVWmROVvhgjRPC-4jAUh8A',
+  'qcQY-EkEWjJ-wwJhsKdxYQ',
+  'fb_6wmHD2dk9D-xYXOQlgw',
+];
+let _listTimelineQueryId = '';
+
+/**
+ * Feature flags goat-x-pro sent with ListLatestTweetsTimeline. Keep this set
+ * close to that operation — extra unknown flags 400, missing ones empty-out.
+ */
+const LIST_TIMELINE_FEATURES = {
+  rweb_video_screen_enabled: false,
+  payments_enabled: false,
+  profile_label_improvements_pcf_label_in_post_enabled: true,
+  rweb_tipjar_consumption_enabled: true,
+  responsive_web_graphql_exclude_directive_enabled: true,
+  verified_phone_label_enabled: false,
+  creator_subscriptions_tweet_preview_api_enabled: true,
+  responsive_web_graphql_timeline_navigation_enabled: true,
+  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+  premium_content_api_read_enabled: false,
+  communities_web_enable_tweet_community_results_fetch: true,
+  c9s_tweet_anatomy_moderator_badge_enabled: true,
+  responsive_web_grok_analyze_button_fetch_trends_enabled: false,
+  responsive_web_grok_analyze_post_followups_enabled: true,
+  responsive_web_jetfuel_frame: false,
+  responsive_web_grok_share_attachment_enabled: true,
+  articles_preview_enabled: true,
+  responsive_web_edit_tweet_api_enabled: true,
+  graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+  view_counts_everywhere_api_enabled: true,
+  longform_notetweets_consumption_enabled: true,
+  responsive_web_twitter_article_tweet_consumption_enabled: true,
+  tweet_awards_web_tipping_enabled: false,
+  responsive_web_grok_show_grok_translated_post: false,
+  responsive_web_grok_analysis_button_from_backend: false,
+  creator_subscriptions_quote_tweet_preview_enabled: false,
+  freedom_of_speech_not_reach_fetch_enabled: true,
+  standardized_nudges_misinfo: true,
+  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+  longform_notetweets_rich_text_read_enabled: true,
+  longform_notetweets_inline_media_enabled: true,
+  responsive_web_grok_image_annotation_enabled: true,
+  responsive_web_enhance_cards_enabled: false,
+  responsive_web_profile_redirect_enabled: false,
+  responsive_web_grok_imagine_annotation_enabled: false,
+  responsive_web_grok_community_note_auto_translation_is_enabled: false,
+};
 
 const LIST_MUTATION_FEATURES = {
   profile_label_improvements_pcf_label_in_post_enabled: true,
@@ -372,8 +418,11 @@ async function xGraphQL(pathName, variables, features, fieldToggles, options, re
   const res = await fetch(url, { headers, signal: AbortSignal.timeout(20000) });
 
   if (res.status === 401 || res.status === 403) {
-    invalidateCredentials();
-    throw new Error('X auth failed (' + res.status + ') — cookies invalid or expired');
+    // Stale query hashes sometimes 401; keepCredentials lets the caller try
+    // another operation id without dropping the cookie cache / radar signer.
+    if (!options?.keepCredentials) invalidateCredentials();
+    const body = await res.text().catch(() => '');
+    throw new Error('X auth failed (' + res.status + ') — ' + (body.slice(0, 180) || 'cookies invalid or expired'));
   }
 
   if (!res.ok) {
@@ -493,6 +542,106 @@ export function parseGraphQLUserResult(result) {
   };
 }
 
+function unwrapTweetResult(result) {
+  if (!result) return null;
+  if (result.__typename === 'TweetTombstone' || result.__typename === 'TweetUnavailable') return null;
+  if (result.__typename === 'TweetWithVisibilityResults' && result.tweet) {
+    return unwrapTweetResult(result.tweet);
+  }
+  return result;
+}
+
+function tweetTimestampSec(createdAt) {
+  const ms = Date.parse(createdAt || '');
+  // xfeed filter/card treat timestamp as unix seconds (then * 1000).
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
+
+/**
+ * Flatten a GraphQL tweet result into the shape xfeed cards already use.
+ * @param {object} result
+ * @param {number} [depth]
+ */
+export function parseGraphQLTweet(result, depth = 0) {
+  if (depth > 2) return null;
+  const data = unwrapTweetResult(result);
+  if (!data?.rest_id) return null;
+
+  const legacy = data.legacy || {};
+  const user = parseGraphQLUserResult(data.core?.user_results?.result) || {};
+  const noteText = data.note_tweet?.note_tweet_results?.result?.text;
+  const rtRaw = legacy.retweeted_status_result?.result;
+  const rt = rtRaw ? parseGraphQLTweet(rtRaw, depth + 1) : null;
+
+  return {
+    id: String(data.rest_id),
+    text: String(noteText || legacy.full_text || ''),
+    username: user.username || '',
+    name: user.name || '',
+    userId: user.id || legacy.user_id_str || '',
+    timestamp: tweetTimestampSec(legacy.created_at),
+    likes: legacy.favorite_count || 0,
+    retweets: legacy.retweet_count || 0,
+    replies: legacy.reply_count || 0,
+    views: parseInt(data.views?.count || '0', 10) || 0,
+    inReplyToStatusId: legacy.in_reply_to_status_id_str || '',
+    isReply: Boolean(legacy.in_reply_to_status_id_str),
+    isRetweet: Boolean(rt),
+    retweetedStatus: rt,
+  };
+}
+
+function collectTweetFromContent(content, into) {
+  const direct = content?.itemContent?.tweet_results?.result;
+  const parsed = parseGraphQLTweet(direct);
+  if (parsed) into.push(parsed);
+  for (const nested of content?.items || []) {
+    const inner = parseGraphQLTweet(nested?.item?.itemContent?.tweet_results?.result);
+    if (inner) into.push(inner);
+  }
+}
+
+/**
+ * Pull tweets out of a ListLatestTweetsTimeline (or similar URT) payload.
+ * @param {object} data
+ * @returns {object[]}
+ */
+export function extractListTimelineTweets(data) {
+  const instructions =
+    data?.data?.list?.tweets_timeline?.timeline?.instructions || [];
+  const tweets = [];
+  for (const instr of instructions) {
+    if (instr?.type === 'TimelinePinEntry') {
+      collectTweetFromContent(instr.entry?.content, tweets);
+      continue;
+    }
+    if (instr?.type !== 'TimelineAddEntries') continue;
+    for (const entry of instr.entries || []) {
+      const id = String(entry?.entryId || '');
+      if (id.startsWith('cursor-')) continue;
+      collectTweetFromContent(entry?.content, tweets);
+    }
+  }
+  // Dedup — pinned + timeline can repeat the same rest_id.
+  const seen = new Set();
+  return tweets.filter((t) => {
+    if (!t?.id || seen.has(t.id)) return false;
+    seen.add(t.id);
+    return true;
+  });
+}
+
+function listTimelineQueryIds() {
+  const ids = [
+    process.env.X_LIST_TIMELINE_QUERY_ID,
+    _listTimelineQueryId,
+    ...LIST_TIMELINE_QUERY_FALLBACKS,
+  ]
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
 function parseUserTimelinePage(data) {
   const timeline = data?.data?.user?.result?.timeline;
   const instructions = timeline?.timeline?.instructions || [];
@@ -545,6 +694,45 @@ export async function getFollowingPage(userId, cursor, screenName) {
     { referer },
   );
   return parseUserTimelinePage(data);
+}
+
+/**
+ * Latest tweets on an X list. Uses the same signed x.com GraphQL path as
+ * follow-radar — goat-x-pro's pro.x.com ListLatestTweetsTimeline 401s
+ * (code 32) with these cookies even though Following still works.
+ *
+ * @param {string} listId
+ * @param {{ count?: number }} [options]
+ * @returns {Promise<object[]>}
+ */
+export async function getListTimeline(listId, options = {}) {
+  const id = String(listId || '').trim();
+  if (!id) return [];
+  const count = Math.max(1, parseInt(options.count || 20, 10) || 20);
+  const variables = { listId: id, count, includePromotedContent: false };
+  const gqlOpts = {
+    referer: 'https://x.com/i/lists/' + id,
+    keepCredentials: true,
+  };
+
+  let lastErr;
+  for (const queryId of listTimelineQueryIds()) {
+    const pathName = queryId + '/ListLatestTweetsTimeline';
+    try {
+      const data = await xGraphQL(pathName, variables, LIST_TIMELINE_FEATURES, undefined, gqlOpts);
+      const fatal = (data?.errors || []).find((e) => e && e.kind !== 'NonFatal');
+      if (fatal) throw new Error(fatal.message || 'GraphQL list timeline error');
+      if (_listTimelineQueryId !== queryId) {
+        _listTimelineQueryId = queryId;
+        console.log('[xfeed] list timeline via ' + queryId);
+      }
+      return extractListTimelineTweets(data).slice(0, count);
+    } catch (e) {
+      lastErr = e;
+      console.warn('[xfeed] ListLatestTweetsTimeline ' + queryId + ' failed: ' + e.message);
+    }
+  }
+  throw lastErr || new Error('ListLatestTweetsTimeline failed');
 }
 
 /**

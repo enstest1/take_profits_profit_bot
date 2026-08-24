@@ -4,6 +4,7 @@ import { diffFollowing, capNewcomers } from '../xradar/diff.js';
 import { buildFollowCard, clip, profileUrl, pfpUrl } from '../xradar/card.js';
 import { parseHandleList } from '../xradar/config.js';
 import { targetFeedListId, describeListSync } from '../xradar/listSync.js';
+import { parseGraphQLTweet, extractListTimelineTweets } from '../xradar/xClient.js';
 
 const user = (id, username) => ({
   id, username, name: username, bio: 'trader', followersCount: 1000, followingCount: 50,
@@ -86,4 +87,109 @@ test('describeListSync explains skip, success, already, and failure', () => {
   assert.match(describeListSync({ ok: true }), /Added to the X list/);
   assert.match(describeListSync({ ok: true, already: true }), /Already on the X list/);
   assert.match(describeListSync({ ok: false, error: 'nope' }), /nope/);
+});
+
+function gqlTweet(over = {}) {
+  const { user, visibility, ...rest } = over;
+  const inner = {
+    rest_id: '111',
+    legacy: {
+      full_text: 'gm trenches $WIF',
+      created_at: 'Sun Aug 23 00:00:00 +0000 2026',
+      favorite_count: 12,
+      retweet_count: 3,
+      reply_count: 1,
+      in_reply_to_status_id_str: null,
+    },
+    views: { count: '440' },
+    core: {
+      user_results: {
+        result: {
+          rest_id: '99',
+          core: { screen_name: 'kol', name: 'KOL' },
+          legacy: {},
+        },
+      },
+    },
+    ...rest,
+  };
+  if (user) inner.core.user_results.result = user;
+  if (visibility) return { __typename: 'TweetWithVisibilityResults', tweet: inner };
+  return inner;
+}
+
+test('parseGraphQLTweet maps GraphQL shape onto xfeed card fields', () => {
+  const t = parseGraphQLTweet(gqlTweet());
+  assert.equal(t.id, '111');
+  assert.equal(t.username, 'kol');
+  assert.equal(t.name, 'KOL');
+  assert.match(t.text, /\$WIF/);
+  assert.equal(t.likes, 12);
+  assert.equal(t.views, 440);
+  assert.equal(t.isReply, false);
+  assert.equal(t.isRetweet, false);
+  // unix seconds, not ms — xfeed does timestamp * 1000
+  assert.ok(t.timestamp > 1_700_000_000 && t.timestamp < 2_000_000_000);
+});
+
+test('parseGraphQLTweet unwraps visibility wrappers and long-form note text', () => {
+  const t = parseGraphQLTweet(gqlTweet({
+    visibility: true,
+    note_tweet: { note_tweet_results: { result: { text: 'long form body' } } },
+    legacy: {
+      full_text: 'truncated…',
+      created_at: 'Sun Aug 23 00:00:00 +0000 2026',
+      in_reply_to_status_id_str: '222',
+    },
+  }));
+  assert.equal(t.text, 'long form body');
+  assert.equal(t.isReply, true);
+  assert.equal(t.inReplyToStatusId, '222');
+});
+
+test('parseGraphQLTweet marks retweets and skips tombstones', () => {
+  assert.equal(parseGraphQLTweet({ __typename: 'TweetTombstone' }), null);
+  const t = parseGraphQLTweet(gqlTweet({
+    legacy: {
+      full_text: 'RT @x: hi',
+      created_at: 'Sun Aug 23 00:00:00 +0000 2026',
+      retweeted_status_result: { result: gqlTweet({ rest_id: '333' }) },
+    },
+  }));
+  assert.equal(t.isRetweet, true);
+  assert.equal(t.retweetedStatus.id, '333');
+});
+
+test('extractListTimelineTweets walks list URT instructions and dedupes pins', () => {
+  const tweet = gqlTweet();
+  const tweets = extractListTimelineTweets({
+    data: {
+      list: {
+        tweets_timeline: {
+          timeline: {
+            instructions: [
+              { type: 'TimelinePinEntry', entry: { content: { itemContent: { tweet_results: { result: tweet } } } } },
+              {
+                type: 'TimelineAddEntries',
+                entries: [
+                  { entryId: 'cursor-top-1', content: { value: 'AAA' } },
+                  { entryId: 'tweet-111', content: { itemContent: { tweet_results: { result: tweet } } } },
+                  { entryId: 'tweet-444', content: { itemContent: { tweet_results: { result: gqlTweet({ rest_id: '444' }) } } } },
+                  {
+                    entryId: 'list-conversation-1',
+                    content: {
+                      items: [
+                        { item: { itemContent: { tweet_results: { result: gqlTweet({ rest_id: '555' }) } } } },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(tweets.map((t) => t.id), ['111', '444', '555']);
 });
