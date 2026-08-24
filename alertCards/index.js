@@ -1,6 +1,7 @@
 /**
  * Trencher alert cards — shared Discord templates (Telegram phase B).
- * Gated by ALERT_CARDS_ENABLED; legacy cards remain in poller/autotrackHelpers when off.
+ * Default ON for every Discord channel. Legacy embeds in poller/autotrackHelpers
+ * are reference-only and only run when ALERT_CARDS_ENABLED=false.
  */
 export { fmtCompactK, fmtClockTime, fmtRick, fmtCallerAgeShort, fmtWindowInline } from './format.js';
 export { buildTradeLinksMarkdown, dexScreenerUrl, gmgnUrl, basedBotUrl, fomoUrl } from './links.js';
@@ -9,12 +10,12 @@ export { buildMilestoneAlert, sendMilestoneAlert } from './milestone.js';
 export { buildAutotrackPayload, buildAutotrackDescription } from './autotrack.js';
 export { chainLogoAttachment, CHART_ATTACHMENT_NAME } from './assets.js';
 
-/** Trenches Discord channel — first production rollout target. */
+/** @deprecated Channel scoping removed — trencher cards apply to every channel when enabled. */
 export const DEFAULT_ALERT_CHANNEL_ID = process.env.ALERT_CARDS_CHANNEL_ID || '1452152164699869298';
 
 /**
- * Master switch — defaults ON on feature/alert-cards.
- * Set ALERT_CARDS_ENABLED=false to force legacy cards everywhere.
+ * Master switch — defaults ON. Set ALERT_CARDS_ENABLED=false only to render
+ * the old EmbedBuilder cards (kept in-repo for reference, not used in prod).
  */
 export function isAlertCardsEnabled() {
   const raw = process.env.ALERT_CARDS_ENABLED;
@@ -25,13 +26,10 @@ export function isAlertCardsEnabled() {
 }
 
 /**
- * Trencher cards for a specific Discord channel.
- * Scoped to DEFAULT_ALERT_CHANNEL_ID unless ALERT_CARDS_ALL_CHANNELS=true.
- * @param {string} channelId Discord channel snowflake
+ * Trencher cards for a Discord channel. Rollout used to pin one channel ID;
+ * that gate is retired — every channel gets the updated layout when enabled.
+ * @param {string} [_channelId] unused; kept so call sites stay unchanged
  */
-export function isAlertCardsEnabledForChannel(channelId) {
-  if (!isAlertCardsEnabled()) return false;
-  const all = String(process.env.ALERT_CARDS_ALL_CHANNELS || '').trim().toLowerCase();
-  if (all === '1' || all === 'true' || all === 'yes') return true;
-  return String(channelId) === String(DEFAULT_ALERT_CHANNEL_ID);
+export function isAlertCardsEnabledForChannel(_channelId) {
+  return isAlertCardsEnabled();
 }

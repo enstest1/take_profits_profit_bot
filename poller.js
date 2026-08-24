@@ -864,6 +864,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
         sendTokenAlert,
       });
     } else {
+      // Reference-only: old +75% embed. Live Discord uses trencher cards.
       const thumb = tokenThumbnail(entry, live);
       const embed = new EmbedBuilder()
         .setColor(0x00ff88)
@@ -927,6 +928,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
             sendTokenAlert,
           });
         } else {
+          // Reference-only: old take-profit embed. Live Discord uses trencher cards.
           const thumb = tokenThumbnail(entry, live);
           const embed = new EmbedBuilder()
             .setColor(0xffd700)

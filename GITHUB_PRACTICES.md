@@ -32,6 +32,8 @@ Two things to remember:
 
 New feature for one platform? Gate it behind a flag (and a `PLATFORM` check if needed), merge once, flip the flag on that service only.
 
+A **new Discord or Telegram community** is another isolated service (own token, own `/data` volume, own env) — not extra channel IDs on production. Full runbook: [docs/NEW_INSTANCE.md](docs/NEW_INSTANCE.md).
+
 ---
 
 ## Feature flags
@@ -54,11 +56,12 @@ This is what makes single-`main` safe: half-finished work can merge without goin
 | `MINT_SCANNER_CHAIN` | — | — | `robinhood` | — |
 | `MINT_SCANNER_CHANNEL_IDS` | — | — | `1358929055604408465,1536502941924593827` | — |
 | `MINT_SCANNER_DEBUG` | — | — | `true` | — |
-| `ALERT_CARDS_ENABLED` | `alertCards/` trencher milestone cards | ⚠️ **Unset = ON** — explicit `false` **required** on any non-Discord service | `true` | **`false` (explicit)** |
-| `ALERT_CARDS_CHANNEL_ID` | — | — | `1452152164699869298` | — |
+| `ALERT_CARDS_ENABLED` | `alertCards/` trencher milestone cards | **Unset = ON** (every Discord channel). Explicit `false` **required** on Telegram | `true` | **`false` (explicit)** |
+| `ALERT_CARDS_CHANNEL_ID` | — | unused (channel gate retired) | — | — |
 | `BLOCKED_CHANNEL_IDS` | global channel mute list (always read, no flag gate) | Default baked in as of `e438ae5` | `1536177376508121088` | n/a |
-| `XFEED_ENABLED` | `xfeed/` live X list feed | **Unset = off** — explicit `false` optional | off | off |
-| `XRADAR_ENABLED` | `xradar/` X follow-radar stub | **Unset = off** — explicit `false` optional | off | off |
+| `XFEED_ENABLED` | `xfeed/` posts + replies from X lists | **Unset = off** | personal list → `1541180128564875304` | off |
+| `XRADAR_ENABLED` | `xradar/` new-follow radar for `/xwatch` | **Unset = off** | personal `1541180128564875304` | off |
+| `XFEED_ROUTES` | `listId:channelId` map | empty = use `XFEED_LIST_IDS` + `XFEED_CHANNEL_ID` | personal only until go-live | — |
 
 Always-on (no flag): core poller / take-profit milestones, `fib/` retracement alerts on configured channels.
 

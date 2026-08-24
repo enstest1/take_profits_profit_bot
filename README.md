@@ -4,7 +4,7 @@
 
 A Discord bot for Solana degen groups — auto-tracks contract addresses dropped in chat, locks in the **OG call** (who posted, when, at what price), and fires take-profit alerts when tokens run from that original entry.
 
-> **Git workflow:** [GITHUB_PRACTICES.md](GITHUB_PRACTICES.md) · **Engineering handoff:** [docs/BOT_OVERVIEW.md](docs/BOT_OVERVIEW.md)
+> **Git workflow:** [GITHUB_PRACTICES.md](GITHUB_PRACTICES.md) · **Engineering handoff:** [docs/BOT_OVERVIEW.md](docs/BOT_OVERVIEW.md) · **New Discord/Telegram instance:** [docs/NEW_INSTANCE.md](docs/NEW_INSTANCE.md)
 
 ---
 
@@ -142,6 +142,8 @@ Without a `/data` volume, state is stored in the project root as `tracked.json`.
 ---
 
 ## Deploy on Railway
+
+For a **new Discord or Telegram community** (own bot token, own volume, own env), follow **[docs/NEW_INSTANCE.md](docs/NEW_INSTANCE.md)** — do not add their server to the production service.
 
 1. Connect repo → **Deploy from GitHub**
 2. Add env vars (same as `.env`)

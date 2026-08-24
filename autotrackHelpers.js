@@ -65,6 +65,7 @@ export async function sendTrackingEmbed(message, token, storageKey, db, buildEnt
   if (isAlertCardsEnabledForChannel(message.channelId)) {
     ({ embed, files } = buildAutotrackPayload(message, token, storageKey));
   } else {
+    // Reference-only: old auto-track embed. Live Discord uses trencher cards.
     embed = new EmbedBuilder()
       .setColor(0x00ccff)
       .setAuthor({

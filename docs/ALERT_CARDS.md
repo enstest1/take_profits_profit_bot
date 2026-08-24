@@ -6,12 +6,13 @@ Discord milestone and auto-track cards for channel **1452152164699869298** (and 
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `ALERT_CARDS_ENABLED` | `true` | `false` → legacy cards everywhere |
-| `ALERT_CARDS_CHANNEL_ID` | `1452152164699869298` | Trencher cards only post to this channel (unless `ALERT_CARDS_ALL_CHANNELS=true`) |
+| `ALERT_CARDS_ENABLED` | `true` | Trencher cards in **every** Discord channel. `false` → old EmbedBuilder cards (reference only) |
+| `ALERT_CARDS_CHANNEL_ID` | unused | Retired rollout pin; ignored |
+| `ALERT_CARDS_ALL_CHANNELS` | unused | Retired; all-channel is the default |
 
-**Turn on:** set `ALERT_CARDS_ENABLED=true` and redeploy.
+**Turn on:** unset or `ALERT_CARDS_ENABLED=true` and redeploy.
 
-**Turn off:** `npm run alert-cards:revert` **or** leave new code but set `ALERT_CARDS_ENABLED=false`.
+**Turn off (reference path only):** `ALERT_CARDS_ENABLED=false`.
 
 ## Layouts
 
