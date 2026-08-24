@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { shouldPost, hasCashtagOrCA, extractCA, isReply, isRetweet } from '../xfeed/filter.js';
 import { buildTweetCard, fmtCount, clip, tweetUrl } from '../xfeed/card.js';
+import { parseFeedRoutes } from '../xfeed/config.js';
 
 const NOW = 1_800_000_000_000;
 const base = {
@@ -108,4 +109,25 @@ test('X logo is a public URL so Telegram renders it', () => {
   const d = buildTweetCard(tw()).data;
   assert.ok(d.thumbnail.url.startsWith('https://'));
   assert.equal(tweetUrl(tw()), 'https://x.com/kol/status/123');
+});
+
+test('parseFeedRoutes reads listId:channelId pairs and falls back to LIST_IDS + CHANNEL_ID', () => {
+  assert.deepEqual(parseFeedRoutes({}), []);
+  assert.deepEqual(
+    parseFeedRoutes({ XFEED_ROUTES: '111:aaa,222:bbb' }),
+    [{ listId: '111', channelId: 'aaa' }, { listId: '222', channelId: 'bbb' }],
+  );
+  assert.deepEqual(
+    parseFeedRoutes({ XFEED_LIST_IDS: '111,222', XFEED_CHANNEL_ID: 'chan' }),
+    [{ listId: '111', channelId: 'chan' }, { listId: '222', channelId: 'chan' }],
+  );
+  assert.deepEqual(
+    parseFeedRoutes({
+      XFEED_ROUTES: '999:personal',
+      XFEED_LIST_IDS: '111',
+      XFEED_CHANNEL_ID: 'chan',
+    }),
+    [{ listId: '999', channelId: 'personal' }],
+    'XFEED_ROUTES wins over the legacy pair',
+  );
 });

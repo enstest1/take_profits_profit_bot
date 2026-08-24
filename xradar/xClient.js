@@ -100,10 +100,61 @@ export async function getListTimeline(listId, options) {
   return client.getListTimeline(listId, options);
 }
 
-/** Keyword search. Not used yet — exported for future features. */
+/** Keyword search. Used as a fallback user-timeline path. */
 export async function searchTweets(query, options) {
   const client = await getXClient();
   return client.search(query, options);
+}
+
+/**
+ * Collect tweets from goat-x-pro's mixed return shapes (array, async
+ * iterator, or { tweets }). Caps at `max` so a busy account cannot stall a tick.
+ */
+async function collectTweets(result, max) {
+  const out = [];
+  if (!result) return out;
+  if (Array.isArray(result)) return result.slice(0, max);
+  if (Array.isArray(result.tweets)) return result.tweets.slice(0, max);
+  if (typeof result[Symbol.asyncIterator] === 'function') {
+    for await (const tweet of result) {
+      if (tweet) out.push(tweet);
+      if (out.length >= max) break;
+    }
+    return out;
+  }
+  return out;
+}
+
+/**
+ * Recent posts + replies for one handle. Prefer goat-x-pro's user timeline
+ * methods; fall back to `from:handle` search so xfeed still works if the
+ * library export name shifts.
+ */
+export async function getUserTimeline(username, options = {}) {
+  const handle = String(username || '').replace(/^@/, '').trim();
+  if (!handle) return [];
+  const count = options.count || 20;
+  const client = await getXClient();
+
+  const candidates = [
+    ['getTweetsAndReplies', () => client.getTweetsAndReplies(handle, count)],
+    ['getUserTweetsAndReplies', () => client.getUserTweetsAndReplies(handle, { count })],
+    ['getUserTweets', () => client.getUserTweets(handle, { count })],
+    ['getTweets', () => client.getTweets(handle, count)],
+  ];
+
+  for (const [name, call] of candidates) {
+    if (typeof client[name] !== 'function') continue;
+    try {
+      const tweets = await collectTweets(await call(), count);
+      if (tweets.length) return tweets;
+    } catch (e) {
+      console.warn('[xradar] ' + name + '(@' + handle + ') failed: ' + e.message);
+    }
+  }
+
+  const searched = await collectTweets(await client.search('from:' + handle, { count }), count);
+  return searched;
 }
 
 export function invalidateXClient() {
@@ -207,6 +258,17 @@ const USER_BY_SCREEN_NAME_QUERY_ID =
   process.env.X_USER_BY_SCREEN_NAME_QUERY_ID || 'IGgvgiOx4QZndDHuD3x9TQ';
 const FOLLOWING_QUERY_ID = process.env.X_FOLLOWING_QUERY_ID || 'F42cDX8PDFxkbjjq6JrM2w';
 const LIST_MEMBERS_QUERY_ID = process.env.X_LIST_MEMBERS_QUERY_ID || 'BQp2IEYkgxuSxqbTAr1e1g';
+const LIST_ADD_MEMBER_QUERY_ID = process.env.X_LIST_ADD_MEMBER_QUERY_ID || 'EadD8ivrhZhYQr2pDmCpjA';
+const LIST_REMOVE_MEMBER_QUERY_ID = process.env.X_LIST_REMOVE_MEMBER_QUERY_ID || 'B5tMzrMYuFHJex_4EXFTSw';
+
+const LIST_MUTATION_FEATURES = {
+  profile_label_improvements_pcf_label_in_post_enabled: true,
+  responsive_web_profile_redirect_enabled: false,
+  rweb_tipjar_consumption_enabled: true,
+  verified_phone_label_enabled: true,
+  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+  responsive_web_graphql_timeline_navigation_enabled: true,
+};
 
 // ─── client transaction signing ───────────────────────────────────────────────
 
@@ -254,9 +316,9 @@ export function invalidateClientTransaction() {
   _clientTxAt = 0;
 }
 
-async function generateTxId(graphqlPath) {
+async function generateTxId(graphqlPath, method = 'GET') {
   const tx = await getClientTransaction();
-  return tx.generateTransactionId('GET', '/i/api/graphql/' + graphqlPath);
+  return tx.generateTransactionId(method, '/i/api/graphql/' + graphqlPath);
 }
 
 // ─── GraphQL ──────────────────────────────────────────────────────────────────
@@ -329,6 +391,77 @@ async function xGraphQL(pathName, variables, features, fieldToggles, options, re
   }
 
   return res.json();
+}
+
+function mutationAlreadyOnList(text, json) {
+  const blob = String(text || '') + ' ' + JSON.stringify(json?.errors || []);
+  return /already.*(member|list)|is already a member|duplicate/i.test(blob);
+}
+
+function mutationNotOnList(text, json) {
+  const blob = String(text || '') + ' ' + JSON.stringify(json?.errors || []);
+  return /not a member|isn't a member|is not a member/i.test(blob);
+}
+
+/**
+ * GraphQL mutations (ListAddMember / ListRemoveMember) are POST + JSON body.
+ * GET signing would 404 these — ClientTransaction is method-sensitive.
+ */
+async function xGraphQLPost(pathName, variables, features, options, retried = false) {
+  const creds = getCredentials();
+  const queryId = String(pathName).split('/')[0];
+  const url = 'https://x.com/i/api/graphql/' + pathName;
+  const headers = {
+    ...BROWSER_HEADERS,
+    ...(options?.referer ? { referer: options.referer } : {}),
+    authorization: X_WEB_BEARER,
+    'x-csrf-token': creds.csrfToken,
+    cookie: creds.cookieString,
+    'content-type': 'application/json',
+    'x-client-transaction-id': await generateTxId(pathName, 'POST'),
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ queryId, variables, features }),
+    signal: AbortSignal.timeout(20000),
+  });
+
+  const raw = await res.text().catch(() => '');
+  let json = null;
+  try {
+    json = raw ? JSON.parse(raw) : null;
+  } catch {
+    json = null;
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    invalidateCredentials();
+    throw new Error('X auth failed (' + res.status + ') — cookies invalid or expired');
+  }
+
+  if (!res.ok) {
+    if (res.status === 429) {
+      throw new XRateLimitError(pathName, parseRetryAfter(res.headers.get('retry-after')));
+    }
+    if (res.status === 404 && !retried) {
+      console.warn('[xradar] 404 on POST ' + pathName + ' — refreshing ClientTransaction, retrying');
+      invalidateClientTransaction();
+      return xGraphQLPost(pathName, variables, features, options, true);
+    }
+    if (options?.alreadyOk && mutationAlreadyOnList(raw, json)) return { already: true, data: json };
+    if (options?.missingOk && mutationNotOnList(raw, json)) return { missing: true, data: json };
+    throw new Error('X GraphQL POST ' + res.status + ' on ' + pathName + ' — ' + raw.slice(0, 200));
+  }
+
+  if (json?.errors?.length && !json?.data?.list) {
+    if (options?.alreadyOk && mutationAlreadyOnList(raw, json)) return { already: true, data: json };
+    if (options?.missingOk && mutationNotOnList(raw, json)) return { missing: true, data: json };
+    throw new Error(json.errors.map((e) => e.message).join('; '));
+  }
+
+  return json;
 }
 
 // ─── parsing ──────────────────────────────────────────────────────────────────
@@ -467,4 +600,35 @@ export async function getListMembers(listId, max = 200) {
     await new Promise((r) => setTimeout(r, 800)); // pace pagination
   }
   return all.slice(0, max);
+}
+
+/**
+ * Add `userId` to a list the cookie account owns. Idempotent: already-a-member
+ * is success so /xwatch can be re-run without erroring.
+ */
+export async function addListMember(listId, userId) {
+  const data = await xGraphQLPost(
+    LIST_ADD_MEMBER_QUERY_ID + '/ListAddMember',
+    { listId: String(listId), userId: String(userId) },
+    LIST_MUTATION_FEATURES,
+    { referer: 'https://x.com/i/lists/' + String(listId), alreadyOk: true },
+  );
+  if (data?.already) return { already: true };
+  if (data?.data?.list || data?.list) return { already: false };
+  throw new Error('ListAddMember returned no list');
+}
+
+/**
+ * Remove `userId` from the list. Idempotent: not-a-member is success so
+ * /xwatch remove stays clean if they were follow-only.
+ */
+export async function removeListMember(listId, userId) {
+  const data = await xGraphQLPost(
+    LIST_REMOVE_MEMBER_QUERY_ID + '/ListRemoveMember',
+    { listId: String(listId), userId: String(userId) },
+    LIST_MUTATION_FEATURES,
+    { referer: 'https://x.com/i/lists/' + String(listId), missingOk: true },
+  );
+  if (data?.missing) return { missing: true };
+  return { missing: false };
 }

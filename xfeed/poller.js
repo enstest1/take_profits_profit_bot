@@ -9,15 +9,45 @@
  * standing up the feature doesn't dump 40 backfilled tweets into the channel.
  */
 
-import { getListTimeline } from '../xradar/xClient.js';
+import { getListTimeline, getUserTimeline } from '../xradar/xClient.js';
 import { getXFeedConfig } from './config.js';
-import { shouldPost } from './filter.js';
+import { shouldPost, isReply } from './filter.js';
 import { isSeen, markSeen, isFirstRun } from './store.js';
+import { loadDB, ensureDBSchema } from '../dbStore.js';
+
+/** Handles from env plus (optionally) whoever /xwatch added. */
+function watchedHandles(cfg) {
+  const extra = [...(cfg.handles || [])];
+  if (!cfg.watchRadarHandles) return [...new Set(extra)];
+  const fromRadar = Object.keys(ensureDBSchema(loadDB()).xRadar?.users || {});
+  return [...new Set([...extra, ...fromRadar])];
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let _running = false;
 let _timer = null;
+
+function collectTweets(tweets, cfg, dropped, collected, meta) {
+  for (const t of tweets || []) {
+    if (!t?.id || isSeen(t.id)) continue;
+    const verdict = shouldPost(t, cfg);
+    if (!verdict.ok) {
+      dropped[verdict.reason] = (dropped[verdict.reason] || 0) + 1;
+      // still mark as seen so a filtered tweet isn't re-evaluated forever
+      collected.push({ tweet: t, post: false });
+      continue;
+    }
+    collected.push({
+      tweet: t,
+      post: true,
+      listId: meta.listId || '',
+      channelIds: meta.channelIds || [],
+      source: meta.source,
+      kind: isReply(t) ? 'reply' : 'post',
+    });
+  }
+}
 
 /** One poll cycle. → { posted: Tweet[], stats } — never throws. */
 export async function pollOnce() {
@@ -29,19 +59,27 @@ export async function pollOnce() {
   for (const listId of cfg.listIds) {
     try {
       const tweets = await getListTimeline(listId, { count: cfg.tweetsPerPoll });
-      for (const t of tweets || []) {
-        if (!t?.id || isSeen(t.id)) continue;
-        const verdict = shouldPost(t, cfg);
-        if (!verdict.ok) {
-          dropped[verdict.reason] = (dropped[verdict.reason] || 0) + 1;
-          // still mark as seen so a filtered tweet isn't re-evaluated forever
-          collected.push({ tweet: t, post: false });
-          continue;
-        }
-        collected.push({ tweet: t, post: true, listId });
-      }
+      const channelIds = cfg.routes.filter((r) => r.listId === listId).map((r) => r.channelId);
+      collectTweets(tweets, cfg, dropped, collected, {
+        source: 'list ' + listId,
+        listId,
+        channelIds,
+      });
     } catch (e) {
       console.error('[xfeed] list ' + listId + ' failed:', e.message);
+    }
+    await sleep(800);
+  }
+
+  for (const handle of watchedHandles(cfg)) {
+    try {
+      const tweets = await getUserTimeline(handle, { count: cfg.tweetsPerPoll });
+      collectTweets(tweets, cfg, dropped, collected, {
+        source: '@' + handle,
+        channelIds: cfg.channelId ? [cfg.channelId] : [],
+      });
+    } catch (e) {
+      console.error('[xfeed] @' + handle + ' failed:', e.message);
     }
     await sleep(800);
   }
@@ -93,7 +131,10 @@ export function startXFeedPoller(onTweets) {
   setTimeout(() => void tick(), 20_000); // let the bot boot first
   _timer = setInterval(() => void tick(), cfg.pollSec * 1000);
   _timer.unref?.();
-  console.log('[xfeed] poller started — every ' + cfg.pollSec + 's across ' + cfg.listIds.length + ' list(s)');
+  console.log(
+    '[xfeed] poller started — every ' + cfg.pollSec + 's · ' +
+      cfg.listIds.length + ' list(s) · radar-handles=' + cfg.watchRadarHandles,
+  );
 }
 
 export function stopXFeedPoller() {

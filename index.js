@@ -19,7 +19,7 @@ import { pollTokens } from './poller.js';
 import { initAlertGate } from './alertGate.js';
 import { fibtrackCommand, handleFibtrack } from './fibCommands.js';
 import { startMintScan } from './mintscan/index.js';
-import { startXRadar } from './xradar/index.js';
+import { startXRadar, xwatchCommand, handleXwatch } from './xradar/index.js';
 import { startXFeed } from './xfeed/index.js';
 import { startFibWatchLoop } from './fib/watchLoop.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
@@ -598,6 +598,7 @@ client.on('messageCreate', async (message) => {
 
 const commands = [
   fibtrackCommand,
+  xwatchCommand,
   new SlashCommandBuilder()
     .setName('calls')
     .setDescription('Show all tracked tokens and their current performance'),
@@ -1390,6 +1391,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'tag') return handleTag(interaction);
     if (interaction.commandName === 'audit') return handleAudit(interaction);
     if (interaction.commandName === 'fibtrack') return handleFibtrack(interaction, client);
+    if (interaction.commandName === 'xwatch') return handleXwatch(interaction);
     if (interaction.commandName === 'x') {
       return handleX(interaction, { loadDB, ensureDBSchema });
     }

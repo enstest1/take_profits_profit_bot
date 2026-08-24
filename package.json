@@ -16,6 +16,8 @@
     "test:tg": "node --test tests/telegram/*.test.mjs",
     "test:mintscan": "node --test tests/mintscan.test.mjs",
     "test:xfeed": "node --test tests/xfeed.test.mjs",
+    "test:xradar": "node --test tests/xradar.test.mjs",
+    "xwatch:sync-list": "node scripts/sync-xwatch-to-list.mjs",
     "test:alert-cards": "node --test tests/alertCards/*.test.mjs",
     "test:chains": "node --test tests/chains.test.mjs",
     "alert-cards:revert": "node scripts/revert-alert-cards.mjs",

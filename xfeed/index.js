@@ -13,6 +13,7 @@ import { getXFeedConfig } from './config.js';
 import { startXFeedPoller } from './poller.js';
 import { buildTweetCard } from './card.js';
 import { sendChannelAlert } from '../channelAlert.js';
+import { getCredentials } from '../xradar/xClient.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -23,23 +24,39 @@ export function startXFeed(client) {
     console.log('[xfeed] disabled (XFEED_ENABLED not true)');
     return;
   }
-  if (!cfg.channelId) {
-    console.error('[xfeed] XFEED_CHANNEL_ID not set — refusing to start');
-    return;
-  }
-  if (!cfg.listIds.length) {
-    console.error('[xfeed] XFEED_LIST_IDS is empty — refusing to start');
+  const liveRoutes = cfg.routes.filter((r) => r.listId && r.channelId);
+  if (!liveRoutes.length && !cfg.watchRadarHandles && !cfg.handles.length) {
+    console.error('[xfeed] no list→channel routes — set XFEED_ROUTES or XFEED_LIST_IDS + XFEED_CHANNEL_ID');
     return;
   }
 
+  try {
+    getCredentials();
+  } catch (e) {
+    console.error('[xfeed] ' + e.message + ' — refusing to start');
+    return;
+  }
+
+  console.log(
+    '[xfeed] routes: ' +
+      liveRoutes.map((r) => r.listId + ' → ' + r.channelId).join(', '),
+  );
+
   startXFeedPoller(async (items) => {
-    for (const { tweet, listId } of items) {
-      try {
-        const embed = buildTweetCard(tweet, { listLabel: 'X list ' + listId });
-        await sendChannelAlert(client, cfg.channelId, embed, 'xfeed');
-        await sleep(1200);
-      } catch (e) {
-        console.error('[xfeed] post failed for ' + tweet.id + ':', e.message);
+    for (const item of items) {
+      const channels = [...new Set((item.channelIds || []).filter(Boolean))];
+      if (!channels.length && cfg.channelId) channels.push(cfg.channelId);
+      const kind = item.kind === 'reply' ? 'reply' : 'post';
+      const embed = buildTweetCard(item.tweet, {
+        listLabel: (item.source || 'X') + ' · ' + kind,
+      });
+      for (const channelId of channels) {
+        try {
+          await sendChannelAlert(client, channelId, embed, 'xfeed');
+          await sleep(1200);
+        } catch (e) {
+          console.error('[xfeed] post failed for ' + item.tweet.id + ' → ' + channelId + ':', e.message);
+        }
       }
     }
   });

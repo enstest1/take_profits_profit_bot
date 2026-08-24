@@ -1,6 +1,7 @@
 node_modules/
 .deploy-sha
 .env
+cookies.json
 tracked.json
 .tp_milestone_bootstrap_v2
 backups/

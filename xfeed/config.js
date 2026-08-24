@@ -1,14 +1,15 @@
 /**
  * xfeed/config.js — live X post/reply feed settings.
  *
- * Watches one or more X lists and posts a card per new tweet. Distinct from
- * digest/ (once-daily LLM summary of the same source) and xradar/ (follows).
+ * Posts/comments come from X lists. Each list posts to the Discord channel in
+ * XFEED_ROUTES (listId:channelId). Legacy fallback: every XFEED_LIST_IDS entry
+ * goes to XFEED_CHANNEL_ID.
  *
- * VOLUME WARNING: unfiltered, an active 400-account list can produce hundreds
- * of cards a day. The filters below all default to OFF so behaviour matches
- * "every tweet", but they exist so you can dial it back from Railway without a
- * deploy once you see real throughput.
+ * /xwatch still syncs handles onto XFEED_SYNC_LIST_ID so Discord users do not
+ * edit the list by hand. Follow cards are xradar/, not this module.
  */
+
+import { parseHandleList, scannerChannelId } from '../xradar/config.js';
 
 function envInt(name, fallback) {
   const raw = process.env[name]?.trim();
@@ -25,32 +26,62 @@ function envBool(name, fallback) {
   return fallback;
 }
 
+/**
+ * Parse `listId:channelId,listId:channelId`. Same list may appear twice to fan
+ * out to two channels on one bot (rare — usually each community is its own bot).
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function parseFeedRoutes(env = process.env) {
+  const routes = [];
+  for (const part of String(env.XFEED_ROUTES || '').split(',')) {
+    const s = part.trim();
+    if (!s) continue;
+    const colon = s.indexOf(':');
+    if (colon <= 0) continue;
+    const listId = s.slice(0, colon).trim();
+    const channelId = s.slice(colon + 1).trim();
+    if (listId && channelId) routes.push({ listId, channelId });
+  }
+  if (routes.length) return routes;
+
+  const channelId =
+    env.XFEED_CHANNEL_ID?.trim() ||
+    env.X_SCANNER_CHANNEL_ID?.trim() ||
+    '';
+  const listIds = String(env.XFEED_LIST_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!channelId) return [];
+  return listIds.map((listId) => ({ listId, channelId }));
+}
+
 export function getXFeedConfig() {
+  const routes = parseFeedRoutes();
+  const listIds = [...new Set(routes.map((r) => r.listId))];
+
   return {
     enabled: envBool('XFEED_ENABLED', false),
-    channelId: process.env.XFEED_CHANNEL_ID || '',
+    channelId: scannerChannelId('XFEED_CHANNEL_ID'),
+    routes,
+    listIds,
 
-    /** X list ids to watch, comma separated. */
-    listIds: (process.env.XFEED_LIST_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
+    /** Extra handles to poll even if they are not on a list. */
+    handles: parseHandleList(process.env.XFEED_HANDLES),
+    /** Also poll /xwatch timelines. Default off — the list is the post source. */
+    watchRadarHandles: envBool('XFEED_WATCH_RADAR_HANDLES', false),
 
     pollSec: envInt('XFEED_POLL_SEC', 120),
     tweetsPerPoll: envInt('XFEED_TWEETS_PER_POLL', 40),
-
-    /** Ignore anything older than this on the first poll after a restart. */
     maxAgeMin: envInt('XFEED_MAX_AGE_MIN', 30),
-
-    /** Safety valve: never post more than this many cards in one poll cycle. */
     maxPerCycle: envInt('XFEED_MAX_PER_CYCLE', 15),
 
-    // ── optional filters (all off by default = every tweet) ──
     includeReplies: envBool('XFEED_INCLUDE_REPLIES', true),
     includeRetweets: envBool('XFEED_INCLUDE_RETWEETS', false),
     minLikes: envInt('XFEED_MIN_LIKES', 0),
     minRetweets: envInt('XFEED_MIN_RETWEETS', 0),
     minViews: envInt('XFEED_MIN_VIEWS', 0),
-    /** Only post tweets containing a contract address or $TICKER. */
     requireCashtagOrCA: envBool('XFEED_REQUIRE_CA', false),
-    /** Comma-separated keywords; if set, a tweet must contain one of them. */
     keywords: (process.env.XFEED_KEYWORDS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   };
 }
