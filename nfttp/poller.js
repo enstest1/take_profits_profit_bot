@@ -6,9 +6,29 @@ import { getNftTpConfig } from './config.js';
 import { fetchCollectionStats, resolveNftWindows } from './opensea.js';
 import { listCollections, patchCollection } from './store.js';
 import { evaluateNftMilestones } from './evaluate.js';
-import { buildNftMilestoneAlert } from './cards.js';
+import { buildNftMilestoneAlert, buildNftAutotrackPayload } from './cards.js';
 import { buildNftFloorChart } from './chart.js';
 import { sendChannelAlert } from '../channelAlert.js';
+
+/** Replay first-call cards that were tracked while comeback silence ate the post. */
+async function flushUnpostedAutotracks(client) {
+  for (const [slug, entry] of Object.entries(listCollections())) {
+    if (entry.autotrackPosted) continue;
+    const { embed, files } = buildNftAutotrackPayload(null, entry);
+    const sent = await sendChannelAlert(
+      client,
+      entry.alertChannelId,
+      embed,
+      'nft-autotrack',
+      files.length ? files : null,
+      { bypassSilence: true },
+    );
+    if (sent) {
+      patchCollection(slug, { autotrackPosted: true });
+      console.log('[nfttp] posted delayed auto-track for ' + (entry.name || slug));
+    }
+  }
+}
 
 function pollTier(entry, now) {
   const age = now - (Number(entry.postedAt) || now);
@@ -94,6 +114,7 @@ export async function pollNftCollections(client) {
   });
 
   console.log('[nfttp] poll ' + scheduled.length + '/' + all.length + ' collections');
+  await flushUnpostedAutotracks(client);
   for (const [slug, entry] of scheduled) {
     try {
       await pollOne(client, slug, entry, cfg);

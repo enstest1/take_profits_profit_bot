@@ -70,20 +70,23 @@ function ageFromCreated(createdAt) {
 
 /**
  * Auto-track payload — v29 trencher skeleton.
+ * `message` is optional so a missed comeback post can replay from stored OG fields.
  */
 export function buildNftAutotrackPayload(message, entry) {
   const logo = chainLogoAttachment(entry.chain);
   const ageStr = ageFromCreated(entry.createdAt);
+  const username = message?.author?.username || entry.postedBy || 'unknown';
+  const ts = message?.createdTimestamp || entry.postedAt;
   const title = entry.ticker
     ? '**' + entry.name + '**' + IND + '— **' + entry.ticker + '**'
     : '**' + entry.name + '**';
-  const poster = IND + '☎️ **' + message.author.username + '**' + (ageStr ? ' · ' + ageStr : '');
+  const poster = IND + '☎️ **' + username + '**' + (ageStr ? ' · ' + ageStr : '');
   const floorTime =
     IND +
     '💎 `' +
     fmtEth(entry.floorAtCall, entry.floorSymbol) +
     '` · ⌚ ' +
-    fmtClockTime(message.createdTimestamp);
+    fmtClockTime(ts);
 
   const embed = new EmbedBuilder()
     .setColor(0x00ccff)

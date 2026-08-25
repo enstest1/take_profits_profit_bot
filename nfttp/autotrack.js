@@ -5,7 +5,7 @@
 import { getNftTpConfig, isNftTpChannel, nftTpAlertChannel } from './config.js';
 import { extractNftRefs, tickerFromSlug } from './parse.js';
 import { resolveNftSnapshot } from './opensea.js';
-import { getCollection, trackCollection } from './store.js';
+import { getCollection, trackCollection, patchCollection } from './store.js';
 import { buildNftAutotrackPayload } from './cards.js';
 import { sendChannelAlert } from '../channelAlert.js';
 
@@ -89,6 +89,14 @@ export async function autoTrackNft(ref, message) {
   );
 
   const { embed, files } = buildNftAutotrackPayload(message, entry);
-  await sendChannelAlert(message.client, entry.alertChannelId, embed, 'nft-autotrack', files.length ? files : null);
+  const sent = await sendChannelAlert(
+    message.client,
+    entry.alertChannelId,
+    embed,
+    'nft-autotrack',
+    files.length ? files : null,
+    { bypassSilence: true },
+  );
+  if (sent) patchCollection(snapshot.slug, { autotrackPosted: true });
   return { added: true, entry, error: null };
 }

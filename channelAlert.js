@@ -6,11 +6,12 @@ import { logValuationAudit } from './valuationAudit.js';
 import { renderEmbedForTelegram, sendTelegramMessage } from './notifier.js';
 import { isBlockedChannel } from './blockedChannels.js';
 
-export async function sendChannelAlert(client, channelId, embed, label = 'alert', files = null) {
+export async function sendChannelAlert(client, channelId, embed, label = 'alert', files = null, opts = {}) {
   if (isBlockedChannel(channelId)) {
     return false;
   }
-  if (shouldSilenceAlerts()) {
+  // First-call confirms (token CA / NFT collection URL) still post during comeback.
+  if (!opts.bypassSilence && shouldSilenceAlerts()) {
     const st = getAlertSilenceStatus();
     const title = embed?.data?.title || label;
     console.log('[silence/' + st.reason + '] skipped: ' + title);
