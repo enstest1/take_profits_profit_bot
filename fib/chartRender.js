@@ -413,7 +413,8 @@ export async function renderFibChart({ candles, state, symbol = '', currentValue
 
 /**
  * Price-only trencher chart — candles, call line, hi/lo tags, volume. No fib overlay.
- * renderPriceChart({ candles, symbol, timeframe, callValue, currentValue }) → Buffer | null
+ * renderPriceChart({ candles, symbol, timeframe, callValue, currentValue, formatValue, minSpanPad }) → Buffer | null
+ * formatValue defaults to USD; NFT floor charts pass an ETH formatter + tiny minSpanPad.
  */
 export async function renderPriceChart({
   candles,
@@ -421,6 +422,8 @@ export async function renderPriceChart({
   timeframe = '1h',
   callValue = null,
   currentValue = null,
+  formatValue = fmtUsdShort,
+  minSpanPad = 1,
 }) {
   try {
     const mod = await getCanvas();
@@ -453,7 +456,8 @@ export async function renderPriceChart({
     if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) return null;
 
     yMin = Math.max(0, yMin);
-    const spanPad = Math.max((yMax - yMin) * 0.1, yMax * 0.05, 1);
+    const padFloor = Number.isFinite(minSpanPad) ? minSpanPad : 1;
+    const spanPad = Math.max((yMax - yMin) * 0.1, yMax * 0.05, padFloor);
     yMin = Math.max(0, yMin - spanPad);
     yMax += spanPad;
     if (yMax <= yMin) yMax = yMin + 1;
@@ -491,7 +495,7 @@ export async function renderPriceChart({
     ctx.fillStyle = C.axis;
     for (const gy of gridRows) {
       const val = yMin + ((padT + plotH - gy) / plotH) * (yMax - yMin);
-      if (val >= 0) ctx.fillText(fmtUsdShort(val), padL + plotW + 6, gy + 3);
+      if (val >= 0) ctx.fillText(formatValue(val), padL + plotW + 6, gy + 3);
     }
 
     if (callValue != null && Number.isFinite(callValue) && callValue >= yMin && callValue <= yMax) {
@@ -505,7 +509,7 @@ export async function renderPriceChart({
       ctx.setLineDash([]);
       ctx.fillStyle = '#38bdf8';
       ctx.font = 'bold 10px ' + FONT;
-      ctx.fillText('CALL ' + fmtUsdShort(callValue), padL + 4, y(callValue) - 4);
+      ctx.fillText('CALL ' + formatValue(callValue), padL + 4, y(callValue) - 4);
     }
 
     for (let i = 0; i < data.length; i++) {
@@ -571,9 +575,9 @@ export async function renderPriceChart({
       if (data[i].l < data[loI].l) loI = i;
     }
     const callRef = callValue > 0 ? data[hiI].h / callValue : null;
-    const hiLabel = fmtUsdShort(data[hiI].h) + (callRef != null && callRef > 1.05 ? ' · ' + callRef.toFixed(1) + 'x' : '');
+    const hiLabel = formatValue(data[hiI].h) + (callRef != null && callRef > 1.05 ? ' · ' + callRef.toFixed(1) + 'x' : '');
     tag(x(hiI), y(data[hiI].h), hiLabel, C.up, true);
-    tag(x(loI), y(data[loI].l), fmtUsdShort(data[loI].l), C.low, false);
+    tag(x(loI), y(data[loI].l), formatValue(data[loI].l), C.low, false);
 
     const cur = currentValue ?? data[data.length - 1].c;
     ctx.strokeStyle = C.price;
@@ -585,7 +589,7 @@ export async function renderPriceChart({
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.font = 'bold 11px ' + FONT;
-    const pText = fmtUsdShort(cur);
+    const pText = formatValue(cur);
     const pw = ctx.measureText(pText).width + 10;
     const pyy = Math.min(Math.max(y(cur) - 9, padT), padT + plotH - 18);
     ctx.fillStyle = C.tagBg;

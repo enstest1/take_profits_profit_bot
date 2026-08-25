@@ -4,7 +4,7 @@
 
 A Discord bot for Solana degen groups — auto-tracks contract addresses dropped in chat, locks in the **OG call** (who posted, when, at what price), and fires take-profit alerts when tokens run from that original entry.
 
-> **Git workflow:** [GITHUB_PRACTICES.md](GITHUB_PRACTICES.md) · **Engineering handoff:** [docs/BOT_OVERVIEW.md](docs/BOT_OVERVIEW.md) · **New Discord/Telegram instance:** [docs/NEW_INSTANCE.md](docs/NEW_INSTANCE.md)
+> **Git workflow:** [GITHUB_PRACTICES.md](GITHUB_PRACTICES.md) · **Engineering handoff:** [docs/BOT_OVERVIEW.md](docs/BOT_OVERVIEW.md) · **New Discord/Telegram instance:** [docs/NEW_INSTANCE.md](docs/NEW_INSTANCE.md) · **NFT take-profits:** [docs/NFT_TP.md](docs/NFT_TP.md)
 
 ---
 
@@ -20,6 +20,7 @@ A Discord bot for Solana degen groups — auto-tracks contract addresses dropped
 | **Smart wallets** | `/wallet add` — ping when a watched wallet buys or sells |
 | **Daily recap** | Top 5 gainers + 3 losers, ranked from cached poll data |
 | **Research** | `/rug`, `/rugdeep`, `/x`, `/devs random` for due diligence |
+| **NFT take-profits** | OpenSea collection URLs → same +75% / 1x–20x cards vs **floor at call** (flag off by default) |
 
 Built for trench groups who want to know when a call is working — without staring at charts.
 
@@ -78,6 +79,9 @@ Typical full poll cycle: **under 60 seconds** (often ~1s for scheduled batch).
 | `/rugdeep <mint>` | Deep forensics scan (slower) |
 | `/x <handle>` | X profile + history signals |
 | `/devs random` | Random creator wallet from tracked tokens |
+| `/nfttrack` | Track an NFT collection (OpenSea URL, slug, or 0x) — `NFT_TP_ENABLED` |
+| `/nftcalls` | Tracked NFT collections vs OG floor |
+| `/nftremove` | Stop tracking an NFT collection |
 
 ---
 

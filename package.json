@@ -17,6 +17,7 @@
     "test:mintscan": "node --test tests/mintscan.test.mjs",
     "test:xfeed": "node --test tests/xfeed.test.mjs",
     "test:xradar": "node --test tests/xradar.test.mjs",
+    "test:nfttp": "node --test tests/nfttp.test.mjs",
     "xwatch:sync-list": "node scripts/sync-xwatch-to-list.mjs",
     "test:alert-cards": "node --test tests/alertCards/*.test.mjs",
     "test:chains": "node --test tests/chains.test.mjs",

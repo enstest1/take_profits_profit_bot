@@ -55,6 +55,8 @@ export function ensureDBSchema(db) {
   if (!db.xRadar) db.xRadar = { users: {}, snapshots: {} };
   if (!db.xFeed) db.xFeed = { seen: {}, lastPollAt: 0 };
   if (!db.mintScanner) db.mintScanner = { lastScannedBlock: 0, cards: {}, nearMisses: {} };
+  if (!db.nftTp) db.nftTp = { collections: {} };
+  if (!db.nftTp.collections) db.nftTp.collections = {};
   return db;
 }
 
@@ -72,6 +74,26 @@ function writeDirect(db) {
   const tmp = DB_PATH + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(db));
   fs.renameSync(tmp, DB_PATH);
+}
+
+/**
+ * Mutate nftTp on disk without losing the write to a concurrent token poll.
+ * OG floor locks must survive mergePollSnapshot the same way xRadar snapshots do.
+ */
+export function patchNftTp(mutator) {
+  const db = ensureDBSchema(loadDB());
+  if (!db.nftTp) db.nftTp = { collections: {} };
+  if (!db.nftTp.collections) db.nftTp.collections = {};
+  const out = mutator(db.nftTp, db);
+  const nftTp = db.nftTp;
+  const fresh = ensureDBSchema(loadDB());
+  fresh.nftTp = nftTp;
+  try {
+    writeDirect(fresh);
+  } catch (e) {
+    console.error('[DB] patchNftTp failed (' + DB_PATH + '):', e.message);
+  }
+  return out;
 }
 
 /**
