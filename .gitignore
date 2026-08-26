@@ -3,6 +3,8 @@ node_modules/
 .env
 cookies.json
 tracked.json
+# Knowledge-bot SQLite archive — never commit Discord history
+knowledge-bot/data/
 .tp_milestone_bootstrap_v2
 backups/
 .warden-data/

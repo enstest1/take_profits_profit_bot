@@ -34,33 +34,13 @@ New feature for one platform? Gate it behind a flag (and a `PLATFORM` check if n
 
 A **new Discord or Telegram community** is another isolated service (own token, own `/data` volume, own env) — not extra channel IDs on production. Full runbook: [docs/NEW_INSTANCE.md](docs/NEW_INSTANCE.md).
 
-### Knowledge bot — isolated service, not a profit-bot flag
+### Knowledge archive — same bot, separate SQLite, flag default off
 
-`knowledge-bot/` is a **separate Discord application + Railway service**. It is not imported by `start.mjs` / `index.js`. Production take-profit, Telegram, and Warden never load it, never install `better-sqlite3`, and never share its SQLite file.
+`knowledge-bot/` runs **inside** the Discord profit bot when `KB_ENABLED=true`. It is not a second Discord app. SQLite is `/data/knowledge/knowledge.db` — never `tracked.json`. Telegram and Warden leave the flag unset.
 
-| Railway service | Root directory | Start | Persistent data |
-|---|---|---|---|
-| `take_profits_profit_bot` | repo root | `node start.mjs` (`railway.toml`) | `/data/tracked.json` |
-| Knowledge bot (new) | **`knowledge-bot/`** | `npm start` (`knowledge-bot/railway.toml`) | **own** volume at `/app/data` → `knowledge.db` |
+**Rollback:** Railway → Discord service → `KB_ENABLED=false` (or unset). Next restart: no backfill, no `/ask`, archive file stays on disk.
 
-**Never** put the knowledge bot's `DISCORD_TOKEN` / `CLIENT_ID` on the profit bot, and never put the profit bot's token on the knowledge service. Same token = gateway kick. Same `CLIENT_ID` = slash-command PUT wipes `/calls`, `/fibtrack`, etc. and replaces them with `/ask`.
-
-**Launch (dark on prod):**
-
-1. Tag `stable-before-knowledge-bot` on current `main`
-2. Merge `knowledge-bot/` — Discord/Telegram restart on the new SHA but run the same `index.js` / `telegram.js` (no flag to flip; they do not import this folder)
-3. Confirm profit-bot logs: `Bot online as …` and a poll cycle — then create the knowledge Railway service
-4. Knowledge service: Root Directory `knowledge-bot/`, **new** Discord app token, volume `/app/data`, `DATA_DIR=/app/data`, `KB_GUILD_ID`, `ANTHROPIC_API_KEY`. Start with `KB_CHANNEL_IDS` as a small allowlist (not `all`) and `KB_BACKFILL_ON_BOOT=0` until `/kbstats` looks sane, then `1`
-
-**Rollback (fastest first — no git needed for 0–1):**
-
-0. **Stop or remove the knowledge Railway service** — profit bot is untouched; archive stays on that volume
-1. Set `KB_MENTION_ANSWERS=0` and/or `KB_BACKFILL_ON_BOOT=0` on the knowledge service if it is noisy but still wanted
-2. Railway → knowledge service → Deployments → last good → Redeploy
-3. Git revert the knowledge-bot merge (`git revert -m 1 <merge-commit>`) only if the *profit* bot broke — it should not, because this folder is not on its start path
-4. `git revert` / tag rollback as in [How to revert](#how-to-revert) below
-
-Deleting the knowledge volume wipes the archive. It does **not** touch `/data/tracked.json`.
+**Launch:** merge dark → confirm profit bot poll cycle → set on Discord only: `KB_ENABLED=true`, `OPENROUTER_API_KEY`, `KB_BACKFILL_MAX_AGE_HOURS=72`. `/ask` is silent until the first extract (hourly cron, plus a 5-min first extract after boot).
 
 ---
 
@@ -91,6 +71,7 @@ This is what makes single-`main` safe: half-finished work can merge without goin
 | `XRADAR_ENABLED` | `xradar/` new-follow radar for `/xwatch` | **Unset = off** | personal `1541180128564875304` | off |
 | `XFEED_ROUTES` | `listId:channelId` map | empty = use `XFEED_LIST_IDS` + `XFEED_CHANNEL_ID` | personal only until go-live | — |
 | `NFT_TP_ENABLED` | `nfttp/` OpenSea floor take-profits (+75% / 1x–20x cards) | **Unset = off** | `true` → `#nft-land` `1358929055604408465` | unset (off) |
+| `KB_ENABLED` | `knowledge-bot/` Discord archive + `/ask` | **Unset = off** | set `true` to launch | unset (off) |
 
 Always-on (no flag): core poller / take-profit milestones, `fib/` retracement alerts on configured channels.
 
@@ -181,7 +162,7 @@ In order of speed:
 
 If the problem is inside a flagged module, set its `*_ENABLED=false` on the affected service (explicit `false`, which also covers the alert-cards default-on case). Done in seconds, no git involved. This is the main payoff of the flag model.
 
-**Knowledge bot:** it has no profit-bot flag. Stop or remove the **knowledge** Railway service (or set `KB_MENTION_ANSWERS=0` / `KB_BACKFILL_ON_BOOT=0` on that service only). Do not change profit-bot variables.
+**Knowledge archive:** set `KB_ENABLED=false` on the Discord service. Do not change Telegram or Warden. The SQLite file under `/data/knowledge/` is left in place.
 
 ### 1. Railway dashboard redeploy
 
@@ -339,4 +320,4 @@ See `.env.example` for required env vars and channel routing docs.
 
   **Learned:** Railway branch config does not fail closed — wrong source ships wrong code, disabled autodeploy leaves prod stale while git advances. Hence the verify-metadata-after-every-branch-change rule now in the Railway section.
 - **Aug 2026 — post-consolidation `fix:`** — flipped the alert-cards default from on to off so the "flags default off" convention is literally true; safe because the Discord service sets `ALERT_CARDS_ENABLED=true` explicitly. *(Update the flag table's "Unset semantics" and remove this note's "planned" status once landed.)*
-- **Aug 2026 — knowledge bot** — added `knowledge-bot/` as a separate Discord app + Railway service (Root Directory `knowledge-bot/`). Profit-bot `index.js` / `package.json` are unchanged; `start.mjs` refuses to boot if `RAILWAY_SERVICE_NAME` looks like knowledge so a mis-set Root Directory cannot double-run the profit bot. Rollback = stop that service.
+- **Aug 2026 — knowledge archive** — `knowledge-bot/` wired into the Discord profit bot behind `KB_ENABLED` (unset = off). SQLite is `/data/knowledge/knowledge.db`. LLM is OpenRouter. First backfill is 72h. Rollback = `KB_ENABLED=false`.
