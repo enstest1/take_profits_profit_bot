@@ -1,0 +1,10 @@
+# Isolated Railway config — this service's Root Directory MUST be `knowledge-bot/`.
+# Never point the profit-bot / Telegram / Warden services here.
+# Own Discord token + own volume. A crash here cannot take tracked.json with it.
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "npm start"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

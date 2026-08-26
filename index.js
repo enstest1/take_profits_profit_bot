@@ -32,6 +32,7 @@ import {
   handleNftcalls,
   handleNftremove,
 } from './nfttp/index.js';
+import { startKnowledge, kbSlashCommands, isKbEnabled, handleKbInteraction } from './knowledge-bot/start.js';
 import { startFibWatchLoop } from './fib/watchLoop.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
@@ -743,6 +744,7 @@ const commands = [
   new SlashCommandBuilder()
     .setName('audit')
     .setDescription('Run Warden Layer-1 DB invariant checks (ephemeral)'),
+  ...(isKbEnabled() ? kbSlashCommands() : []),
 ].map(c => c.toJSON());
 
 async function registerCommands() {
@@ -1397,9 +1399,10 @@ async function handleWalletList(interaction) {
 }
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  if (isBlockedChannel(interaction.channelId)) return;
   try {
+    if (await handleKbInteraction(interaction)) return;
+    if (!interaction.isChatInputCommand()) return;
+    if (isBlockedChannel(interaction.channelId)) return;
     if (interaction.commandName === 'calls') return handleCalls(interaction);
     if (interaction.commandName === 'remove') return handleRemove(interaction);
     if (interaction.commandName === 'pelpafkedup') return handlePelpaFkedup(interaction);
@@ -1473,6 +1476,7 @@ client.once('ready', async () => {
   startXFeed(client);
   void startMintScan(client);
   void startNftTp(client);
+  void startKnowledge(client);
   startHttpServer(client, () => ensureDBSchema(loadDB()));
 });
 

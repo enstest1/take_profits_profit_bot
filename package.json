@@ -18,6 +18,7 @@
     "test:xfeed": "node --test tests/xfeed.test.mjs",
     "test:xradar": "node --test tests/xradar.test.mjs",
     "test:nfttp": "node --test tests/nfttp.test.mjs",
+    "test:kb": "node knowledge-bot/scripts/smoke.mjs",
     "xwatch:sync-list": "node scripts/sync-xwatch-to-list.mjs",
     "test:alert-cards": "node --test tests/alertCards/*.test.mjs",
     "test:chains": "node --test tests/chains.test.mjs",
@@ -31,6 +32,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.0",
+    "better-sqlite3": "^11.10.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5",
     "goat-x-pro": "^0.1.1",
