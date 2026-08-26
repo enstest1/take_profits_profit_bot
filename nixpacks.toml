@@ -1,4 +1,4 @@
-# Pin Node 20 so better-sqlite3 installs a prebuild. Railway Nixpacks
-# otherwise picks Node 24, which has no sqlite binary and no Python for node-gyp.
-[variables]
-NIXPACKS_NODE_VERSION = "20"
+# better-sqlite3 has no Node 24 prebuild; compile it. Do not pin Node 20 —
+# xradar/xfeed need ArrayBuffer.transfer (Node 22+).
+[phases.setup]
+nixPkgs = ["python3", "gcc"]
