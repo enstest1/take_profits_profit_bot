@@ -28,7 +28,7 @@
     "fib:simulate": "node scripts/fib-simulate.mjs"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0 <23.0.0"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.0",

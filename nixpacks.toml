@@ -1,0 +1,4 @@
+# Pin Node 20 so better-sqlite3 installs a prebuild. Railway Nixpacks
+# otherwise picks Node 24, which has no sqlite binary and no Python for node-gyp.
+[variables]
+NIXPACKS_NODE_VERSION = "20"
