@@ -1,4 +1,4 @@
-# better-sqlite3 has no Node 24 prebuild; compile it. Do not pin Node 20 —
-# xradar/xfeed need ArrayBuffer.transfer (Node 22+).
-[phases.setup]
-nixPkgs = ["python3", "gcc"]
+# Node 22 has ArrayBuffer.transfer (xradar/xfeed) and better-sqlite3 prebuilds.
+# Node 24 has no sqlite prebuild. Node 20 has sqlite but not .transfer.
+[variables]
+NIXPACKS_NODE_VERSION = "22"
