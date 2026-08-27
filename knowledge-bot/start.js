@@ -44,7 +44,8 @@ function kbDataDir() {
   return process.env.KB_DATA_DIR?.trim() || path.join(DATA_DIR, 'knowledge');
 }
 
-function kbGuildId() {
+/** Guild the archive + /ask live in. KB_GUILD_ID wins so BitCERNials GUILD_ID can stay put. */
+export function kbGuildId() {
   return (process.env.KB_GUILD_ID || process.env.GUILD_ID || '').trim();
 }
 
@@ -152,6 +153,12 @@ export async function startKnowledge(client) {
     kbClient = client;
     kbReady = true;
     console.log('[kb] SQLite at ' + dir + '/knowledge.db (separate from tracked.json)');
+    console.log(
+      '[kb] guild ' +
+        kbGuildId() +
+        ' channels ' +
+        (process.env.KB_CHANNEL_IDS?.trim() || 'all'),
+    );
 
     attachLiveSync(client);
     startExtractCron();
@@ -240,6 +247,13 @@ export async function handleKbInteraction(interaction) {
   }
 
   if (!interaction.isChatInputCommand() || !KB_COMMANDS.has(interaction.commandName)) return false;
+  const home = kbGuildId();
+  if (home && interaction.guildId && interaction.guildId !== home) {
+    await interaction
+      .reply({ content: 'Knowledge archive is not enabled in this server.', ephemeral: true })
+      .catch(() => null);
+    return true;
+  }
   if (isBlockedChannel(interaction.channelId)) return true;
   if (!isKbEnabled() || !kbReady) {
     await disabledReply(interaction);

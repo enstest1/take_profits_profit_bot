@@ -32,7 +32,7 @@ import {
   handleNftcalls,
   handleNftremove,
 } from './nfttp/index.js';
-import { startKnowledge, kbSlashCommands, isKbEnabled, handleKbInteraction } from './knowledge-bot/start.js';
+import { startKnowledge, kbSlashCommands, isKbEnabled, handleKbInteraction, kbGuildId } from './knowledge-bot/start.js';
 import { startFibWatchLoop } from './fib/watchLoop.js';
 import { inspectTrackedJson, printInspectReport } from './scripts/inspect-tracked.mjs';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
@@ -744,21 +744,33 @@ const commands = [
   new SlashCommandBuilder()
     .setName('audit')
     .setDescription('Run Warden Layer-1 DB invariant checks (ephemeral)'),
-  ...(isKbEnabled() ? kbSlashCommands() : []),
 ].map(c => c.toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
-    const guildId = process.env.GUILD_ID;
+    const guildId = (process.env.GUILD_ID || '').trim();
+    const kbGuild = kbGuildId();
+    const kbBody = isKbEnabled() ? kbSlashCommands().map((c) => c.toJSON()) : [];
+
+    /** PUT replaces the whole guild command set — attach /ask only on the KB guild. */
+    async function putGuild(id, body, label) {
+      await rest.put(Routes.applicationGuildCommands(process.env.CLIENT_ID, id), { body });
+      console.log('Slash commands registered (' + label + ' — instant)');
+    }
+
     if (guildId) {
-      await rest.put(
-        Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId),
-        { body: commands }
-      );
-      console.log('Slash commands registered (guild — instant)');
-    } else {
-      await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+      const includeKb = isKbEnabled() && kbGuild === guildId;
+      await putGuild(guildId, includeKb ? commands.concat(kbBody) : commands, 'guild ' + guildId);
+    }
+    // Separate KB guild (tp4aph) gets profit + archive commands so /ask lands there.
+    if (kbGuild && kbGuild !== guildId && isKbEnabled()) {
+      await putGuild(kbGuild, commands.concat(kbBody), 'kb-guild ' + kbGuild);
+    }
+    if (!guildId && !kbGuild) {
+      await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), {
+        body: commands.concat(kbBody),
+      });
       console.log('Slash commands registered (global — up to 1hr to appear)');
     }
   } catch (e) {
