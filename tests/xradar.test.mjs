@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'assert/strict';
 import { diffFollowing, capNewcomers } from '../xradar/diff.js';
 import { buildFollowCard, clip, profileUrl, pfpUrl } from '../xradar/card.js';
-import { parseHandleList } from '../xradar/config.js';
+import { parseHandleList, parseChannelIdList } from '../xradar/config.js';
 import { targetFeedListId, describeListSync } from '../xradar/listSync.js';
 import { parseGraphQLTweet, extractListTimelineTweets } from '../xradar/xClient.js';
 
@@ -47,6 +47,12 @@ test('capNewcomers limits a follow burst', () => {
 test('parseHandleList normalizes @, commas, and junk', () => {
   assert.deepEqual(parseHandleList('@Pelp333, https_not_a_handle, okay_user'), ['pelp333', 'okay_user']);
   assert.deepEqual(parseHandleList(''), []);
+});
+
+test('parseChannelIdList splits comma ids and drops blanks', () => {
+  assert.deepEqual(parseChannelIdList('111, 222'), ['111', '222']);
+  assert.deepEqual(parseChannelIdList('111,,222,'), ['111', '222']);
+  assert.deepEqual(parseChannelIdList(''), []);
 });
 
 test('follow card names both accounts and links the new follow', () => {

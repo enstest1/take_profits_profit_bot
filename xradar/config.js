@@ -40,10 +40,22 @@ export function scannerChannelId(specificEnv) {
   );
 }
 
+/** Comma-separated Discord channel ids. Empty parts dropped. */
+export function parseChannelIdList(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function getXRadarConfig() {
+  const fromMulti = parseChannelIdList(process.env.XRADAR_CHANNEL_IDS);
+  const channelId = fromMulti[0] || scannerChannelId('XRADAR_CHANNEL_ID');
   return {
     enabled: envBool('XRADAR_ENABLED', false),
-    channelId: scannerChannelId('XRADAR_CHANNEL_ID'),
+    channelId,
+    /** Follow cards fan out here so Bitcernals and TP trenches can both get them. */
+    channelIds: fromMulti.length ? fromMulti : channelId ? [channelId] : [],
     /** Seed watch list on boot; /xwatch can add more at runtime. */
     handles: parseHandleList(process.env.XRADAR_HANDLES),
     pollSec: envInt('XRADAR_POLL_SEC', 300),

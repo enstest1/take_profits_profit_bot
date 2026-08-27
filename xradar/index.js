@@ -3,8 +3,7 @@
  *
  * startXRadar(client) runs only when XRADAR_ENABLED=true. Posts through
  * sendChannelAlert so Discord (and Telegram, if that service ever flips the
- * flag) both work. xfeed reuses xradar/xClient.js and reads the same
- * db.xRadar.users watch list for posts/replies.
+ * flag) both work. xfeed and /early reuse xradar/xClient.js (same cookies).
  */
 
 import { getCredentials } from './xClient.js';
@@ -23,7 +22,7 @@ export function startXRadar(client) {
     console.log('[xradar] disabled (XRADAR_ENABLED not true)');
     return;
   }
-  if (!cfg.channelId) {
+  if (!cfg.channelIds.length) {
     console.error('[xradar] XRADAR_CHANNEL_ID not set — refusing to start');
     return;
   }
@@ -37,14 +36,16 @@ export function startXRadar(client) {
 
   seedHandles(cfg.handles);
 
-  console.log('[xradar] posting follow cards to channel ' + cfg.channelId);
+  console.log('[xradar] posting follow cards to channel ' + cfg.channelIds.join(', '));
 
   startXRadarPoller(async (events) => {
     for (const { watcher, followed } of events) {
       try {
         const embed = buildFollowCard(watcher, followed);
-        await sendChannelAlert(client, cfg.channelId, embed, 'xradar');
-        await sleep(1200);
+        for (const channelId of cfg.channelIds) {
+          await sendChannelAlert(client, channelId, embed, 'xradar');
+          await sleep(1200);
+        }
       } catch (e) {
         console.error('[xradar] post failed for @' + (followed?.username || '?') + ':', e.message);
       }
