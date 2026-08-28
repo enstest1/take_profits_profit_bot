@@ -5,8 +5,8 @@
  * XFEED_ROUTES (listId:channelId). Legacy fallback: every XFEED_LIST_IDS entry
  * goes to XFEED_CHANNEL_ID.
  *
- * /xwatch still syncs handles onto XFEED_SYNC_LIST_ID so Discord users do not
- * edit the list by hand. Follow cards are xradar/, not this module.
+ * /xwatch syncs handles onto the dest's XFEED_ROUTES list so Discord users do
+ * not edit the list by hand. Follow cards are xradar/, not this module.
  */
 
 import { parseHandleList, scannerChannelId } from '../xradar/config.js';

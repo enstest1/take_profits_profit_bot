@@ -4,6 +4,9 @@
  * startXRadar(client) runs only when XRADAR_ENABLED=true. Posts through
  * sendChannelAlert so Discord (and Telegram, if that service ever flips the
  * flag) both work. xfeed and /early reuse xradar/xClient.js (same cookies).
+ *
+ * Each dest posts only to its own channel. Personal watches (db.xRadar) never
+ * land in Take Profits — that dest has an empty store until /xwatch there.
  */
 
 import { getCredentials } from './xClient.js';
@@ -22,7 +25,7 @@ export function startXRadar(client) {
     console.log('[xradar] disabled (XRADAR_ENABLED not true)');
     return;
   }
-  if (!cfg.channelIds.length) {
+  if (!cfg.dests.length) {
     console.error('[xradar] XRADAR_CHANNEL_ID not set — refusing to start');
     return;
   }
@@ -34,18 +37,20 @@ export function startXRadar(client) {
     return;
   }
 
+  // Env seeds only the personal dest. TP stays empty until /xwatch in that guild.
   seedHandles(cfg.handles);
 
-  console.log('[xradar] posting follow cards to channel ' + cfg.channelIds.join(', '));
+  console.log(
+    '[xradar] dests: ' +
+      cfg.dests.map((d) => d.id + ' → ' + d.channelId).join(', '),
+  );
 
   startXRadarPoller(async (events) => {
-    for (const { watcher, followed } of events) {
+    for (const { watcher, followed, channelId } of events) {
       try {
         const embed = buildFollowCard(watcher, followed);
-        for (const channelId of cfg.channelIds) {
-          await sendChannelAlert(client, channelId, embed, 'xradar');
-          await sleep(1200);
-        }
+        await sendChannelAlert(client, channelId, embed, 'xradar');
+        await sleep(1200);
       } catch (e) {
         console.error('[xradar] post failed for @' + (followed?.username || '?') + ':', e.message);
       }

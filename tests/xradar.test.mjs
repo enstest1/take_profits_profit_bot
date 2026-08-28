@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'assert/strict';
 import { diffFollowing, capNewcomers } from '../xradar/diff.js';
 import { buildFollowCard, clip, profileUrl, pfpUrl } from '../xradar/card.js';
-import { parseHandleList, parseChannelIdList } from '../xradar/config.js';
-import { targetFeedListId, describeListSync } from '../xradar/listSync.js';
+import { parseHandleList, parseChannelIdList, destFromGuildId, DEST_TP, DEST_PERSONAL } from '../xradar/config.js';
+import { targetFeedListId, describeListSync, listIdForDest } from '../xradar/listSync.js';
 import { parseGraphQLTweet, extractListTimelineTweets } from '../xradar/xClient.js';
 
 const user = (id, username) => ({
@@ -86,6 +86,24 @@ test('targetFeedListId prefers XFEED_SYNC_LIST_ID then the first XFEED_LIST_IDS 
   assert.equal(targetFeedListId({}), '');
   assert.equal(targetFeedListId({ XFEED_LIST_IDS: '111,222' }), '111');
   assert.equal(targetFeedListId({ XFEED_LIST_IDS: '111', XFEED_SYNC_LIST_ID: '999' }), '999');
+});
+
+test('destFromGuildId isolates tp4aph from the personal watch list', () => {
+  const env = { KB_GUILD_ID: '1358929055105159229', GUILD_ID: 'bitcernals' };
+  assert.equal(destFromGuildId('1358929055105159229', env), DEST_TP);
+  assert.equal(destFromGuildId('bitcernals', env), DEST_PERSONAL);
+  assert.equal(destFromGuildId(null, env), DEST_PERSONAL);
+});
+
+test('listIdForDest maps each dest channel onto its XFEED_ROUTES list', () => {
+  const env = {
+    XRADAR_CHANNEL_ID: '1541180128564875304',
+    XRADAR_TP_CHANNEL_ID: '1452152164699869298',
+    XFEED_SYNC_LIST_ID: '2091751129990541339',
+    XFEED_ROUTES: '2091751129990541339:1541180128564875304,2055706691925381501:1452152164699869298',
+  };
+  assert.equal(listIdForDest(DEST_PERSONAL, env), '2091751129990541339');
+  assert.equal(listIdForDest(DEST_TP, env), '2055706691925381501');
 });
 
 test('describeListSync explains skip, success, already, and failure', () => {

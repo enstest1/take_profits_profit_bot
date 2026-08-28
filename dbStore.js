@@ -53,6 +53,8 @@ export function ensureDBSchema(db) {
   if (!db.xAccounts) db.xAccounts = {};
   if (!db.fibWatch) db.fibWatch = {};
   if (!db.xRadar) db.xRadar = { users: {}, snapshots: {} };
+  // Take Profits follow-radar is a separate empty store — never share personal watches.
+  if (!db.xRadarTp) db.xRadarTp = { users: {}, snapshots: {} };
   if (!db.xFeed) db.xFeed = { seen: {}, lastPollAt: 0 };
   if (!db.mintScanner) db.mintScanner = { lastScannedBlock: 0, cards: {}, nearMisses: {} };
   if (!db.nftTp) db.nftTp = { collections: {} };
@@ -97,24 +99,33 @@ export function patchNftTp(mutator) {
 }
 
 /**
+ * Mutate a named radar bucket without losing the write to a concurrent token poll.
+ * Reloads tokens after the mutator so we do not clobber poller price updates.
+ * @param {'xRadar'|'xRadarTp'} name
+ */
+export function patchXRadarNamed(name, mutator) {
+  const db = ensureDBSchema(loadDB());
+  if (!db[name]) db[name] = { users: {}, snapshots: {} };
+  if (!db[name].users) db[name].users = {};
+  if (!db[name].snapshots) db[name].snapshots = {};
+  const out = mutator(db[name], db);
+  const slice = db[name];
+  const fresh = ensureDBSchema(loadDB());
+  fresh[name] = slice;
+  try {
+    writeDirect(fresh);
+  } catch (e) {
+    console.error('[DB] ' + name + ' patch failed (' + DB_PATH + '):', e.message);
+  }
+  return out;
+}
+
+/**
  * Mutate xRadar on disk without losing the write to a concurrent token poll.
  * Reloads tokens after the mutator so we do not clobber poller price updates.
  */
 export function patchXRadar(mutator) {
-  const db = ensureDBSchema(loadDB());
-  if (!db.xRadar) db.xRadar = { users: {}, snapshots: {} };
-  if (!db.xRadar.users) db.xRadar.users = {};
-  if (!db.xRadar.snapshots) db.xRadar.snapshots = {};
-  const out = mutator(db.xRadar, db);
-  const xRadar = db.xRadar;
-  const fresh = ensureDBSchema(loadDB());
-  fresh.xRadar = xRadar;
-  try {
-    writeDirect(fresh);
-  } catch (e) {
-    console.error('[DB] patchXRadar failed (' + DB_PATH + '):', e.message);
-  }
-  return out;
+  return patchXRadarNamed('xRadar', mutator);
 }
 
 export function saveDB(db) {

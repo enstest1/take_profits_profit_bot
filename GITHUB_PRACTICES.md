@@ -68,7 +68,7 @@ This is what makes single-`main` safe: half-finished work can merge without goin
 | `ALERT_CARDS_CHANNEL_ID` | — | unused (channel gate retired) | — | — |
 | `BLOCKED_CHANNEL_IDS` | global channel mute list (always read, no flag gate) | Default baked in as of `e438ae5` | `1536177376508121088` | n/a |
 | `XFEED_ENABLED` | `xfeed/` posts + replies from X lists | **Unset = off** | personal + TP trenches lists | off |
-| `XRADAR_ENABLED` | `xradar/` new-follow radar for `/xwatch` | **Unset = off** | Bitcernals + TP trenches (`XRADAR_CHANNEL_IDS`) | off |
+| `XRADAR_ENABLED` | `xradar/` new-follow radar for `/xwatch` | **Unset = off** | personal `XRADAR_CHANNEL_ID` + TP `XRADAR_TP_CHANNEL_ID` (isolated stores) | off |
 | `XFEED_ROUTES` | `listId:channelId` map | empty = use `XFEED_LIST_IDS` + `XFEED_CHANNEL_ID` | Bitcernals + TP trenches | — |
 | `NFT_TP_ENABLED` | `nfttp/` OpenSea floor take-profits (+75% / 1x–20x cards) | **Unset = off** | `true` → `#nft-land` `1358929055604408465` | unset (off) |
 | `KB_ENABLED` | `knowledge-bot/` Discord archive + `/ask` | **Unset = off** | set `true` to launch | unset (off) |
