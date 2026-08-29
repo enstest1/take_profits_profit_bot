@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
-import { MAX_MILESTONE_TIER, normalizeTakeProfitTiers } from '../milestones.js';
+import { MAX_MILESTONE_TIER, configuredMaxMilestoneTier, normalizeTakeProfitTiers } from '../milestones.js';
 
 assert.equal(MAX_MILESTONE_TIER, 100);
+assert.equal(configuredMaxMilestoneTier({}), 100);
+assert.equal(configuredMaxMilestoneTier({ MILESTONE_MAX_TIER: '50' }), 50);
+assert.equal(configuredMaxMilestoneTier({ MILESTONE_MAX_TIER: '999' }), 100);
+assert.equal(configuredMaxMilestoneTier({ MILESTONE_MAX_TIER: 'nope' }), 100);
 
 assert.deepEqual(normalizeTakeProfitTiers([1, 5, 20]), [1, 5, 20]);
 assert.deepEqual(normalizeTakeProfitTiers([1, 25, 100]), [1, 25, 100]);

@@ -252,9 +252,16 @@ const FOLLOWERS_FEATURES = {
 const USER_BY_SCREEN_NAME_QUERY_ID =
   process.env.X_USER_BY_SCREEN_NAME_QUERY_ID || 'IGgvgiOx4QZndDHuD3x9TQ';
 const FOLLOWING_QUERY_ID = process.env.X_FOLLOWING_QUERY_ID || 'F42cDX8PDFxkbjjq6JrM2w';
+const FOLLOWERS_QUERY_ID = process.env.X_FOLLOWERS_QUERY_ID || '_orfRBQae57vylFPH0Huhg';
 const LIST_MEMBERS_QUERY_ID = process.env.X_LIST_MEMBERS_QUERY_ID || 'BQp2IEYkgxuSxqbTAr1e1g';
 const LIST_ADD_MEMBER_QUERY_ID = process.env.X_LIST_ADD_MEMBER_QUERY_ID || 'EadD8ivrhZhYQr2pDmCpjA';
 const LIST_REMOVE_MEMBER_QUERY_ID = process.env.X_LIST_REMOVE_MEMBER_QUERY_ID || 'B5tMzrMYuFHJex_4EXFTSw';
+// twitter-openapi CreateList hash, then Rettiwt fallback if X rotated it.
+const CREATE_LIST_QUERY_IDS = [
+  process.env.X_CREATE_LIST_QUERY_ID,
+  'UQRa0jJ9doxGEIQRea1Y0w',
+  '4lSOF4GqldI-NbiFET4ofQ',
+].filter(Boolean);
 // fa0311/twitter-openapi + goat-x-pro still ship this hash; later candidates
 // are tried only if X 401/404s it. Override with X_LIST_TIMELINE_QUERY_ID.
 const LIST_TIMELINE_QUERY_FALLBACKS = [
@@ -697,6 +704,29 @@ export async function getFollowingPage(userId, cursor, screenName) {
 }
 
 /**
+ * One page of accounts that follow `userId` (newest first). Same cookie +
+ * ClientTransaction signing as Following — /early paginates this to the end
+ * to recover OG followers.
+ */
+export async function getFollowersPage(userId, cursor, screenName) {
+  const count = parseInt(process.env.FOLLOWERS_PAGE_COUNT || process.env.FOLLOWING_PAGE_COUNT || '20', 10);
+  const variables = { userId, count, includePromotedContent: false, withGrokTranslatedBio: true };
+  if (cursor) variables.cursor = cursor;
+
+  const handle = screenName ? String(screenName).replace(/^@/, '').trim() : '';
+  const referer = handle ? 'https://x.com/' + handle + '/followers' : undefined;
+
+  const data = await xGraphQL(
+    FOLLOWERS_QUERY_ID + '/Followers',
+    variables,
+    FOLLOWERS_FEATURES,
+    undefined,
+    { referer },
+  );
+  return parseUserTimelinePage(data);
+}
+
+/**
  * Latest tweets on an X list. Uses the same signed x.com GraphQL path as
  * follow-radar — goat-x-pro's pro.x.com ListLatestTweetsTimeline 401s
  * (code 32) with these cookies even though Following still works.
@@ -819,4 +849,92 @@ export async function removeListMember(listId, userId) {
   );
   if (data?.missing) return { missing: true };
   return { missing: false };
+}
+
+/**
+ * Create an empty X list owned by the cookie account.
+ * REST 1.1 first (no ClientTransaction — works on Node 20); GraphQL if REST 404s.
+ * Used when standing up a new community so /xwatch has a clean member slate
+ * that is not mixed with prod or another Discord.
+ * @param {{ name: string, description?: string, isPrivate?: boolean }} opts
+ * @returns {Promise<{ id: string, name: string, isPrivate: boolean }>}
+ */
+export async function createList(opts) {
+  const name = String(opts?.name || '').trim();
+  if (!name) throw new Error('createList requires a name');
+  const variables = {
+    name,
+    description: String(opts?.description || ''),
+    isPrivate: opts?.isPrivate !== false,
+  };
+
+  try {
+    return await createListViaRest(variables);
+  } catch (e) {
+    console.warn('[xradar] lists/create.json failed: ' + e.message);
+  }
+
+  const features = {
+    profile_label_improvements_pcf_label_in_post_enabled: true,
+    responsive_web_profile_redirect_enabled: false,
+    rweb_tipjar_consumption_enabled: false,
+    verified_phone_label_enabled: false,
+    responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+    responsive_web_graphql_timeline_navigation_enabled: true,
+  };
+
+  let lastErr;
+  for (const queryId of CREATE_LIST_QUERY_IDS) {
+    try {
+      const data = await xGraphQLPost(
+        queryId + '/CreateList',
+        variables,
+        features,
+        { referer: 'https://x.com/i/lists/create' },
+      );
+      const list = data?.data?.list || data?.data?.create_list?.list || data?.list;
+      const id = list?.id_str || list?.rest_id || list?.id;
+      if (!id) throw new Error('CreateList returned no id');
+      console.log('[xradar] created X list ' + id + ' name=' + (list.name || name));
+      return { id: String(id), name: list.name || name, isPrivate: Boolean(list.is_private ?? variables.isPrivate) };
+    } catch (e) {
+      lastErr = e;
+      console.warn('[xradar] CreateList ' + queryId + ' failed: ' + e.message);
+    }
+  }
+  throw lastErr || new Error('CreateList failed');
+}
+
+/** Cookie-auth 1.1 create — skips ClientTransaction (Node 20 has no ArrayBuffer.transfer). */
+async function createListViaRest(variables) {
+  const creds = getCredentials();
+  const body = new URLSearchParams({
+    name: variables.name,
+    mode: variables.isPrivate ? 'private' : 'public',
+    description: variables.description || '',
+  });
+  const res = await fetch('https://x.com/i/api/1.1/lists/create.json', {
+    method: 'POST',
+    headers: {
+      ...BROWSER_HEADERS,
+      authorization: X_WEB_BEARER,
+      'x-csrf-token': creds.csrfToken,
+      cookie: creds.cookieString,
+      'content-type': 'application/x-www-form-urlencoded',
+      referer: 'https://x.com/i/lists/create',
+    },
+    body,
+    signal: AbortSignal.timeout(20000),
+  });
+  const raw = await res.text().catch(() => '');
+  if (!res.ok) throw new Error('lists/create.json ' + res.status + ' — ' + raw.slice(0, 180));
+  const json = JSON.parse(raw);
+  const id = json.id_str || (json.id != null ? String(json.id) : '');
+  if (!id) throw new Error('lists/create.json returned no id');
+  console.log('[xradar] created X list ' + id + ' via REST name=' + (json.name || variables.name));
+  return {
+    id,
+    name: json.name || variables.name,
+    isPrivate: String(json.mode || '') === 'private' || variables.isPrivate,
+  };
 }

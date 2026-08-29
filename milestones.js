@@ -4,6 +4,19 @@
  */
 export const MAX_MILESTONE_TIER = 100;
 
+/**
+ * Instance cap for 🎯 cards. Hard ceiling stays MAX_MILESTONE_TIER; set
+ * MILESTONE_MAX_TIER=50 on a client Discord to stop at the 50x card.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function configuredMaxMilestoneTier(env = process.env) {
+  const raw = env.MILESTONE_MAX_TIER?.trim();
+  if (!raw) return MAX_MILESTONE_TIER;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return MAX_MILESTONE_TIER;
+  return Math.min(n, MAX_MILESTONE_TIER);
+}
+
 /** Normalize legacy milestonesFired (stored price gates 2,5,10,20) to tier ids 1–MAX. */
 export function normalizeTakeProfitTiers(fired) {
   const max = MAX_MILESTONE_TIER;

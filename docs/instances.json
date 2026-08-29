@@ -1,0 +1,128 @@
+{
+  "updated": "2026-08-28",
+  "warning": "No tokens, cookies, or API keys. Railway env is source of truth for live flags. Never put Collective/Blackjack/Genny channels on perpetual-clarity.",
+  "instances": [
+    {
+      "id": "prod",
+      "community": "Bitcernals + TP4APH",
+      "status": "live",
+      "notes": "Shared Discord token and /data volume. Isolation trap — do not add other communities here.",
+      "railway": {
+        "project": "perpetual-clarity",
+        "service": "take_profits_profit_bot"
+      },
+      "discord": {
+        "bitcernalsGuild": "GUILD_ID",
+        "tp4aphGuild": "1358929055105159229",
+        "trenches": "1452152164699869298",
+        "nftLand": "1358929055604408465",
+        "personalX": "1541180128564875304"
+      },
+      "x": {
+        "feedLists": [
+          { "id": "2091751129990541339", "channel": "1541180128564875304", "community": "Bitcernals" },
+          { "id": "2055706691925381501", "channel": "1452152164699869298", "community": "TP4APH trenches" }
+        ],
+        "xwatchSync": "dest-scoped (personal list vs TP list)"
+      },
+      "features": ["memecoin TP 100x", "NFT TP 20x (TP4APH)", "mint scanner", "xfeed", "xradar", "fib"]
+    },
+    {
+      "id": "collective",
+      "community": "Collective",
+      "status": "waiting",
+      "railway": {
+        "project": "TPB_Collective",
+        "projectId": "e709cea7-4e52-4efc-939b-ff588accb1d9",
+        "service": "Discord_Collective",
+        "dashboard": "https://railway.com/project/e709cea7-4e52-4efc-939b-ff588accb1d9"
+      },
+      "discord": {
+        "appName": "Take Profits — Collective",
+        "channel": "1365097408387612782",
+        "token": "needed"
+      },
+      "x": {
+        "feedList": { "id": "2091750809780592842", "url": "https://x.com/i/lists/2091750809780592842" },
+        "xwatchSync": "2091750809780592842"
+      },
+      "features": ["memecoin TP 100x", "NFT TP 20x", "xfeed", "xradar"]
+    },
+    {
+      "id": "blackjack",
+      "community": "Blackjack",
+      "status": "staged",
+      "notes": "GitHub connected to main. DISCORD_TOKEN, OpenSea, and X cookies set. First deploy was queued; do not mark live until SUCCESS + bot online.",
+      "railway": {
+        "project": "TPB_Blackjack",
+        "projectId": "c97da9e7-9c1b-409d-b855-75bfa032913d",
+        "environmentId": "62c1eb3a-aa97-45b8-8613-7cf57f72464a",
+        "service": "Discord_Blackjack",
+        "serviceId": "db87b06f-9c9f-45a7-a8c8-084d33ad6881",
+        "volume": "discord_blackjack-volume",
+        "volumeId": "cc741acd-5106-41d2-8347-94eb18609820",
+        "volumeMount": "/data",
+        "dashboard": "https://railway.com/project/c97da9e7-9c1b-409d-b855-75bfa032913d"
+      },
+      "discord": {
+        "appName": "Take Profits — Blackjack",
+        "guildId": "855079121822285864",
+        "clientId": "1542749619107405895",
+        "tpNftChannel": "1542691157413466172",
+        "xFeedChannel": "1543083831601528862",
+        "token": "set on Railway"
+      },
+      "x": {
+        "feedList": {
+          "id": "2093191150190399663",
+          "url": "https://x.com/i/lists/2093191150190399663",
+          "purpose": "posts + comments → 1543083831601528862"
+        },
+        "xwatchList": {
+          "id": null,
+          "url": null,
+          "purpose": "empty list /xwatch adds to — create on X and send the URL",
+          "untilThen": "XFEED_SYNC_LIST_ID=none so /xwatch does not pollute the curated list; follows live in /data"
+        }
+      },
+      "flags": {
+        "ALERT_CARDS_ENABLED": "true",
+        "MILESTONE_MAX_TIER": "50",
+        "NFT_TP_ENABLED": "true",
+        "NFT_TP_MAX_TIER": "20",
+        "XFEED_ENABLED": "true",
+        "XFEED_WATCH_RADAR_HANDLES": "true",
+        "XRADAR_ENABLED": "true",
+        "MINT_SCANNER_ENABLED": "false",
+        "BLOCKED_CHANNEL_IDS": "none",
+        "ENABLED_CHAINS": "solana,robinhood,base,ink,hype,ethereum"
+      },
+      "features": ["memecoin TP 50x", "NFT TP 20x", "xfeed from curated list", "xradar /xwatch"]
+    },
+    {
+      "id": "genny",
+      "community": "Genny Run",
+      "status": "waiting",
+      "railway": {
+        "project": "TPB_Genny_Run",
+        "projectId": "2c4198e5-8284-4c08-9e6f-80b47992dfeb",
+        "service": "Discord_Genny_Run"
+      },
+      "discord": { "channels": "not set" },
+      "x": { "feedList": null },
+      "features": []
+    },
+    {
+      "id": "golden",
+      "community": "Golden Pocket",
+      "status": "live",
+      "railway": {
+        "project": "TGB_Golden_Pocket",
+        "projectId": "9725d471-ad76-4eb1-bd81-26231881c398",
+        "service": "Golden_Pocket_TG_Take_Profits_Bot",
+        "platform": "telegram"
+      },
+      "features": ["memecoin TP", "fib"]
+    }
+  ]
+}

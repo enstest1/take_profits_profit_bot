@@ -24,7 +24,7 @@ import { evaluateFib } from './fib/evaluate.js';
 import { evaluatePersonalPositions } from './positions.js';
 import { sendChannelAlert, sendTokenAlert } from './channelAlert.js';
 import { isAlertCardsEnabledForChannel, sendMilestoneAlert } from './alertCards/index.js';
-import { MAX_MILESTONE_TIER, normalizeTakeProfitTiers } from './milestones.js';
+import { configuredMaxMilestoneTier, normalizeTakeProfitTiers } from './milestones.js';
 import { indexXAccount } from './xSocial.js';
 import { checkWeeklyRecap } from './recap.js';
 import { CFG } from './signals/config.js';
@@ -39,6 +39,9 @@ import {
 import { stampEntryValuation } from './valuationAudit.js';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.dirname(fileURLToPath(import.meta.url));
+/** Per-instance 🎯 cap (Blackjack=50 via MILESTONE_MAX_TIER; default 100). */
+const MILESTONE_CAP = configuredMaxMilestoneTier();
+console.log('[poll] memecoin milestone cap: ' + MILESTONE_CAP + 'x');
 /** One-time per volume: first poll after deploy only newest 5 mints may emit 🎯1x; all others skip 🎯 this cycle (avoids flood). Delete file to repeat. */
 const MILESTONE_BOOTSTRAP_FILE = path.join(DATA_DIR, '.tp_milestone_bootstrap_v2');
 const HOT_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -886,7 +889,7 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
   }
 
   if (!milestoneOpts.suppressTierX) {
-    const maxTier = milestoneOpts.tier1OnlyBootstrap ? 1 : MAX_MILESTONE_TIER;
+    const maxTier = milestoneOpts.tier1OnlyBootstrap ? 1 : MILESTONE_CAP;
     const newlyPassed = [];
     for (let tier = 1; tier <= maxTier; tier++) {
       if (!latest.includes(tier) && currentMultiple >= tier + 1) {

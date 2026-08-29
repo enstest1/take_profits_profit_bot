@@ -86,6 +86,7 @@ test('targetFeedListId prefers XFEED_SYNC_LIST_ID then the first XFEED_LIST_IDS 
   assert.equal(targetFeedListId({}), '');
   assert.equal(targetFeedListId({ XFEED_LIST_IDS: '111,222' }), '111');
   assert.equal(targetFeedListId({ XFEED_LIST_IDS: '111', XFEED_SYNC_LIST_ID: '999' }), '999');
+  assert.equal(targetFeedListId({ XFEED_LIST_IDS: '111', XFEED_SYNC_LIST_ID: 'none' }), '');
 });
 
 test('destFromGuildId isolates tp4aph from the personal watch list', () => {
@@ -104,6 +105,15 @@ test('listIdForDest maps each dest channel onto its XFEED_ROUTES list', () => {
   };
   assert.equal(listIdForDest(DEST_PERSONAL, env), '2091751129990541339');
   assert.equal(listIdForDest(DEST_TP, env), '2055706691925381501');
+});
+
+test('listIdForDest personal SYNC=none skips list add even when routes exist', () => {
+  const env = {
+    XRADAR_CHANNEL_ID: '1542691157413466172',
+    XFEED_SYNC_LIST_ID: 'none',
+    XFEED_ROUTES: '2093191150190399663:1542691157413466172',
+  };
+  assert.equal(listIdForDest(DEST_PERSONAL, env), '');
 });
 
 test('describeListSync explains skip, success, already, and failure', () => {

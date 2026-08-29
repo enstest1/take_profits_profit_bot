@@ -1,0 +1,550 @@
+{
+  "updated": "2026-08-28",
+  "warning": "Bitcernals + TP4APH = ONE Discord bot and ONE /data volume. Collective, Genny, and Blackjack get their own bot. Never put their channels on perpetual-clarity.",
+  "communities": [
+    {
+      "id": "personal",
+      "name": "Bitcernals",
+      "subtitle": "your Discord · shared prod bot",
+      "platform": "Discord",
+      "headerNote": "LIVE · test",
+      "sharedBot": "prod",
+      "headerFill": "#E1D5E7",
+      "headerStroke": "#9673A6"
+    },
+    {
+      "id": "tp4aph",
+      "name": "TP4APH",
+      "subtitle": "OG Discord · same bot",
+      "platform": "Discord",
+      "headerNote": "LIVE · OG",
+      "sharedBot": "prod",
+      "headerFill": "#D5E8D4",
+      "headerStroke": "#82B366"
+    },
+    {
+      "id": "newest",
+      "name": "Newest Discord",
+      "subtitle": "extra X route on prod bot",
+      "platform": "Discord",
+      "headerNote": "STAGED",
+      "sharedBot": null,
+      "headerFill": "#F5F5F5",
+      "headerStroke": "#666666"
+    },
+    {
+      "id": "collective",
+      "name": "Collective",
+      "subtitle": "own bot · waiting on token",
+      "platform": "Discord",
+      "headerNote": "WAITING",
+      "sharedBot": null,
+      "headerFill": "#DAE8FC",
+      "headerStroke": "#6C8EBF"
+    },
+    {
+      "id": "genny",
+      "name": "Genny Run",
+      "subtitle": "own bot · no channels yet",
+      "platform": "Discord",
+      "headerNote": "NEW",
+      "sharedBot": null,
+      "headerFill": "#FFE6CC",
+      "headerStroke": "#D79B00"
+    },
+    {
+      "id": "blackjack",
+      "name": "Blackjack",
+      "subtitle": "own bot · env set · first deploy",
+      "platform": "Discord",
+      "headerNote": "STAGED",
+      "sharedBot": null,
+      "headerFill": "#FCE4D6",
+      "headerStroke": "#E67E22"
+    },
+    {
+      "id": "golden",
+      "name": "Golden Pocket",
+      "subtitle": "Telegram prize · own bot",
+      "platform": "Telegram",
+      "headerNote": "LIVE · prize",
+      "sharedBot": null,
+      "headerFill": "#FFF2CC",
+      "headerStroke": "#D6B656"
+    }
+  ],
+  "features": [
+    { "id": "identity", "label": "Railway / bot" },
+    { "id": "memecoin", "label": "Memecoin TP (volume bot)" },
+    { "id": "nfttp", "label": "NFT take-profits" },
+    { "id": "mintscan", "label": "Mint scanner" },
+    { "id": "xfeed", "label": "X posts / comments" },
+    { "id": "xradar", "label": "X follows" },
+    { "id": "early", "label": "Early first-100 minters + follows" },
+    { "id": "fib", "label": "Fib / golden pocket" },
+    { "id": "knowledge", "label": "Knowledge /ask" },
+    { "id": "ops", "label": "Logs / blocked" }
+  ],
+  "cells": {
+    "personal": {
+      "identity": {
+        "status": "live",
+        "lines": [
+          "SHARED prod bot",
+          "perpetual-clarity",
+          "take_profits_profit_bot",
+          "guild = GUILD_ID (BitCERNials)"
+        ]
+      },
+      "memecoin": {
+        "status": "live",
+        "chip": "volume · any CA chat",
+        "lines": [
+          "Wherever CAs are pasted",
+          "(except blocked channels)",
+          "same volume as TP4APH"
+        ]
+      },
+      "nfttp": {
+        "status": "off",
+        "lines": [
+          "NFT_TP_CHANNEL_IDS is",
+          "TP #nft-land only",
+          "not this Discord"
+        ]
+      },
+      "mintscan": {
+        "status": "live",
+        "chip": "mint mirror",
+        "lines": [
+          "dev mirror channel",
+          "1536502941924593827",
+          "same cards as nft-land"
+        ]
+      },
+      "xfeed": {
+        "status": "live",
+        "chip": "X posts + follows",
+        "lines": [
+          "personal X channel",
+          "1541180128564875304",
+          "list 2091751129990541339"
+        ]
+      },
+      "xradar": {
+        "status": "live",
+        "lines": [
+          "same channel",
+          "1541180128564875304",
+          "store db.xRadar"
+        ]
+      },
+      "early": {
+        "status": "beta",
+        "chip": "early first-100",
+        "lines": [
+          "early/ in repo",
+          "NOT wired in index.js",
+          "/early — no channel yet"
+        ]
+      },
+      "fib": {
+        "status": "live",
+        "lines": [
+          "code default ON",
+          "alerts follow the CA channel"
+        ]
+      },
+      "knowledge": {
+        "status": "off",
+        "lines": [
+          "KB_GUILD_ID is TP4APH",
+          "keep personal archive out"
+        ]
+      },
+      "ops": {
+        "status": "live",
+        "lines": [
+          "banner/recap share TP env",
+          "blocked 1536177376508121088",
+          "warden 1484009058401910844"
+        ]
+      }
+    },
+    "tp4aph": {
+      "identity": {
+        "status": "live",
+        "lines": [
+          "SHARED prod bot",
+          "same service as Personal",
+          "guild 1358929055105159229"
+        ]
+      },
+      "memecoin": {
+        "status": "live",
+        "chip": "volume · #trenches",
+        "lines": [
+          "#trenches (CA paste)",
+          "1452152164699869298",
+          "alerts follow first channel"
+        ]
+      },
+      "nfttp": {
+        "status": "live",
+        "chip": "NFT · #nft-land",
+        "lines": [
+          "#nft-land",
+          "1358929055604408465",
+          "NFT_TP_ENABLED=true"
+        ]
+      },
+      "mintscan": {
+        "status": "live",
+        "chip": "mint · #nft-land",
+        "lines": [
+          "#nft-land",
+          "1358929055604408465",
+          "+ personal mirror"
+        ]
+      },
+      "xfeed": {
+        "status": "live",
+        "chip": "X posts + follows · #trenches",
+        "lines": [
+          "#trenches",
+          "1452152164699869298",
+          "list 2055706691925381501"
+        ]
+      },
+      "xradar": {
+        "status": "live",
+        "lines": [
+          "#trenches",
+          "1452152164699869298",
+          "empty db.xRadarTp until /xwatch in this guild"
+        ]
+      },
+      "early": {
+        "status": "off",
+        "lines": ["not deployed"]
+      },
+      "fib": {
+        "status": "live",
+        "lines": [
+          "code default ON",
+          "alerts follow the CA channel"
+        ]
+      },
+      "knowledge": {
+        "status": "waiting",
+        "chip": "/ask · waiting",
+        "lines": [
+          "KB_ENABLED to launch",
+          "guild 1358929055105159229",
+          "archive #trenches"
+        ]
+      },
+      "ops": {
+        "status": "live",
+        "lines": [
+          "LOG/SUMMARY default",
+          "1452152164699869298",
+          "Warden = separate service"
+        ]
+      }
+    },
+    "newest": {
+      "identity": {
+        "status": "staged",
+        "lines": [
+          "would ride SHARED prod bot",
+          "extra XFEED_ROUTES row",
+          "say \"go live\" first"
+        ]
+      },
+      "memecoin": {
+        "status": "none",
+        "lines": ["not configured"]
+      },
+      "nfttp": {
+        "status": "none",
+        "lines": ["not configured"]
+      },
+      "mintscan": {
+        "status": "none",
+        "lines": ["not configured"]
+      },
+      "xfeed": {
+        "status": "staged",
+        "chip": "X posts · say go-live",
+        "lines": [
+          "channel 1536498340609527922",
+          "list 2091751648930771381",
+          "do not add until go-live"
+        ]
+      },
+      "xradar": {
+        "status": "none",
+        "lines": ["not configured"]
+      },
+      "early": {
+        "status": "off",
+        "lines": ["not deployed"]
+      },
+      "fib": {
+        "status": "none",
+        "lines": ["not configured"]
+      },
+      "knowledge": {
+        "status": "off",
+        "lines": ["not this guild"]
+      },
+      "ops": {
+        "status": "none",
+        "lines": ["not configured"]
+      }
+    },
+    "collective": {
+      "identity": {
+        "status": "waiting",
+        "lines": [
+          "OWN bot — never prod token",
+          "TPB_Collective",
+          "Discord_Collective",
+          "needs DISCORD_TOKEN"
+        ]
+      },
+      "memecoin": {
+        "status": "waiting",
+        "chip": "volume ready",
+        "lines": [
+          "env ready",
+          "CAs → same channel they were pasted in"
+        ]
+      },
+      "nfttp": {
+        "status": "waiting",
+        "chip": "NFT ready",
+        "lines": [
+          "NFT_TP_ENABLED=true",
+          "1365097408387612782"
+        ]
+      },
+      "mintscan": {
+        "status": "off",
+        "lines": ["MINT_SCANNER_ENABLED=false"]
+      },
+      "xfeed": {
+        "status": "waiting",
+        "chip": "X posts + follows ready",
+        "lines": [
+          "1365097408387612782",
+          "list 2091750809780592842"
+        ]
+      },
+      "xradar": {
+        "status": "waiting",
+        "lines": [
+          "1365097408387612782",
+          "own /data store"
+        ]
+      },
+      "early": {
+        "status": "off",
+        "lines": ["not deployed"]
+      },
+      "fib": {
+        "status": "waiting",
+        "lines": ["code default ON once live"]
+      },
+      "knowledge": {
+        "status": "off",
+        "lines": ["leave KB unset"]
+      },
+      "ops": {
+        "status": "waiting",
+        "lines": [
+          "LOG + SUMMARY",
+          "1365097408387612782",
+          "split channels later"
+        ]
+      }
+    },
+    "genny": {
+      "identity": {
+        "status": "waiting",
+        "lines": [
+          "OWN bot",
+          "TPB_Genny_Run",
+          "Discord_Genny_Run",
+          "TG later, same project"
+        ]
+      },
+      "memecoin": {
+        "status": "none",
+        "lines": ["channel IDs not set"]
+      },
+      "nfttp": {
+        "status": "none",
+        "lines": ["channel IDs not set"]
+      },
+      "mintscan": {
+        "status": "off",
+        "lines": ["leave off until asked"]
+      },
+      "xfeed": {
+        "status": "off",
+        "lines": ["leave off until asked"]
+      },
+      "xradar": {
+        "status": "off",
+        "lines": ["leave off until asked"]
+      },
+      "early": {
+        "status": "off",
+        "lines": ["not deployed"]
+      },
+      "fib": {
+        "status": "none",
+        "lines": ["default ON once live"]
+      },
+      "knowledge": {
+        "status": "off",
+        "lines": ["leave KB unset"]
+      },
+      "ops": {
+        "status": "none",
+        "lines": ["need their LOG/SUMMARY IDs"]
+      }
+    },
+    "blackjack": {
+      "identity": {
+        "status": "staged",
+        "lines": [
+          "OWN bot — never prod token",
+          "TPB_Blackjack",
+          "Discord_Blackjack",
+          "guild 855079121822285864 · token + OpenSea + X cookies set"
+        ]
+      },
+      "memecoin": {
+        "status": "waiting",
+        "chip": "volume 75%–50x ready",
+        "lines": [
+          "MILESTONE_MAX_TIER=50",
+          "paste CAs in 1542691157413466172",
+          "alerts follow the paste channel"
+        ]
+      },
+      "nfttp": {
+        "status": "waiting",
+        "chip": "NFT ready",
+        "lines": [
+          "NFT_TP_ENABLED=true",
+          "1542691157413466172"
+        ]
+      },
+      "mintscan": {
+        "status": "off",
+        "lines": ["MINT_SCANNER_ENABLED=false"]
+      },
+      "xfeed": {
+        "status": "waiting",
+        "chip": "X posts · #wire",
+        "lines": [
+          "1543083831601528862",
+          "list 2093191150190399663",
+          "XFEED_SYNC_LIST_ID=none until empty /xwatch list"
+        ]
+      },
+      "xradar": {
+        "status": "waiting",
+        "lines": [
+          "1543083831601528862",
+          "own /data store",
+          "/xwatch — not added to curated list yet"
+        ]
+      },
+      "early": {
+        "status": "off",
+        "lines": ["not deployed"]
+      },
+      "fib": {
+        "status": "waiting",
+        "lines": ["code default ON once live"]
+      },
+      "knowledge": {
+        "status": "off",
+        "lines": ["leave KB unset"]
+      },
+      "ops": {
+        "status": "waiting",
+        "lines": [
+          "LOG + SUMMARY",
+          "1542691157413466172",
+          "split channels later"
+        ]
+      }
+    },
+    "golden": {
+      "identity": {
+        "status": "live",
+        "lines": [
+          "OWN Telegram bot",
+          "TG_1_Golden_Pocket_TPB",
+          "Golden_Pocket_TG_Take_Profits_Bot",
+          "PLATFORM=telegram"
+        ]
+      },
+      "memecoin": {
+        "status": "live",
+        "chip": "volume LIVE",
+        "lines": [
+          "volume / take-profits LIVE",
+          "chat = SUMMARY_CHANNEL_ID",
+          "(Railway only — not in git)"
+        ]
+      },
+      "nfttp": {
+        "status": "off",
+        "lines": ["unset"]
+      },
+      "mintscan": {
+        "status": "off",
+        "lines": ["unset"]
+      },
+      "xfeed": {
+        "status": "off",
+        "lines": ["unset"]
+      },
+      "xradar": {
+        "status": "off",
+        "lines": ["unset"]
+      },
+      "early": {
+        "status": "off",
+        "lines": ["Discord slash only"]
+      },
+      "fib": {
+        "status": "live",
+        "chip": "fib on · cards off",
+        "lines": [
+          "AUTO_FIB_TRACKING in TG example",
+          "ALERT_CARDS_ENABLED=false"
+        ]
+      },
+      "knowledge": {
+        "status": "off",
+        "lines": ["must stay unset"]
+      },
+      "ops": {
+        "status": "live",
+        "lines": [
+          "SUMMARY_CHANNEL_ID = chat",
+          "do not add a second TG group",
+          "to this bot"
+        ]
+      }
+    }
+  }
+}

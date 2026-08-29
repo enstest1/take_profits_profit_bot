@@ -16,6 +16,8 @@ import { parseFeedRoutes } from '../xfeed/config.js';
 /** @param {NodeJS.ProcessEnv} [env] */
 export function targetFeedListId(env = process.env) {
   const dedicated = env.XFEED_SYNC_LIST_ID?.trim();
+  // `none` = do not sync /xwatch onto any X list (keep a curated feed list clean).
+  if (dedicated && dedicated.toLowerCase() === 'none') return '';
   if (dedicated) return dedicated;
   return String(env.XFEED_LIST_IDS || '')
     .split(',')
@@ -25,11 +27,16 @@ export function targetFeedListId(env = process.env) {
 
 /**
  * X list for this radar dest: match XFEED_ROUTES by dest channel.
- * Personal falls back to XFEED_SYNC_LIST_ID when routes are missing.
+ * Personal: XFEED_SYNC_LIST_ID wins (or `none` = skip) so a client Discord can
+ * keep a curated posts list separate from the empty /xwatch list.
  * @param {string} destId
  * @param {NodeJS.ProcessEnv} [env]
  */
 export function listIdForDest(destId, env = process.env) {
+  if (destId === DEST_PERSONAL) {
+    const dedicated = env.XFEED_SYNC_LIST_ID?.trim();
+    if (dedicated) return dedicated.toLowerCase() === 'none' ? '' : dedicated;
+  }
   const dest = getRadarDestinations(env).find((d) => d.id === destId);
   const channelId = dest?.channelId || '';
   const hit = parseFeedRoutes(env).find((r) => r.channelId === channelId);

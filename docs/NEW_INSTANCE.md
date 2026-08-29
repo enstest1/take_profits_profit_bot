@@ -30,7 +30,8 @@ Do **not** put `OG`, `prod`, or random Railway adjectives (`perpetual-clarity`) 
 | Golden Pocket | Telegram | `TG_1_Golden_Pocket_TPB` | `Golden_Pocket_TG_Take_Profits_Bot` | Legacy name — do not rename |
 | **Genny Run** | **Discord** | **`TPB_Genny_Run`** | **`Discord_Genny_Run`** | New — follow the pattern |
 | Genny Run | Telegram | `TPB_Genny_Run` | `Telegram_Genny_Run` | Create later in the **same** project |
-| **Collective** | **Discord** | **`TPB_Collective`** | **`Discord_Collective`** | Created — X-list testing in bitecernals; not in Collective yet |
+| **Collective** | **Discord** | **`TPB_Collective`** | **`Discord_Collective`** | Env pre-wired; waiting on dedicated Discord token |
+| **Blackjack** | **Discord** | **`TPB_Blackjack`** | **`Discord_Blackjack`** | Env pre-wired; waiting on dedicated Discord token |
 
 Legacy projects stay as-is so deploys and volumes do not move. New communities follow `TPB_*` / `Discord_*` / `Telegram_*`.
 
@@ -438,43 +439,108 @@ TZ=UTC
 - [`docs/BOT_OVERVIEW.md`](BOT_OVERVIEW.md) — token schema and poller
 - [`docs/ALERT_CARDS.md`](ALERT_CARDS.md) — trencher card flags
 - [`docs/X_LISTS.md`](X_LISTS.md) — which X list posts to which Discord
+- [`docs/OPS_MAP.md`](OPS_MAP.md) — which community has which features
+- [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — Mermaid topology (generated)
+- [`architecture/`](../architecture/) — **Tecture** (Cursor sidebar: Tecture: Open Architecture)
 
 ---
 
-## Appendix C — Collective — X-list feed only
+## Appendix C — Collective — memecoin TP + NFT TP + X
 
 Railway project **`TPB_Collective`** / service **`Discord_Collective`** / volume **`discord_collective-volume`** at `/data` is already created: [dashboard](https://railway.com/project/e709cea7-4e52-4efc-939b-ff588accb1d9).
 
-GitHub is **not** connected yet (no `DISCORD_TOKEN` — connecting `main` would crash-loop). X feed is pre-wired to the **bitecernals personal test channel** until the Collective bot is invited.
+GitHub is **not** connected yet (no `DISCORD_TOKEN` — connecting `main` would crash-loop). Env is pre-wired to Collective channel `1365097408387612782`. Cookies + OpenSea key were copied from prod Discord.
 
 | Piece | Value |
 |---|---|
-| Discord app name | `Take Profits — Collective` (create when you have access) |
+| Discord app name | `Take Profits — Collective` (**new app** — not prod, not Genny Run) |
 | Railway project | `TPB_Collective` |
 | Service | `Discord_Collective` |
 | Volume | `discord_collective-volume` → `/data` |
 | X list | [`2091750809780592842`](https://x.com/i/lists/2091750809780592842) |
-| Testing channel (now) | `1541180128564875304` (bitecernals) |
-| Go-live channel | `1317657485691191376` (Collective) |
+| Live channel | `1365097408387612782` (X cards, NFT cards, startup banner — split later if you want) |
 
-**When you have a dedicated bot token** (do not reuse prod or Genny Run):
-
-1. Set `DISCORD_TOKEN` + `CLIENT_ID` + `GUILD_ID` on `Discord_Collective` only in Railway Variables
-2. Invite that bot into bitecernals first (Message Content Intent on)
-3. Settings → Source → `enstest1/take_profits_profit_bot` branch `main`
-4. Confirm cards in `1541180128564875304`
-5. Then go live: point routes at Collective and invite the bot there:
+**Already set on the service** (do not point these at TP4APH):
 
 ```env
-XFEED_CHANNEL_ID=1317657485691191376
-X_SCANNER_CHANNEL_ID=1317657485691191376
-XFEED_ROUTES=2091750809780592842:1317657485691191376
-LOG_CHANNEL_ID=1317657485691191376
-SUMMARY_CHANNEL_ID=1317657485691191376
+XFEED_ENABLED=true
+XRADAR_ENABLED=true
+XFEED_WATCH_RADAR_HANDLES=false
+XFEED_LIST_IDS=2091750809780592842
+XFEED_SYNC_LIST_ID=2091750809780592842
+XFEED_ROUTES=2091750809780592842:1365097408387612782
+XFEED_CHANNEL_ID=1365097408387612782
+XRADAR_CHANNEL_ID=1365097408387612782
+X_SCANNER_CHANNEL_ID=1365097408387612782
+LOG_CHANNEL_ID=1365097408387612782
+SUMMARY_CHANNEL_ID=1365097408387612782
+NFT_TP_ENABLED=true
+NFT_TP_MAX_TIER=20
+NFT_TP_CHANNEL_ID=1365097408387612782
+NFT_TP_CHANNEL_IDS=1365097408387612782
+ALERT_CARDS_ENABLED=true
+MINT_SCANNER_ENABLED=false
+BLOCKED_CHANNEL_IDS=none
+ENABLED_CHAINS=solana,robinhood,base,ink,hype,ethereum
 ```
 
-Still required on the service: `X_COOKIES_JSON` for the cookie account that owns the Collective list. Leave `XRADAR_ENABLED=false`.
+Memecoin take-profits (+75%, then 1x–100x) are always-on — they fire in **whatever channel the CA was pasted in**. NFT take-profits are +75% then 1x–20x on OpenSea floor.
 
-`/xwatch add` can still be used to push a handle onto that list without turning follow-radar on.
+**Still needed before connecting GitHub:** `DISCORD_TOKEN` + `CLIENT_ID` + `GUILD_ID` on `Discord_Collective` only. Then Settings → Source → `enstest1/take_profits_profit_bot` branch `main`.
 
-Do **not** set Collective's channel on `perpetual-clarity`.
+Do **not** set Collective's channel on `perpetual-clarity`. Do not reuse the prod bot token.
+
+---
+
+## Appendix D — Blackjack — memecoin TP (50x) + NFT TP + X
+
+Railway project **`TPB_Blackjack`** / service **`Discord_Blackjack`** / volume **`discord_blackjack-volume`** at `/data` is already created: [dashboard](https://railway.com/project/c97da9e7-9c1b-409d-b855-75bfa032913d).
+
+GitHub is connected to `enstest1/take_profits_profit_bot` branch `main`. `DISCORD_TOKEN` is on the service (not in git). First deploy may still be initializing — confirm `SUCCESS` and `Slash commands registered (guild — instant)` in logs. OpenSea key + X cookies are **not** on this service yet (NFT + Wire need them).
+
+| Piece | Value |
+|---|---|
+| Discord app name | `Take Profits — Blackjack` (**new app** — not prod, not Collective, not Genny Run) |
+| Railway project | `TPB_Blackjack` |
+| Service | `Discord_Blackjack` |
+| Volume | `discord_blackjack-volume` → `/data` |
+| Guild / app | `855079121822285864` / `1542749619107405895` |
+| X posts list | [`2093191150190399663`](https://x.com/i/lists/2093191150190399663) (curated — you manage members) |
+| X /xwatch list | **create an empty list on X and send the URL** — until then `XFEED_SYNC_LIST_ID=none` so `/xwatch` does not write the curated list |
+| X feed + follows | `1543083831601528862` |
+| Memecoin TP + NFT TP | `1542691157413466172` (paste CAs and OpenSea links in this channel) |
+
+**Already set on the service** (do not point these at TP4APH):
+
+```env
+CLIENT_ID=1542749619107405895
+GUILD_ID=855079121822285864
+XFEED_ENABLED=true
+XRADAR_ENABLED=true
+XFEED_WATCH_RADAR_HANDLES=true
+XFEED_LIST_IDS=2093191150190399663
+XFEED_ROUTES=2093191150190399663:1543083831601528862
+XFEED_SYNC_LIST_ID=none
+XFEED_CHANNEL_ID=1543083831601528862
+XRADAR_CHANNEL_ID=1543083831601528862
+X_SCANNER_CHANNEL_ID=1543083831601528862
+LOG_CHANNEL_ID=1542691157413466172
+SUMMARY_CHANNEL_ID=1542691157413466172
+NFT_TP_ENABLED=true
+NFT_TP_MAX_TIER=20
+NFT_TP_CHANNEL_ID=1542691157413466172
+NFT_TP_CHANNEL_IDS=1542691157413466172
+MILESTONE_MAX_TIER=50
+ALERT_CARDS_ENABLED=true
+MINT_SCANNER_ENABLED=false
+BLOCKED_CHANNEL_IDS=none
+ENABLED_CHAINS=solana,robinhood,base,ink,hype,ethereum
+```
+
+Memecoin take-profits (+75%, then 1x–50x) fire in **whatever channel the CA was pasted in**. NFT take-profits are +75% then 1x–20x on OpenSea floor.
+
+**Still needed before connecting GitHub:** `DISCORD_TOKEN` on `Discord_Blackjack` only (`CLIENT_ID` + `GUILD_ID` are already set), plus `OPENSEA_API_KEY` and `X_COOKIES_JSON` (same values as Collective/prod — not the Discord token). Then Settings → Source → `enstest1/take_profits_profit_bot` branch `main`.
+
+When the empty `/xwatch` list exists, set `XFEED_SYNC_LIST_ID=<newListId>` and `XFEED_ROUTES=<newListId>:1543083831601528862,2093191150190399663:1543083831601528862` (xwatch list first so `/xwatch` writes there; curated list still polled for posts). Then you can turn `XFEED_WATCH_RADAR_HANDLES` back to `false`.
+
+Do **not** set Blackjack's channel on `perpetual-clarity`. Do not reuse the prod bot token.
