@@ -12,7 +12,7 @@ import { chainLabel, isBrokenSolKey, parseStorageKey, isLegacyEvmKey, enabledCha
 import { formatB20Badge } from './b20.js';
 import { batchFetch, batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
-import { recordCycle, markSummaryPosted } from './cycleStats.js';
+import { recordCycle, markSummaryPosted, markCycleStarted } from './cycleStats.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import { rebuildCallerStats, updateCallerStatsForUser } from './callerStats.js';
 import { deriveLifecycle, lifecyclePrefix } from './signals/lifecycle.js';
@@ -146,6 +146,17 @@ let lastCallerRebuildDate = null;
 /** Prevents overlapping poll cycles (setInterval does not await async work). */
 let pollCycleInProgress = false;
 let pollCycleNumber = 0;
+
+/**
+ * Clear the in-process cycle lock after a timeout/watchdog. The hung cycle
+ * may still be awaiting I/O; the loop must exit so Railway restarts cleanly.
+ * @param {string} reason
+ */
+export function resetPollCycleLock(reason) {
+  console.warn('[poll] resetting cycle lock: ' + reason);
+  clearActivePollTrackedKeys();
+  pollCycleInProgress = false;
+}
 
 function stableAddrHash(address) {
   let hash = 0;
@@ -595,6 +606,7 @@ export async function pollTokens(client) {
   pollCycleInProgress = true;
   pollCycleNumber += 1;
   const cycleNum = pollCycleNumber;
+  markCycleStarted();
   clearRemovedThisCycle();
 
   try {
@@ -602,7 +614,18 @@ export async function pollTokens(client) {
     maybeRunDailyArchive(db);
     const trackedKeys = Object.keys(db.tokens || {});
     setActivePollTrackedKeys(trackedKeys);
-    if (trackedKeys.length === 0) return;
+    // New / empty instances still need a heartbeat or the watchdog restarts them forever.
+    if (trackedKeys.length === 0) {
+      recordCycle({
+        ms: 0,
+        scheduledSol: 0,
+        scheduledRh: 0,
+        broken: 0,
+        rate429Streak: rateLimiter.stats().consecutive429,
+      });
+      console.log('[poll] Cycle #' + cycleNum + ' done — 0 tokens');
+      return;
+    }
 
     const tCycle = Date.now();
     const solPriceUsd = await fetchSolPrice();

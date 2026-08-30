@@ -2,7 +2,7 @@
 import http from 'http';
 import crypto from 'crypto';
 import { loadDB } from './dbStore.js';
-import { cycleStats, refreshGitSha } from './cycleStats.js';
+import { cycleStats, refreshGitSha, pollHealth } from './cycleStats.js';
 import { processHeliusPayload, isDevSellEnabled } from './webhooks/devSell.js';
 
 function pathOnly(url) {
@@ -13,8 +13,10 @@ export function routeRequest(req, res, client, getDb) {
   const path = pathOnly(req.url);
 
   if (path === '/health') {
-    res.writeHead(200);
-    res.end('ok');
+    // 503 when the volume poller is stale so Railway healthcheck restarts this instance.
+    const h = pollHealth();
+    res.writeHead(h.ok ? 200 : 503);
+    res.end(h.ok ? 'ok' : h.reason);
     return;
   }
 

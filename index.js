@@ -15,7 +15,8 @@ import {
   SlashCommandBuilder,
   EmbedBuilder,
 } from 'discord.js';
-import { pollTokens } from './poller.js';
+import { runTokenPollLoop } from './pollLoop.js';
+import { withTimeout } from './asyncTimeout.js';
 import { initAlertGate } from './alertGate.js';
 import { fibtrackCommand, handleFibtrack } from './fibCommands.js';
 import { startMintScan } from './mintscan/index.js';
@@ -95,10 +96,6 @@ const WATCHLIST_PATH = path.join(ROOT_DIR, 'watchlist.json');
 const RUG_CACHE_TTL_MS = 60 * 1000;
 const rugCache = {};
 
-/** Target time between poll cycle starts; each cycle runs to completion first (avoids setInterval + async skips). */
-const TOKEN_POLL_INTERVAL_MS = 3 * 60 * 1000;
-const TOKEN_POLL_MIN_GAP_MS = 5000;
-
 const STARTUP_BANNER =
   '░░▒▒▓▓████████ TAKE PROFIT ████████▓▓▒▒░░\n' +
   '░░▒▒▓▓██████ the profit bot ███████▓▓▒▒░░';
@@ -130,21 +127,6 @@ async function postStartupBanner(client) {
     console.log('[startup] banner posted to channel ' + channelId);
   } catch (e) {
     console.error('[startup] failed to post banner to ' + channelId + ':', e.message);
-  }
-}
-
-async function runTokenPollLoop(client) {
-  while (true) {
-    const t0 = Date.now();
-    try {
-      await pollTokens(client);
-    } catch (e) {
-      console.error('[poll] loop error:', e);
-    }
-    const elapsed = Date.now() - t0;
-    const wait = Math.max(TOKEN_POLL_MIN_GAP_MS, TOKEN_POLL_INTERVAL_MS - elapsed);
-    console.log('[poll] cycle ' + Math.round(elapsed / 1000) + 's — next in ' + Math.round(wait / 1000) + 's');
-    await new Promise((r) => setTimeout(r, wait));
   }
 }
 
@@ -1494,15 +1476,6 @@ client.once('ready', async () => {
 
 const LOGIN_TIMEOUT_MS = 45_000;
 let bootWaitTimer = null;
-
-function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms),
-    ),
-  ]);
-}
 
 (async () => {
   if (!process.env.DISCORD_TOKEN) {

@@ -4,15 +4,11 @@ import { initAlertGate } from './alertGate.js';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
 import { DATA_DIR, loadDB, saveDB, ensureDBSchema, markRemovedThisCycle } from './dbStore.js';
 import { extractAddresses, resolveUserInputToKey, parseEnabledChains, chainLabel } from './chains.js';
-import { pollTokens } from './poller.js';
+import { runTokenPollLoop } from './pollLoop.js';
 import { autoTrack } from './tracker.js';
 import { renderEmbedForTelegram, sendTelegramMessage, isChatAdmin } from './notifier.js';
 import { buildCallsEmbed } from './callsView.js';
 import { startHttpServer } from './httpServer.js';
-
-/** Mirror index.js runTokenPollLoop cadence. */
-const TOKEN_POLL_INTERVAL_MS = 3 * 60 * 1000;
-const TOKEN_POLL_MIN_GAP_MS = 5000;
 
 const tgClient = {};
 
@@ -178,21 +174,6 @@ async function longPollLoop(startOffset) {
       console.error('[tg] getUpdates error:', e.message);
       await new Promise((r) => setTimeout(r, 2000));
     }
-  }
-}
-
-async function runTokenPollLoop(client) {
-  while (true) {
-    const t0 = Date.now();
-    try {
-      await pollTokens(client);
-    } catch (e) {
-      console.error('[poll] loop error:', e);
-    }
-    const elapsed = Date.now() - t0;
-    const wait = Math.max(TOKEN_POLL_MIN_GAP_MS, TOKEN_POLL_INTERVAL_MS - elapsed);
-    console.log('[poll] cycle ' + Math.round(elapsed / 1000) + 's — next in ' + Math.round(wait / 1000) + 's');
-    await new Promise((r) => setTimeout(r, wait));
   }
 }
 

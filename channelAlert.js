@@ -5,6 +5,9 @@ import { bumpAlertSent } from './cycleStats.js';
 import { logValuationAudit } from './valuationAudit.js';
 import { renderEmbedForTelegram, sendTelegramMessage } from './notifier.js';
 import { isBlockedChannel } from './blockedChannels.js';
+import { withTimeout } from './asyncTimeout.js';
+
+const DISCORD_SEND_TIMEOUT_MS = Number(process.env.DISCORD_SEND_TIMEOUT_MS) || 20_000;
 
 export async function sendChannelAlert(client, channelId, embed, label = 'alert', files = null, opts = {}) {
   if (isBlockedChannel(channelId)) {
@@ -28,8 +31,16 @@ export async function sendChannelAlert(client, channelId, embed, label = 'alert'
     return ok;
   }
   try {
-    const channel = await client.channels.fetch(channelId);
-    await channel.send(files && files.length ? { embeds: [embed], files } : { embeds: [embed] });
+    const channel = await withTimeout(
+      client.channels.fetch(channelId),
+      DISCORD_SEND_TIMEOUT_MS,
+      'channel.fetch ' + channelId,
+    );
+    await withTimeout(
+      channel.send(files && files.length ? { embeds: [embed], files } : { embeds: [embed] }),
+      DISCORD_SEND_TIMEOUT_MS,
+      'channel.send ' + channelId,
+    );
     bumpAlertSent();
     return true;
   } catch (e) {
