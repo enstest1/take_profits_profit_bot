@@ -82,8 +82,8 @@ flowchart TB
   newest["Newest Discord<br/>extra X route on prod bot<br/>- X posts · say go-live  · staged"]
   collective["Collective<br/>own bot · waiting on token<br/>- volume ready  · waiting<br/>- NFT ready  · waiting<br/>- X posts + follows ready  · waiting"]
   genny["Genny Run<br/>own bot · no channels yet<br/>- nothing live yet"]
-  blackjack["Blackjack<br/>own bot · env set · first deploy<br/>- volume 75%–50x ready  · waiting<br/>- NFT ready  · waiting<br/>- X posts · #wire  · waiting"]
-  golden["Golden Pocket<br/>Telegram prize · own bot<br/>- volume LIVE<br/>- fib on · cards off"]
+  blackjack["Blackjack<br/>own bot · /xwatch → Wire list<br/>- volume 75%–50x<br/>- NFT 20x<br/>- X posts · #wire"]
+  golden["Golden Pocket<br/>Telegram prize · own bot<br/>- volume LIVE<br/>- xwatch posts<br/>- fib on · cards off"]
   git --> prod
   git --> collBot
   git --> gennyBot

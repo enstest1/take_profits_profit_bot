@@ -39,6 +39,15 @@ export function parseHandleList(raw) {
 }
 
 export function scannerChannelId(specificEnv) {
+  // Telegram must never fall back to a Discord snowflake.
+  if ((process.env.PLATFORM || '') === 'telegram') {
+    return (
+      process.env[specificEnv]?.trim() ||
+      process.env.X_SCANNER_CHANNEL_ID?.trim() ||
+      process.env.SUMMARY_CHANNEL_ID?.trim() ||
+      ''
+    );
+  }
   return (
     process.env[specificEnv]?.trim() ||
     process.env.X_SCANNER_CHANNEL_ID?.trim() ||
@@ -78,10 +87,13 @@ export function destFromGuildId(guildId, env = process.env) {
  * @returns {Array<{id: string, channelId: string, guildId: string}>}
  */
 export function getRadarDestinations(env = process.env) {
+  const platform = env.PLATFORM || process.env.PLATFORM || '';
   const personalChannel =
     env.XRADAR_CHANNEL_ID?.trim() ||
     env.X_SCANNER_CHANNEL_ID?.trim() ||
-    DEFAULT_X_SCANNER_CHANNEL_ID;
+    (platform === 'telegram'
+      ? (env.SUMMARY_CHANNEL_ID || '').trim()
+      : DEFAULT_X_SCANNER_CHANNEL_ID);
   const dests = [
     {
       id: DEST_PERSONAL,

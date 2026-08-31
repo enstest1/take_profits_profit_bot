@@ -1,4 +1,4 @@
-/** Telegram platform entry — long-poll + auto-track + /calls + /remove. */
+/** Telegram platform entry — long-poll + auto-track + /calls + /remove + /xwatch. */
 import 'dotenv/config';
 import { initAlertGate } from './alertGate.js';
 import { runVolumeBackup } from './scripts/backup-volume.mjs';
@@ -9,6 +9,9 @@ import { autoTrack } from './tracker.js';
 import { renderEmbedForTelegram, sendTelegramMessage, isChatAdmin } from './notifier.js';
 import { buildCallsEmbed } from './callsView.js';
 import { startHttpServer } from './httpServer.js';
+import { startXRadar } from './xradar/index.js';
+import { startXFeed } from './xfeed/index.js';
+import { handleTgXwatch } from './xradar/tgCommands.js';
 
 const tgClient = {};
 
@@ -127,6 +130,15 @@ async function handleUpdate(update) {
       await handleRemoveCommand(chatId, userId, parsed.args);
       return;
     }
+    if (parsed.cmd === '/xwatch') {
+      const admin = await isChatAdmin(chatId, userId);
+      if (!admin) {
+        await sendTelegramMessage(chatId, { text: 'Admins only.' });
+        return;
+      }
+      await handleTgXwatch(chatId, msg, parsed.args);
+      return;
+    }
     return;
   }
 
@@ -182,9 +194,10 @@ async function registerCommands() {
     commands: [
       { command: 'calls', description: 'Show all tracked tokens and their current performance' },
       { command: 'remove', description: 'Stop tracking a token (admins only)' },
+      { command: 'xwatch', description: 'Watch an X account for posts/follows (admins). Add ping posts to @ you.' },
     ],
   });
-  console.log('[tg] commands registered: /calls /remove');
+  console.log('[tg] commands registered: /calls /remove /xwatch');
 }
 
 async function boot() {
@@ -214,6 +227,9 @@ async function boot() {
 
   // httpServer only needs client for webhook/devsell paths; /health is fine with a stub.
   startHttpServer(tgClient, () => ensureDBSchema(loadDB()));
+
+  startXRadar(tgClient);
+  startXFeed(tgClient);
 
   const offset = await fastForwardOffset();
   console.log('[tg] long-poll starting at offset ' + offset);

@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'assert/strict';
 import { diffFollowing, capNewcomers } from '../xradar/diff.js';
 import { buildFollowCard, clip, profileUrl, pfpUrl } from '../xradar/card.js';
-import { parseHandleList, parseChannelIdList, destFromGuildId, destFromChannelId, DEST_TP, DEST_PERSONAL } from '../xradar/config.js';
+import { parseHandleList, parseChannelIdList, destFromGuildId, destFromChannelId, getRadarDestinations, DEST_TP, DEST_PERSONAL } from '../xradar/config.js';
 import { targetFeedListId, describeListSync, listIdForDest } from '../xradar/listSync.js';
 import { applyPingPatch, mentionPayload, pingIdsForEvent, summarizePings, anyPingFlagSet } from '../xradar/pings.js';
+import { parseTgXwatch, pingTargetFromTelegramMessage } from '../xradar/tgParse.js';
 import { parseGraphQLTweet, extractListTimelineTweets } from '../xradar/xClient.js';
 
 const user = (id, username) => ({
@@ -258,9 +259,15 @@ test('applyPingPatch adds, removes, and clears per Discord user', () => {
 test('mentionPayload is empty without ids so cards stay silent', () => {
   assert.deepEqual(mentionPayload([]), {});
   assert.deepEqual(mentionPayload(null), {});
-  const payload = mentionPayload(['111', '111', '222']);
+  const payload = mentionPayload(['111', '111', '222'], 'discord');
   assert.equal(payload.content, '<@111> <@222>');
   assert.deepEqual(payload.allowedMentions, { users: ['111', '222'], parse: [] });
+});
+
+test('mentionPayload uses Telegram HTML user links', () => {
+  const payload = mentionPayload(['111'], 'telegram');
+  assert.equal(payload.content, '<a href="tg://user?id=111">ping</a>');
+  assert.equal(payload.allowedMentions, undefined);
 });
 
 test('pingIdsForEvent and summarizePings ignore unset events', () => {
@@ -268,9 +275,37 @@ test('pingIdsForEvent and summarizePings ignore unset events', () => {
   assert.deepEqual(pingIdsForEvent(user, 'post'), ['111']);
   assert.deepEqual(pingIdsForEvent(user, 'follow'), []);
   assert.deepEqual(pingIdsForEvent({}, 'post'), []);
-  assert.match(summarizePings(user.pings), /posts <@111>/);
-  assert.equal(summarizePings({}), '');
+  assert.match(summarizePings(user.pings, 'discord'), /posts <@111>/);
+  assert.equal(summarizePings({}, 'discord'), '');
   assert.equal(anyPingFlagSet({ post: null, follow: null, reply: null }), false);
   assert.equal(anyPingFlagSet({ post: true }), true);
   assert.equal(anyPingFlagSet({ follow: false }), true);
+});
+
+test('parseTgXwatch reads add/ping/off and event words', () => {
+  assert.deepEqual(parseTgXwatch(['add', 'omisnista', 'ping', 'posts']), {
+    sub: 'add', handle: 'omisnista', ping: true, off: false,
+    flags: { post: true, follow: null, reply: null },
+  });
+  assert.equal(parseTgXwatch(['ping', '@Omisnista', 'follows', 'replies']).flags.follow, true);
+  assert.equal(parseTgXwatch(['ping', 'omisnista', 'off']).off, true);
+  assert.equal(parseTgXwatch(['list']).sub, 'list');
+});
+
+test('pingTargetFromTelegramMessage prefers text_mention then reply then author', () => {
+  assert.equal(pingTargetFromTelegramMessage({ from: { id: 1 }, entities: [{ type: 'text_mention', user: { id: 9 } }] }), '9');
+  assert.equal(pingTargetFromTelegramMessage({ from: { id: 1 }, reply_to_message: { from: { id: 8, is_bot: false } } }), '8');
+  assert.equal(pingTargetFromTelegramMessage({ from: { id: 1 } }), '1');
+});
+
+test('getRadarDestinations on Telegram uses SUMMARY_CHANNEL_ID not a Discord default', () => {
+  const dests = getRadarDestinations({
+    PLATFORM: 'telegram',
+    SUMMARY_CHANNEL_ID: '-1002228772173',
+  });
+  assert.equal(dests[0].channelId, '-1002228772173');
+  assert.equal(destFromChannelId('-1002228772173', {
+    PLATFORM: 'telegram',
+    SUMMARY_CHANNEL_ID: '-1002228772173',
+  }), DEST_PERSONAL);
 });

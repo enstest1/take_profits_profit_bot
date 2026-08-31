@@ -1,9 +1,9 @@
 /**
- * xradar/pings.js — per-handle Discord @ pings.
+ * xradar/pings.js — per-handle Discord/Telegram @ pings.
  *
- * Cards always post. Pings are extra: each watched X account can @ one or more
- * Discord users only on the events they opted into (posts, replies/comments,
- * follows). No ping config = silent cards, same as today.
+ * Cards always post. Pings are extra: each watched X account can mention one
+ * or more chat users only on the events they opted into (posts, replies,
+ * follows). No ping config = silent cards.
  */
 
 export const PING_EVENTS = ['post', 'reply', 'follow'];
@@ -22,8 +22,21 @@ function clonePings(pings) {
   return next;
 }
 
+function platformOf(platform) {
+  return platform || process.env.PLATFORM || 'discord';
+}
+
+/** Visible mention token for this platform. Telegram needs a text_mention-style link. */
+export function formatUserMention(id, platform) {
+  const p = platformOf(platform);
+  if (p === 'telegram') {
+    return '<a href="tg://user?id=' + id + '">ping</a>';
+  }
+  return '<@' + id + '>';
+}
+
 /**
- * Merge one Discord user's event flags onto a ping map.
+ * Merge one chat user's event flags onto a ping map.
  * true = add them, false = remove them, null/undefined = leave that event alone.
  * clear=true with a userId drops that user from every event; without a userId wipes all.
  *
@@ -48,7 +61,7 @@ export function applyPingPatch(pings, userId, flags = {}) {
   return next;
 }
 
-/** Discord user ids that should be mentioned for this event. */
+/** Chat user ids that should be mentioned for this event. */
 export function pingIdsForEvent(watchedUser, event) {
   const ids = watchedUser?.pings?.[event];
   return Array.isArray(ids) ? [...new Set(ids.map(String).filter(Boolean))] : [];
@@ -58,23 +71,28 @@ export function pingIdsForEvent(watchedUser, event) {
  * Payload for sendChannelAlert opts. Empty object when nobody opted in —
  * the card still posts, just without an @.
  * @param {string[]} userIds
+ * @param {string} [platform]
  */
-export function mentionPayload(userIds) {
+export function mentionPayload(userIds, platform) {
   const ids = [...new Set((userIds || []).map(String).filter(Boolean))];
   if (!ids.length) return {};
+  const p = platformOf(platform);
+  const content = ids.map((id) => formatUserMention(id, p)).join(' ');
+  if (p === 'telegram') return { content };
   return {
-    content: ids.map((id) => '<@' + id + '>').join(' '),
+    content,
     allowedMentions: { users: ids, parse: [] },
   };
 }
 
 /** Human line for /xwatch replies and the list embed. */
-export function summarizePings(pings) {
+export function summarizePings(pings, platform) {
   const parts = [];
+  const p = platformOf(platform);
   for (const k of PING_EVENTS) {
     const ids = [...new Set((pings?.[k] || []).map(String).filter(Boolean))];
     if (!ids.length) continue;
-    parts.push(EVENT_LABEL[k] + ' ' + ids.map((id) => '<@' + id + '>').join(' '));
+    parts.push(EVENT_LABEL[k] + ' ' + ids.map((id) => formatUserMention(id, p)).join(' '));
   }
   return parts.length ? parts.join(' · ') : '';
 }

@@ -26,6 +26,10 @@ export async function sendChannelAlert(client, channelId, embed, label = 'alert'
       payload.photoBuffer = files[0].attachment;
       payload.photoName = files[0].name || 'chart.png';
     }
+    // HTML mentions from xradar/xfeed pings — prepended so the card still posts without them.
+    if (opts.content) {
+      payload.text = opts.content + (payload.text ? '\n' + payload.text : '');
+    }
     const ok = await sendTelegramMessage(channelId, payload);
     if (ok) bumpAlertSent();
     return ok;

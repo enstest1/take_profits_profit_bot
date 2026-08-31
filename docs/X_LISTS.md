@@ -67,3 +67,15 @@ Newest Discord (`2091751648930771381` → `1536498340609527922`) is still staged
 - `/xwatch` adds: **not** the curated list (`XFEED_SYNC_LIST_ID=none`). Create a second empty list on X and send the URL.
 
 Env is in [NEW_INSTANCE.md appendix D](NEW_INSTANCE.md#appendix-d--blackjack--memecoin-tp-50x--nft-tp--x). Inventory: [`instances.json`](instances.json).
+
+## Golden Pocket (Telegram)
+
+Own bot (`Golden_Pocket_TG_Take_Profits_Bot`, `PLATFORM=telegram`). Isolated `/data` — `/xwatch` here does **not** touch Discord lists (`XFEED_SYNC_LIST_ID=none`). Posts/replies come from each handle's timeline (`XFEED_WATCH_RADAR_HANDLES=true`). Cards go to `SUMMARY_CHANNEL_ID`.
+
+```
+/xwatch add omisnista ping posts
+/xwatch ping omisnista follows replies
+/xwatch ping omisnista off
+```
+
+Reply to someone when running `/xwatch ping` to @ them instead of yourself. Admins only.

@@ -1,5 +1,5 @@
 {
-  "updated": "2026-08-28",
+  "updated": "2026-08-30",
   "warning": "Bitcernals + TP4APH = ONE Discord bot and ONE /data volume. Collective, Genny, and Blackjack get their own bot. Never put their channels on perpetual-clarity.",
   "communities": [
     {
@@ -55,9 +55,9 @@
     {
       "id": "blackjack",
       "name": "Blackjack",
-      "subtitle": "own bot · env set · first deploy",
+      "subtitle": "own bot · /xwatch → Wire list",
       "platform": "Discord",
-      "headerNote": "STAGED",
+      "headerNote": "LIVE",
       "sharedBot": null,
       "headerFill": "#FCE4D6",
       "headerStroke": "#E67E22"
@@ -419,17 +419,17 @@
     },
     "blackjack": {
       "identity": {
-        "status": "staged",
+        "status": "live",
         "lines": [
           "OWN bot — never prod token",
           "TPB_Blackjack",
           "Discord_Blackjack",
-          "guild 855079121822285864 · token + OpenSea + X cookies set"
+          "guild 855079121822285864"
         ]
       },
       "memecoin": {
-        "status": "waiting",
-        "chip": "volume 75%–50x ready",
+        "status": "live",
+        "chip": "volume 75%–50x",
         "lines": [
           "MILESTONE_MAX_TIER=50",
           "paste CAs in 1542691157413466172",
@@ -437,8 +437,8 @@
         ]
       },
       "nfttp": {
-        "status": "waiting",
-        "chip": "NFT ready",
+        "status": "live",
+        "chip": "NFT 20x",
         "lines": [
           "NFT_TP_ENABLED=true",
           "1542691157413466172"
@@ -449,20 +449,20 @@
         "lines": ["MINT_SCANNER_ENABLED=false"]
       },
       "xfeed": {
-        "status": "waiting",
+        "status": "live",
         "chip": "X posts · #wire",
         "lines": [
           "1543083831601528862",
           "list 2093191150190399663",
-          "XFEED_SYNC_LIST_ID=none until empty /xwatch list"
+          "/xwatch adds to this list"
         ]
       },
       "xradar": {
-        "status": "waiting",
+        "status": "live",
         "lines": [
           "1543083831601528862",
           "own /data store",
-          "/xwatch — not added to curated list yet"
+          "/xwatch → list 2093191150190399663"
         ]
       },
       "early": {
@@ -478,7 +478,7 @@
         "lines": ["leave KB unset"]
       },
       "ops": {
-        "status": "waiting",
+        "status": "live",
         "lines": [
           "LOG + SUMMARY",
           "1542691157413466172",
@@ -514,12 +514,22 @@
         "lines": ["unset"]
       },
       "xfeed": {
-        "status": "off",
-        "lines": ["unset"]
+        "status": "live",
+        "chip": "xwatch posts",
+        "lines": [
+          "XFEED_WATCH_RADAR_HANDLES",
+          "chat = SUMMARY_CHANNEL_ID",
+          "/xwatch add · ping posts"
+        ]
       },
       "xradar": {
-        "status": "off",
-        "lines": ["unset"]
+        "status": "live",
+        "chip": "follows + pings",
+        "lines": [
+          "same chat as memecoin",
+          "admins /xwatch ping",
+          "SYNC_LIST_ID=none"
+        ]
       },
       "early": {
         "status": "off",
