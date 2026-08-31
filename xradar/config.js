@@ -100,6 +100,18 @@ export function getRadarDestinations(env = process.env) {
   return dests.filter((d) => d.channelId);
 }
 
+/**
+ * Dest whose follow/post channel is this Discord channel.
+ * Unknown channels return null so we never look up the personal ping list by accident.
+ * @param {string} channelId
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function destFromChannelId(channelId, env = process.env) {
+  const id = String(channelId || '');
+  if (!id) return null;
+  return getRadarDestinations(env).find((d) => d.channelId === id)?.id || null;
+}
+
 export function getXRadarConfig() {
   const dests = getRadarDestinations();
   const channelId = dests[0]?.channelId || '';

@@ -44,6 +44,12 @@ export function listWatchedHandles(dest = DEST_PERSONAL) {
   return Object.keys(listWatched(dest));
 }
 
+export function getWatched(handle, dest = DEST_PERSONAL) {
+  const key = normalizeXHandle(handle);
+  if (!key) return null;
+  return read(dest).users[key] || null;
+}
+
 /**
  * Persist a handle after X resolved it. Returns { added, user } — added=false
  * when the handle was already watched on this dest.
@@ -71,6 +77,24 @@ export function addWatched(handle, profile, dest = DEST_PERSONAL) {
     xr.users[key] = user;
     console.log('[xradar] watching @' + key + ' dest=' + dest + (user.id ? ' id=' + user.id : ''));
     return { added: true, user };
+  });
+}
+
+/**
+ * Replace ping map on an already-watched handle. Returns { ok, user } or not_watched.
+ * @param {string} handle
+ * @param {string} dest
+ * @param {object} pings
+ */
+export function setWatchedPings(handle, dest, pings) {
+  const key = normalizeXHandle(handle);
+  if (!key) return { ok: false, error: 'bad_handle' };
+  return update(dest, (xr) => {
+    const existing = xr.users[key];
+    if (!existing) return { ok: false, error: 'not_watched' };
+    existing.pings = pings || {};
+    console.log('[xradar] pings @' + key + ' dest=' + dest + ' ' + JSON.stringify(existing.pings));
+    return { ok: true, user: existing };
   });
 }
 

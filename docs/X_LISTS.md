@@ -29,6 +29,16 @@ X_COOKIES_JSON=<required>
 
 `/xwatch` is guild-scoped. In Bitcernals it watches the **personal** store and syncs the **personal** X list. In tp4aph (`KB_GUILD_ID`) it watches the **empty TP** store and syncs [the TP list](https://x.com/i/lists/2055706691925381501). Personal follows (including `@BIL_818`) never post into trenches.
 
+Cards always post (follows, posts, replies, comments). Pings are optional per account:
+
+```
+/xwatch add handle:omisnista ping:@you posts:true
+/xwatch ping handle:omisnista user:@you posts:true follows:false replies:false
+/xwatch ping handle:omisnista off:true
+```
+
+`posts:true` with a ping user and no other flags is the default — @ on tweets only, silent on follows/replies.
+
 ## TP4APH trenches (live on prod bot)
 
 Same Railway service as Bitcernals (`perpetual-clarity` / `take_profits_profit_bot`) — **not** a second Discord bot. A second service in the same server would double-track CAs.

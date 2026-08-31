@@ -14,6 +14,9 @@ import { startXFeedPoller } from './poller.js';
 import { buildTweetCard } from './card.js';
 import { sendChannelAlert } from '../channelAlert.js';
 import { getCredentials } from '../xradar/xClient.js';
+import { destFromChannelId } from '../xradar/config.js';
+import { getWatched } from '../xradar/store.js';
+import { pingIdsForEvent, mentionPayload } from '../xradar/pings.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -52,7 +55,10 @@ export function startXFeed(client) {
       });
       for (const channelId of channels) {
         try {
-          await sendChannelAlert(client, channelId, embed, 'xfeed');
+          const destId = destFromChannelId(channelId);
+          const watched = destId ? getWatched(item.tweet?.username, destId) : null;
+          const pingOpts = mentionPayload(pingIdsForEvent(watched, kind));
+          await sendChannelAlert(client, channelId, embed, 'xfeed', null, pingOpts);
           await sleep(1200);
         } catch (e) {
           console.error('[xfeed] post failed for ' + item.tweet.id + ' → ' + channelId + ':', e.message);

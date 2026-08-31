@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'assert/strict';
 import { diffFollowing, capNewcomers } from '../xradar/diff.js';
 import { buildFollowCard, clip, profileUrl, pfpUrl } from '../xradar/card.js';
-import { parseHandleList, parseChannelIdList, destFromGuildId, DEST_TP, DEST_PERSONAL } from '../xradar/config.js';
+import { parseHandleList, parseChannelIdList, destFromGuildId, destFromChannelId, DEST_TP, DEST_PERSONAL } from '../xradar/config.js';
 import { targetFeedListId, describeListSync, listIdForDest } from '../xradar/listSync.js';
+import { applyPingPatch, mentionPayload, pingIdsForEvent, summarizePings, anyPingFlagSet } from '../xradar/pings.js';
 import { parseGraphQLTweet, extractListTimelineTweets } from '../xradar/xClient.js';
 
 const user = (id, username) => ({
@@ -226,4 +227,50 @@ test('extractListTimelineTweets walks list URT instructions and dedupes pins', (
     },
   });
   assert.deepEqual(tweets.map((t) => t.id), ['111', '444', '555']);
+});
+
+test('destFromChannelId maps radar channels and ignores unknown ones', () => {
+  const env = {
+    XRADAR_CHANNEL_ID: '1541180128564875304',
+    XRADAR_TP_CHANNEL_ID: '1452152164699869298',
+  };
+  assert.equal(destFromChannelId('1541180128564875304', env), DEST_PERSONAL);
+  assert.equal(destFromChannelId('1452152164699869298', env), DEST_TP);
+  assert.equal(destFromChannelId('999', env), null);
+});
+
+test('applyPingPatch adds, removes, and clears per Discord user', () => {
+  const once = applyPingPatch({}, '111', { post: true });
+  assert.deepEqual(once.post, ['111']);
+  assert.deepEqual(once.follow, []);
+  const two = applyPingPatch(once, '222', { post: true, follow: true });
+  assert.deepEqual(two.post, ['111', '222']);
+  assert.deepEqual(two.follow, ['222']);
+  const drop = applyPingPatch(two, '111', { post: false });
+  assert.deepEqual(drop.post, ['222']);
+  const clearOne = applyPingPatch(drop, '222', { clear: true });
+  assert.deepEqual(clearOne.post, []);
+  assert.deepEqual(clearOne.follow, []);
+  const wipe = applyPingPatch({ post: ['1'], reply: ['2'] }, '', { clear: true });
+  assert.deepEqual(wipe, { post: [], reply: [], follow: [] });
+});
+
+test('mentionPayload is empty without ids so cards stay silent', () => {
+  assert.deepEqual(mentionPayload([]), {});
+  assert.deepEqual(mentionPayload(null), {});
+  const payload = mentionPayload(['111', '111', '222']);
+  assert.equal(payload.content, '<@111> <@222>');
+  assert.deepEqual(payload.allowedMentions, { users: ['111', '222'], parse: [] });
+});
+
+test('pingIdsForEvent and summarizePings ignore unset events', () => {
+  const user = { pings: { post: ['111'], follow: [] } };
+  assert.deepEqual(pingIdsForEvent(user, 'post'), ['111']);
+  assert.deepEqual(pingIdsForEvent(user, 'follow'), []);
+  assert.deepEqual(pingIdsForEvent({}, 'post'), []);
+  assert.match(summarizePings(user.pings), /posts <@111>/);
+  assert.equal(summarizePings({}), '');
+  assert.equal(anyPingFlagSet({ post: null, follow: null, reply: null }), false);
+  assert.equal(anyPingFlagSet({ post: true }), true);
+  assert.equal(anyPingFlagSet({ follow: false }), true);
 });

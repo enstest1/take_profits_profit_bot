@@ -36,8 +36,14 @@ export async function sendChannelAlert(client, channelId, embed, label = 'alert'
       DISCORD_SEND_TIMEOUT_MS,
       'channel.fetch ' + channelId,
     );
+    const payload = files && files.length ? { embeds: [embed], files } : { embeds: [embed] };
+    // Optional @mentions (xradar/xfeed pings). Cards still send when content is omitted.
+    if (opts.content) {
+      payload.content = opts.content;
+      if (opts.allowedMentions) payload.allowedMentions = opts.allowedMentions;
+    }
     await withTimeout(
-      channel.send(files && files.length ? { embeds: [embed], files } : { embeds: [embed] }),
+      channel.send(payload),
       DISCORD_SEND_TIMEOUT_MS,
       'channel.send ' + channelId,
     );

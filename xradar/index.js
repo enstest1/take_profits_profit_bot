@@ -11,9 +11,10 @@
 
 import { getCredentials } from './xClient.js';
 import { getXRadarConfig } from './config.js';
-import { seedHandles } from './store.js';
+import { seedHandles, getWatched } from './store.js';
 import { startXRadarPoller } from './monitor.js';
 import { buildFollowCard } from './card.js';
+import { pingIdsForEvent, mentionPayload } from './pings.js';
 import { sendChannelAlert } from '../channelAlert.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -46,10 +47,12 @@ export function startXRadar(client) {
   );
 
   startXRadarPoller(async (events) => {
-    for (const { watcher, followed, channelId } of events) {
+    for (const { watcher, followed, channelId, destId } of events) {
       try {
         const embed = buildFollowCard(watcher, followed);
-        await sendChannelAlert(client, channelId, embed, 'xradar');
+        const watched = destId ? getWatched(watcher?.username, destId) : null;
+        const pingOpts = mentionPayload(pingIdsForEvent(watched, 'follow'));
+        await sendChannelAlert(client, channelId, embed, 'xradar', null, pingOpts);
         await sleep(1200);
       } catch (e) {
         console.error('[xradar] post failed for @' + (followed?.username || '?') + ':', e.message);
