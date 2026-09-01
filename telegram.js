@@ -131,6 +131,7 @@ async function handleUpdate(update) {
       return;
     }
     if (parsed.cmd === '/xwatch') {
+      console.log('[tg] /xwatch from ' + userId + ' in ' + chatId + ' args=' + parsed.args.join(' '));
       const admin = await isChatAdmin(chatId, userId);
       if (!admin) {
         await sendTelegramMessage(chatId, { text: 'Admins only.' });
@@ -190,14 +191,30 @@ async function longPollLoop(startOffset) {
 }
 
 async function registerCommands() {
-  await tgApi('setMyCommands', {
-    commands: [
-      { command: 'calls', description: 'Show all tracked tokens and their current performance' },
-      { command: 'remove', description: 'Stop tracking a token (admins only)' },
-      { command: 'xwatch', description: 'Watch an X account for posts/follows (admins). Add ping posts to @ you.' },
-    ],
-  });
-  console.log('[tg] commands registered: /calls /remove /xwatch');
+  const commands = [
+    { command: 'calls', description: 'Show all tracked tokens' },
+    { command: 'remove', description: 'Stop tracking a token (admins)' },
+    { command: 'xwatch', description: 'Watch an X account: /xwatch add handle ping posts' },
+  ];
+  // Default scope is private chats only — groups need their own scopes or /xwatch never appears in the menu.
+  const scopes = [
+    null,
+    { type: 'all_private_chats' },
+    { type: 'all_group_chats' },
+    { type: 'all_chat_administrators' },
+  ];
+  const chatId = process.env.SUMMARY_CHANNEL_ID?.trim();
+  if (chatId) scopes.push({ type: 'chat', chat_id: chatId });
+
+  for (const scope of scopes) {
+    const params = scope ? { commands, scope } : { commands };
+    try {
+      await tgApi('setMyCommands', params);
+    } catch (e) {
+      console.error('[tg] setMyCommands failed for ' + (scope?.type || 'default') + ':', e.message);
+    }
+  }
+  console.log('[tg] commands registered: /calls /remove /xwatch (incl. group scopes)');
 }
 
 async function boot() {
