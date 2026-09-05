@@ -62,12 +62,13 @@ This is what makes single-`main` safe: half-finished work can merge without goin
 |---|---|---|---|---|
 | `MINT_SCANNER_ENABLED` | `mintscan/` chain-radar NFT mint alerts | **Unset = off** — explicit `false` optional | `true` | unset (off) |
 | `MINT_SCANNER_CHAIN` | — | — | `robinhood` | — |
-| `MINT_SCANNER_CHANNEL_IDS` | — | — | `1358929055604408465,1536502941924593827` | — |
+| `MINT_SCANNER_CHANNEL_IDS` | — | — | personal mirror `1536502941924593827` (nft-land is CA-muted in code) | — |
+| `CA_MUTE_CHANNEL_IDS` | token CA auto-track + token/mint cards mute | **Unset = #nft-land** `1358929055604408465`. `none`/`off` disables | default nft-land | n/a |
 | `MINT_SCANNER_DEBUG` | — | — | `true` | — |
 | `ALERT_CARDS_ENABLED` | `alertCards/` trencher milestone cards | **Unset = ON** (every Discord channel). Explicit `false` **required** on Telegram | `true` | **`false` (explicit)** |
 | `ALERT_CARDS_CHANNEL_ID` | — | unused (channel gate retired) | — | — |
 | `BLOCKED_CHANNEL_IDS` | global channel mute list (always read, no flag gate) | Default baked in as of `e438ae5` | `1536177376508121088` | n/a |
-| `XFEED_ENABLED` | `xfeed/` posts + replies from X lists | **Unset = off** | personal + TP trenches lists | **Golden Pocket `true`** (timelines via `/xwatch`) |
+| `XFEED_ENABLED` | `xfeed/` posts + replies from X lists | **Unset = off** | personal + TP trenches lists | **Golden Pocket `true`** (list [`2094619215005163531`](https://x.com/i/lists/2094619215005163531)) |
 | `XRADAR_ENABLED` | `xradar/` new-follow radar for `/xwatch` | **Unset = off** | personal `XRADAR_CHANNEL_ID` + TP `XRADAR_TP_CHANNEL_ID` (isolated stores) | **Golden Pocket `true`** |
 | `XFEED_ROUTES` | `listId:channelId` map | empty = use `XFEED_LIST_IDS` + `XFEED_CHANNEL_ID` | Bitcernals + TP trenches | — |
 | `NFT_TP_ENABLED` | `nfttp/` OpenSea floor take-profits (+75% / 1x–20x cards) | **Unset = off** | `true` → `#nft-land` `1358929055604408465` | unset (off) |

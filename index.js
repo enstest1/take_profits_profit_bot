@@ -81,6 +81,7 @@ import {
 } from './tracker.js';
 import { buildCallsEmbed } from './callsView.js';
 import { isBlockedChannel } from './blockedChannels.js';
+import { isCaMutedChannel } from './caMuteChannels.js';
 
 const client = new Client({
   intents: [
@@ -586,6 +587,13 @@ client.on('messageCreate', async (message) => {
     void handleNftMessage(message).catch((e) =>
       console.error('[nfttp] message error:', e.message),
     );
+  }
+
+  // #nft-land (and any CA_MUTE_CHANNEL_IDS) is NFT volume-bot only —
+  // pasted token CAs must not start tracking or pin alerts here.
+  if (isCaMutedChannel(message.channelId)) {
+    console.log('[ca-mute] skipped token auto-track in ' + message.channelId);
+    return;
   }
 
   const refs = extractAddresses(message.content);

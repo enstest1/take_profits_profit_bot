@@ -21,6 +21,7 @@ import { enrichWithB20 } from './b20.js';
 import { onAlreadyTracking, sendTrackingEmbed } from './autotrackHelpers.js';
 import { xHandleFromPair } from './xSocial.js';
 import { isBlockedChannel } from './blockedChannels.js';
+import { isCaMutedChannel } from './caMuteChannels.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -100,6 +101,11 @@ export function buildTrackedEntry(token, storageKey, message, ageStr) {
 
 export async function autoTrack(ref, message, seenThisMessage = new Set()) {
   if (isBlockedChannel(message.channelId)) return;
+  // NFT-land style channels keep the floor bot; token CAs stay untracked.
+  if (isCaMutedChannel(message.channelId)) {
+    console.log('[ca-mute] autoTrack skipped in ' + message.channelId);
+    return;
+  }
   const { chainId, raw } = ref;
   if (CHAINS[chainId]?.kind === 'evm') return autoTrackEvm(chainId, raw, message, seenThisMessage);
   return autoTrackSolana(raw, message, seenThisMessage);
@@ -240,7 +246,7 @@ export async function autoTrackSolana(address, message, seenThisMessage = new Se
   }
   if (!token) {
     console.log('[skip] ' + address.slice(0, 8) + '... — not found');
-    if (!shouldSilenceAlerts() && !isBlockedChannel(message.channelId)) {
+    if (!shouldSilenceAlerts() && !isBlockedChannel(message.channelId) && !isCaMutedChannel(message.channelId)) {
       await message.channel.send({
         embeds: [{
           color: 0xff4444,

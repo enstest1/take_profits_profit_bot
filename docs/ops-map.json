@@ -1,5 +1,5 @@
 {
-  "updated": "2026-08-30",
+  "updated": "2026-09-04",
   "warning": "Bitcernals + TP4APH = ONE Discord bot and ONE /data volume. Collective, Genny, and Blackjack get their own bot. Never put their channels on perpetual-clarity.",
   "communities": [
     {
@@ -119,7 +119,7 @@
         "lines": [
           "dev mirror channel",
           "1536502941924593827",
-          "same cards as nft-land"
+          "nft-land no longer mirrored"
         ]
       },
       "xfeed": {
@@ -191,20 +191,19 @@
       },
       "nfttp": {
         "status": "live",
-        "chip": "NFT · #nft-land",
+        "chip": "NFT volume · #nft-land",
         "lines": [
           "#nft-land",
           "1358929055604408465",
-          "NFT_TP_ENABLED=true"
+          "CA mute — no token track"
         ]
       },
       "mintscan": {
-        "status": "live",
-        "chip": "mint · #nft-land",
+        "status": "off",
         "lines": [
-          "#nft-land",
-          "1358929055604408465",
-          "+ personal mirror"
+          "nft-land is volume-bot only",
+          "mint cards stay on personal mirror",
+          "1536502941924593827"
         ]
       },
       "xfeed": {
@@ -515,11 +514,12 @@
       },
       "xfeed": {
         "status": "live",
-        "chip": "xwatch posts",
+        "chip": "X feed list",
         "lines": [
-          "XFEED_WATCH_RADAR_HANDLES",
+          "Golden Pocket X feed list",
+          "2094619215005163531",
           "chat = SUMMARY_CHANNEL_ID",
-          "/xwatch add · ping posts"
+          "posts / comments / replies"
         ]
       },
       "xradar": {
@@ -527,8 +527,8 @@
         "chip": "follows + pings",
         "lines": [
           "same chat as memecoin",
-          "admins /xwatch ping",
-          "SYNC_LIST_ID=none"
+          "admins /xwatch",
+          "syncs onto X feed list"
         ]
       },
       "early": {

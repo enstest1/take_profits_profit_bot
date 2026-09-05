@@ -13,6 +13,7 @@ import { formatB20Badge } from './b20.js';
 import { stampEntryValuation, logValuationAudit, valuationFromLive } from './valuationAudit.js';
 import { isAlertCardsEnabledForChannel, buildAutotrackPayload } from './alertCards/index.js';
 import { isBlockedChannel } from './blockedChannels.js';
+import { isCaMutedChannel } from './caMuteChannels.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -55,6 +56,10 @@ export function buildTrackingDescription(message, ageStr, token, db, storageKey)
 
 export async function sendTrackingEmbed(message, token, storageKey, db, buildEntryFn) {
   if (isBlockedChannel(message.channelId)) return null;
+  if (isCaMutedChannel(message.channelId)) {
+    console.log('[ca-mute] skipped tracking embed in ' + message.channelId);
+    return null;
+  }
 
   const ageStr = token.ageStr || null;
   const { chainId } = parseStorageKey(storageKey);

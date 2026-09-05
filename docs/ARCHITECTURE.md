@@ -78,12 +78,12 @@ flowchart TB
   bjBot["Blackjack bot<br/>TPB_Blackjack"]
   gpBot["Golden Pocket bot<br/>PLATFORM=telegram"]
   personal["Bitcernals<br/>your Discord · shared prod bot<br/>- volume · any CA chat<br/>- mint mirror<br/>- X posts + follows<br/>- early first-100  · beta"]
-  tp4aph["TP4APH<br/>OG Discord · same bot<br/>- volume · #trenches<br/>- NFT · #nft-land<br/>- mint · #nft-land<br/>- X posts + follows · #trenches<br/>- /ask · waiting"]
+  tp4aph["TP4APH<br/>OG Discord · same bot<br/>- volume · #trenches<br/>- NFT volume · #nft-land<br/>- X posts + follows · #trenches<br/>- /ask · waiting"]
   newest["Newest Discord<br/>extra X route on prod bot<br/>- X posts · say go-live  · staged"]
   collective["Collective<br/>own bot · waiting on token<br/>- volume ready  · waiting<br/>- NFT ready  · waiting<br/>- X posts + follows ready  · waiting"]
   genny["Genny Run<br/>own bot · no channels yet<br/>- nothing live yet"]
   blackjack["Blackjack<br/>own bot · /xwatch → Wire list<br/>- volume 75%–50x<br/>- NFT 20x<br/>- X posts · #wire"]
-  golden["Golden Pocket<br/>Telegram prize · own bot<br/>- volume LIVE<br/>- xwatch posts<br/>- fib on · cards off"]
+  golden["Golden Pocket<br/>Telegram prize · own bot<br/>- volume LIVE<br/>- X feed list<br/>- fib on · cards off"]
   git --> prod
   git --> collBot
   git --> gennyBot

@@ -5,6 +5,7 @@ import { bumpAlertSent } from './cycleStats.js';
 import { logValuationAudit } from './valuationAudit.js';
 import { renderEmbedForTelegram, sendTelegramMessage } from './notifier.js';
 import { isBlockedChannel } from './blockedChannels.js';
+import { isCaMutedChannel } from './caMuteChannels.js';
 import { withTimeout } from './asyncTimeout.js';
 
 const DISCORD_SEND_TIMEOUT_MS = Number(process.env.DISCORD_SEND_TIMEOUT_MS) || 20_000;
@@ -64,6 +65,11 @@ export async function sendTokenAlert(client, db, mint, embed, alertKind, label =
   const entry = db.tokens[mint];
   if (entry?.canary) {
     console.log('[canary] suppressed alert for ' + mint);
+    return false;
+  }
+  // Tokens first seen in #nft-land must not keep posting CA cards there.
+  if (isCaMutedChannel(entry?.alertChannelId)) {
+    console.log('[ca-mute] skipped token ' + (label || alertKind) + ' in ' + entry.alertChannelId);
     return false;
   }
   const snap = entry?.lastValuation || null;

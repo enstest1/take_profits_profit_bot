@@ -18,6 +18,7 @@ import { getMintScannerConfig } from './config.js';
 import { startMintScanner } from './monitor.js';
 import { buildMintCard } from './card.js';
 import { isBlockedChannel } from '../blockedChannels.js';
+import { isCaMutedChannel } from '../caMuteChannels.js';
 
 export async function startMintScan(client) {
   const cfg = getMintScannerConfig();
@@ -47,7 +48,8 @@ export async function startMintScan(client) {
     }
 
     for (const channelId of cfg.channelIds) {
-      if (isBlockedChannel(channelId)) continue;
+      // #nft-land is NFT volume-bot only — drop cards stay on the personal mirror.
+      if (isBlockedChannel(channelId) || isCaMutedChannel(channelId)) continue;
       const channel = await client.channels.fetch(channelId);
       const prevId = messageIds[channelId] || null;
 

@@ -143,7 +143,7 @@ https://discord.com/oauth2/authorize?client_id=CLIENT_ID&permissions=117760&scop
 - Server Settings → Roles → the bot's role → disable View Channel at server level if you want a deny-by-default
 - Then on `#calls` (and `#bot-logs`) → Edit Channel → Permissions → allow the bot View / Send / Embed / Attach / History
 
-If the bot can see every channel, **every CA in every channel gets auto-tracked** except IDs in `BLOCKED_CHANNEL_IDS`.
+If the bot can see every channel, **every CA in every channel gets auto-tracked** except IDs in `BLOCKED_CHANNEL_IDS` and `CA_MUTE_CHANNEL_IDS` (TP4APH `#nft-land` is muted by default so only the NFT volume bot posts there).
 
 ### 5. Confirm the bot is online-capable
 
@@ -505,8 +505,8 @@ GitHub is connected to `enstest1/take_profits_profit_bot` branch `main`. `DISCOR
 | Service | `Discord_Blackjack` |
 | Volume | `discord_blackjack-volume` → `/data` |
 | Guild / app | `855079121822285864` / `1542749619107405895` |
-| X posts list | [`2093191150190399663`](https://x.com/i/lists/2093191150190399663) (curated — you manage members) |
-| X /xwatch list | **create an empty list on X and send the URL** — until then `XFEED_SYNC_LIST_ID=none` so `/xwatch` does not write the curated list |
+| X posts list | [`2093191150190399663`](https://x.com/i/lists/2093191150190399663) — `/xwatch` adds members here for posts, replies, comments |
+| X /xwatch list | same list (`XFEED_SYNC_LIST_ID=2093191150190399663`) |
 | X feed + follows | `1543083831601528862` |
 | Memecoin TP + NFT TP | `1542691157413466172` (paste CAs and OpenSea links in this channel) |
 
@@ -517,10 +517,10 @@ CLIENT_ID=1542749619107405895
 GUILD_ID=855079121822285864
 XFEED_ENABLED=true
 XRADAR_ENABLED=true
-XFEED_WATCH_RADAR_HANDLES=true
+XFEED_WATCH_RADAR_HANDLES=false
 XFEED_LIST_IDS=2093191150190399663
 XFEED_ROUTES=2093191150190399663:1543083831601528862
-XFEED_SYNC_LIST_ID=none
+XFEED_SYNC_LIST_ID=2093191150190399663
 XFEED_CHANNEL_ID=1543083831601528862
 XRADAR_CHANNEL_ID=1543083831601528862
 X_SCANNER_CHANNEL_ID=1543083831601528862
@@ -541,6 +541,6 @@ Memecoin take-profits (+75%, then 1x–50x) fire in **whatever channel the CA wa
 
 **Still needed before connecting GitHub:** `DISCORD_TOKEN` on `Discord_Blackjack` only (`CLIENT_ID` + `GUILD_ID` are already set), plus `OPENSEA_API_KEY` and `X_COOKIES_JSON` (same values as Collective/prod — not the Discord token). Then Settings → Source → `enstest1/take_profits_profit_bot` branch `main`.
 
-When the empty `/xwatch` list exists, set `XFEED_SYNC_LIST_ID=<newListId>` and `XFEED_ROUTES=<newListId>:1543083831601528862,2093191150190399663:1543083831601528862` (xwatch list first so `/xwatch` writes there; curated list still polled for posts). Then you can turn `XFEED_WATCH_RADAR_HANDLES` back to `false`.
+`/xwatch` writes this list. List poll is the posts/replies source (`XFEED_WATCH_RADAR_HANDLES=false`).
 
 Do **not** set Blackjack's channel on `perpetual-clarity`. Do not reuse the prod bot token.

@@ -46,7 +46,7 @@ Ladder is identical to tokens: **+75%** in `[1.75×, 2×)`, then **1x card at 2�
 
 ## Enable (dark on `main` until you flip it)
 
-TP4APH home is **#nft-land** (`1358929055604408465`). Auto-track and milestone cards stay in that channel.
+TP4APH home is **#nft-land** (`1358929055604408465`). NFT auto-track (OpenSea URLs) and floor milestone cards stay in that channel. Token CAs pasted there are ignored — `#nft-land` is on the default `CA_MUTE_CHANNEL_IDS` list so the memecoin volume bot never tracks or posts there.
 
 ```env
 NFT_TP_ENABLED=true
@@ -60,7 +60,7 @@ NFT_TP_CHANNEL_IDS=1358929055604408465   # #nft-land (code default if unset)
 
 **Do not** turn `NFT_TP_TRACK_CONTRACTS` on in a token trench — bare `0x` stays DexScreener auto-track. Collection **URLs** never collide with CAs.
 
-Dedicated NFT Discord (own token, own `/data`, own channels) is the same pattern as [NEW_INSTANCE.md](NEW_INSTANCE.md): new `TPB_<Community>` service, `NFT_TP_ENABLED=true`. Token auto-track still runs on that process unless you keep CAs out of those channels.
+Dedicated NFT Discord (own token, own `/data`, own channels) is the same pattern as [NEW_INSTANCE.md](NEW_INSTANCE.md): new `TPB_<Community>` service, `NFT_TP_ENABLED=true`. Add that community's NFT channel to `CA_MUTE_CHANNEL_IDS` if token CAs must stay out.
 
 ## Commands
 

@@ -4,9 +4,10 @@ import { CFG } from './config.js';
 import { sendChannelAlert } from '../channelAlert.js';
 import { saveDB } from '../dbStore.js';
 import { isBlockedChannel } from '../blockedChannels.js';
+import { isCaMutedChannel } from '../caMuteChannels.js';
 
 export async function recordChannelSighting(client, db, mint, channelId, now = Date.now()) {
-  if (isBlockedChannel(channelId)) return;
+  if (isBlockedChannel(channelId) || isCaMutedChannel(channelId)) return;
   const entry = db.tokens[mint];
   if (!entry) return;
 
@@ -40,6 +41,10 @@ export async function recordChannelSighting(client, db, mint, channelId, now = D
       )
       .setTimestamp();
 
+    if (isCaMutedChannel(entry.alertChannelId)) {
+      console.log('[ca-mute] skipped confluence in ' + entry.alertChannelId);
+      return;
+    }
     const sent = await sendChannelAlert(client, entry.alertChannelId, embed, 'confluence');
     if (sent) {
       saveDB(db);

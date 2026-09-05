@@ -23,6 +23,7 @@ import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
 import { evaluateFib } from './fib/evaluate.js';
 import { evaluatePersonalPositions } from './positions.js';
 import { sendChannelAlert, sendTokenAlert } from './channelAlert.js';
+import { isCaMutedChannel } from './caMuteChannels.js';
 import { isAlertCardsEnabledForChannel, sendMilestoneAlert } from './alertCards/index.js';
 import { configuredMaxMilestoneTier, normalizeTakeProfitTiers } from './milestones.js';
 import { indexXAccount } from './xSocial.js';
@@ -307,6 +308,11 @@ function maybeRunDailyArchive(db) {
 }
 
 async function sendEmbed(client, channelId, embed, label = 'alert') {
+  // Bonding / graduation cards follow the token's OG channel — mute #nft-land.
+  if (isCaMutedChannel(channelId)) {
+    console.log('[ca-mute] skipped ' + label + ' in ' + channelId);
+    return false;
+  }
   return sendChannelAlert(client, channelId, embed, label);
 }
 

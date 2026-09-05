@@ -24,6 +24,7 @@ import { pairFromDexUrl, updateFibWatch } from './store.js';
 import { buildFibEmbed, chartFileName } from './embeds.js';
 import { renderFibChart } from './chartRender.js';
 import { sendTokenAlert, sendChannelAlert } from '../channelAlert.js';
+import { isCaMutedChannel } from '../caMuteChannels.js';
 import { saveDB } from '../dbStore.js';
 
 const inFlightDetect = new Set();
@@ -276,8 +277,13 @@ export async function evaluateFibWatch(client, key, watch, live) {
     symbol: watch.symbol || key.slice(0, 8),
     name: watch.name || watch.symbol || 'Unknown',
     dexUrl: watch.dexUrl || live?.dexUrl || null,
-    send: (embed, kind, files) =>
-      sendChannelAlert(client, watch.alertChannelId, embed, 'fib', files),
+    send: (embed, kind, files) => {
+      if (isCaMutedChannel(watch.alertChannelId)) {
+        console.log('[ca-mute] skipped fib watch in ' + watch.alertChannelId);
+        return false;
+      }
+      return sendChannelAlert(client, watch.alertChannelId, embed, 'fib', files);
+    },
   };
 
   const snapshotRev = watch.rev || 0;
