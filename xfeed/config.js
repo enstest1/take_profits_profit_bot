@@ -47,6 +47,7 @@ export function parseFeedRoutes(env = process.env) {
   const channelId =
     env.XFEED_CHANNEL_ID?.trim() ||
     env.X_SCANNER_CHANNEL_ID?.trim() ||
+    ((env.PLATFORM || '').toLowerCase() === 'telegram' ? env.SUMMARY_CHANNEL_ID?.trim() : '') ||
     '';
   const listIds = String(env.XFEED_LIST_IDS || '')
     .split(',')

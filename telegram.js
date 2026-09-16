@@ -12,8 +12,13 @@ import { startHttpServer } from './httpServer.js';
 import { startXRadar } from './xradar/index.js';
 import { startXFeed } from './xfeed/index.js';
 import { handleTgXwatch } from './xradar/tgCommands.js';
+import { xwatchNeedsHandlePrompt, xwatchPendingPrefix, xwatchArgsFromPendingReply } from './xradar/tgParse.js';
 
 const tgClient = {};
+
+/** Telegram slash menus send /xwatch with no args — wait for the next reply with the handle. */
+const pendingXwatch = new Map(); // `${chatId}:${userId}` → { until, prefix }
+const PENDING_XWATCH_MS = 5 * 60 * 1000;
 
 function botBaseUrl() {
   return 'https://api.telegram.org/bot' + process.env.TELEGRAM_BOT_TOKEN;
@@ -56,6 +61,39 @@ function buildMessageShim(msg) {
     },
     client: tgClient,
   };
+}
+
+function pendingXwatchKey(chatId, userId) {
+  return chatId + ':' + userId;
+}
+
+async function promptXwatchHandle(chatId, userId, args) {
+  pendingXwatch.set(pendingXwatchKey(chatId, userId), {
+    until: Date.now() + PENDING_XWATCH_MS,
+    prefix: xwatchPendingPrefix(args),
+  });
+  await sendTelegramMessage(chatId, {
+    text:
+      'Telegram\'s / menu cannot take an X handle.\n\n' +
+      '<b>Reply to this message</b> with the account, e.g. <code>omisnista</code>\n' +
+      'Or: <code>omisnista ping posts</code> to @ you only when they tweet.\n' +
+      'List watched accounts with <code>/xwatch list</code>.',
+    replyMarkup: { force_reply: true, selective: true },
+  });
+}
+
+async function consumePendingXwatch(chatId, userId, msg) {
+  const key = pendingXwatchKey(chatId, userId);
+  const pending = pendingXwatch.get(key);
+  if (!pending) return false;
+  if (!msg.reply_to_message) return false;
+  pendingXwatch.delete(key);
+  if (Date.now() > pending.until) return false;
+  const args = xwatchArgsFromPendingReply(pending.prefix, msg.text);
+  if (!args) return false;
+  console.log('[tg] /xwatch pending from ' + userId + ' args=' + args.join(' '));
+  await handleTgXwatch(chatId, msg, args);
+  return true;
 }
 
 function parseCommand(text) {
@@ -137,11 +175,19 @@ async function handleUpdate(update) {
         await sendTelegramMessage(chatId, { text: 'Admins only.' });
         return;
       }
+      if (xwatchNeedsHandlePrompt(parsed.args)) {
+        await promptXwatchHandle(chatId, userId, parsed.args);
+        return;
+      }
       await handleTgXwatch(chatId, msg, parsed.args);
       return;
     }
     return;
   }
+
+  const chatId = String(msg.chat.id);
+  const userId = String(msg.from?.id || '');
+  if (await consumePendingXwatch(chatId, userId, msg)) return;
 
   const shim = buildMessageShim(msg);
   if (shim.author.bot) return;
@@ -194,7 +240,7 @@ async function registerCommands() {
   const commands = [
     { command: 'calls', description: 'Show all tracked tokens' },
     { command: 'remove', description: 'Stop tracking a token (admins)' },
-    { command: 'xwatch', description: 'Watch an X account: /xwatch add handle ping posts' },
+    { command: 'xwatch', description: 'Watch an X account — reply with the handle after tapping' },
   ];
   // Default scope is private chats only — groups need their own scopes or /xwatch never appears in the menu.
   const scopes = [

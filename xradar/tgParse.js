@@ -2,9 +2,11 @@
  * xradar/tgParse.js — parse `/xwatch …` text commands for Telegram.
  *
  * Discord uses slash options; Telegram is one line:
- *   /xwatch add omisnista ping posts
- *   /xwatch ping omisnista follows replies
- *   /xwatch ping omisnista off
+ *   /xwatch pelpa333
+ *   /xwatch pelpa333 posts
+ *   /xwatch pelpa333 ping posts
+ *   /xwatch ping pelpa333 follows replies
+ *   /xwatch ping pelpa333 off
  */
 
 const EVENT_WORDS = {
@@ -26,8 +28,9 @@ const SUBS = new Set(['add', 'remove', 'list', 'ping']);
  */
 export function parseTgXwatch(args) {
   const tokens = (args || []).map((s) => String(s || '').trim()).filter(Boolean);
-  const first = (tokens[0] || 'list').replace(/^@/, '').toLowerCase();
-  const sub = SUBS.has(first) ? first : 'list';
+  const first = (tokens[0] || '').replace(/^@/, '').toLowerCase();
+  // Bare `/xwatch pelpa333` is add-everything. Only `list`/`ping`/`remove`/`add` are verbs.
+  const sub = !tokens.length ? 'list' : SUBS.has(first) ? first : 'add';
   const rest = SUBS.has(first) ? tokens.slice(1) : tokens;
 
   const flags = { post: null, follow: null, reply: null };
@@ -47,13 +50,38 @@ export function parseTgXwatch(args) {
     }
     if (EVENT_WORDS[w]) {
       flags[EVENT_WORDS[w]] = true;
-      ping = true;
       continue;
     }
     handles.push(w);
   }
 
   return { sub, handle: handles[0] || '', ping, off, flags };
+}
+
+/** True when Telegram's slash menu fired /xwatch with no handle — prompt instead of listing. */
+export function xwatchNeedsHandlePrompt(args) {
+  if (!args?.length) return true;
+  const parsed = parseTgXwatch(args);
+  if (parsed.sub === 'list') return false;
+  return !parsed.handle;
+}
+
+/** Prefix stored while we wait for a ForceReply handle (empty menu → add). */
+export function xwatchPendingPrefix(args) {
+  if (!args?.length) return ['add'];
+  return args;
+}
+
+/** Combine the pending prefix with the user's reply text. */
+export function xwatchArgsFromPendingReply(prefix, text) {
+  const tokens = String(text || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!tokens.length) return null;
+  const first = tokens[0].replace(/^@/, '').toLowerCase();
+  if (SUBS.has(first)) return tokens;
+  return [...(prefix || ['add']), ...tokens];
 }
 
 /**

@@ -9,6 +9,7 @@ Posts/comments come from an **X list**. Follows come from **`/xwatch`**, isolate
 | Env ready, wait on token | Blackjack | [`2093191150190399663`](https://x.com/i/lists/2093191150190399663) posts; `/xwatch` list pending | `1543083831601528862` | **New instance** — [NEW_INSTANCE.md](NEW_INSTANCE.md) appendix D | xfeed + follows in X channel; memecoin/NFT TP in `1542691157413466172` |
 | **LIVE** | TP4APH trenches | [`2055706691925381501`](https://x.com/i/lists/2055706691925381501) | `1452152164699869298` | Prod `take_profits_profit_bot` | xfeed from this list; follow cards from empty `db.xRadarTp` until `/xwatch` **in tp4aph** |
 | Staged — say "go live" | Newest Discord | [`2091751648930771381`](https://x.com/i/lists/2091751648930771381) | `1536498340609527922` | Prod bot, extra `XFEED_ROUTES` row | xfeed |
+| **LIVE** | Golden Pocket TG | [`2094619215005163531`](https://x.com/i/lists/2094619215005163531) **X feed list** (posts/comments/replies) | Telegram `SUMMARY_CHANNEL_ID` | `Golden_Pocket_TG_Take_Profits_Bot` | xfeed from this list; `/xwatch` is the **follow radar** and syncs members onto this list |
 
 ## Personal (now)
 
@@ -70,7 +71,31 @@ Env is in [NEW_INSTANCE.md appendix D](NEW_INSTANCE.md#appendix-d--blackjack--me
 
 ## Golden Pocket (Telegram)
 
-Own bot (`Golden_Pocket_TG_Take_Profits_Bot`, `PLATFORM=telegram`). Isolated `/data` — `/xwatch` here does **not** touch Discord lists (`XFEED_SYNC_LIST_ID=none`). Posts/replies come from each handle's timeline (`XFEED_WATCH_RADAR_HANDLES=true`). Cards go to `SUMMARY_CHANNEL_ID`.
+Own bot (`Golden_Pocket_TG_Take_Profits_Bot`, `PLATFORM=telegram`). Isolated `/data` — never Discord lists.
+
+Two X surfaces, same as Discord:
+
+| What | Name | Source |
+|---|---|---|
+| Follows (new follow cards) | **follow radar** | `/xwatch` → `db.xRadar` |
+| Posts / comments / replies | **Golden Pocket X feed list** | [`2094619215005163531`](https://x.com/i/lists/2094619215005163531) |
+
+`/xwatch add` watches for follows **and** adds the account to that X feed list so xfeed can poll posts. The cookie account in `X_COOKIES_JSON` must **own** the list (same cookies as Discord prod if this list lives on that X account).
+
+The Telegram `/` menu cannot take a handle — tapping `/xwatch` prompts you to **reply** with e.g. `omisnista` or `omisnista ping posts`. Type `/xwatch list` to see watched accounts.
+
+```env
+XFEED_ENABLED=true
+XRADAR_ENABLED=true
+XFEED_WATCH_RADAR_HANDLES=false
+XFEED_LIST_IDS=2094619215005163531
+XFEED_SYNC_LIST_ID=2094619215005163531
+XFEED_ROUTES=2094619215005163531:-1002228772173
+XFEED_CHANNEL_ID=-1002228772173
+XRADAR_CHANNEL_ID=-1002228772173
+```
+
+Chat IDs are `SUMMARY_CHANNEL_ID` on Railway (`-1002228772173` for this group).
 
 ```
 /xwatch add omisnista ping posts

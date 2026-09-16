@@ -80,12 +80,47 @@ export function addWatched(handle, profile, dest = DEST_PERSONAL) {
   });
 }
 
-/**
- * Replace ping map on an already-watched handle. Returns { ok, user } or not_watched.
- * @param {string} handle
- * @param {string} dest
- * @param {object} pings
- */
+/** Default: posts + comments + new follows. Extra words on /xwatch narrow this. */
+export function watchScopeFromFlags(flags) {
+  const post = flags?.post === true;
+  const follow = flags?.follow === true;
+  const reply = flags?.reply === true;
+  if (!post && !follow && !reply) return { post: true, follow: true, reply: true };
+  return { post, follow, reply };
+}
+
+/** Missing `watch` on old records means every card type. */
+export function watchedAllowsEvent(user, event) {
+  const w = user?.watch;
+  if (!w) return true;
+  if (event === 'post') return w.post !== false;
+  if (event === 'reply') return w.reply !== false;
+  if (event === 'follow') return w.follow !== false;
+  return true;
+}
+
+export function summarizeWatch(watch) {
+  const w = watch || { post: true, follow: true, reply: true };
+  const parts = [];
+  if (w.post) parts.push('posts');
+  if (w.follow) parts.push('follows');
+  if (w.reply) parts.push('comments');
+  if (parts.length === 3) return 'all';
+  return parts.join(' · ') || 'none';
+}
+
+export function setWatchedWatch(handle, dest, watch) {
+  const key = normalizeXHandle(handle);
+  if (!key) return { ok: false, error: 'bad_handle' };
+  return update(dest, (xr) => {
+    const existing = xr.users[key];
+    if (!existing) return { ok: false, error: 'not_watched' };
+    existing.watch = watch || { post: true, follow: true, reply: true };
+    console.log('[xradar] watch @' + key + ' dest=' + dest + ' ' + JSON.stringify(existing.watch));
+    return { ok: true, user: existing };
+  });
+}
+
 export function setWatchedPings(handle, dest, pings) {
   const key = normalizeXHandle(handle);
   if (!key) return { ok: false, error: 'bad_handle' };

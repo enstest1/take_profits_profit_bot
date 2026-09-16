@@ -51,8 +51,8 @@
     {
       "id": "blackjack",
       "community": "Blackjack",
-      "status": "staged",
-      "notes": "GitHub connected to main. DISCORD_TOKEN, OpenSea, and X cookies set. First deploy was queued; do not mark live until SUCCESS + bot online.",
+      "status": "live",
+      "notes": "Own bot on main. /xwatch syncs list 2093191150190399663 for posts, replies, comments.",
       "railway": {
         "project": "TPB_Blackjack",
         "projectId": "c97da9e7-9c1b-409d-b855-75bfa032913d",
@@ -79,10 +79,9 @@
           "purpose": "posts + comments → 1543083831601528862"
         },
         "xwatchList": {
-          "id": null,
-          "url": null,
-          "purpose": "empty list /xwatch adds to — create on X and send the URL",
-          "untilThen": "XFEED_SYNC_LIST_ID=none so /xwatch does not pollute the curated list; follows live in /data"
+          "id": "2093191150190399663",
+          "url": "https://x.com/i/lists/2093191150190399663",
+          "purpose": "same list — /xwatch adds members for posts, replies, comments"
         }
       },
       "flags": {
@@ -91,7 +90,7 @@
         "NFT_TP_ENABLED": "true",
         "NFT_TP_MAX_TIER": "20",
         "XFEED_ENABLED": "true",
-        "XFEED_WATCH_RADAR_HANDLES": "true",
+        "XFEED_WATCH_RADAR_HANDLES": "false",
         "XRADAR_ENABLED": "true",
         "MINT_SCANNER_ENABLED": "false",
         "BLOCKED_CHANNEL_IDS": "none",

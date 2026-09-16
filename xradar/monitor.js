@@ -8,7 +8,7 @@
 
 import { getUserByScreenName, getFollowingPage, XRateLimitError, warmClientTransaction } from './xClient.js';
 import { getXRadarConfig, getRadarDestinations } from './config.js';
-import { listWatched, getSnapshot, writeSnapshot, addWatched } from './store.js';
+import { listWatched, getSnapshot, writeSnapshot, addWatched, watchedAllowsEvent } from './store.js';
 import { diffFollowing, capNewcomers } from './diff.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -40,6 +40,9 @@ async function resolveProfile(handle, cached, dest) {
 }
 
 async function sweepHandle(handle, cached, cfg, dest) {
+  if (!watchedAllowsEvent(cached, 'follow')) {
+    return { handle, posted: [], baseline: false, skipped: true };
+  }
   const profile = await resolveProfile(handle, cached, dest);
   if (!profile.id) throw new Error('no user id for @' + handle);
 

@@ -15,7 +15,7 @@ import { buildTweetCard } from './card.js';
 import { sendChannelAlert } from '../channelAlert.js';
 import { getCredentials } from '../xradar/xClient.js';
 import { destFromChannelId } from '../xradar/config.js';
-import { getWatched } from '../xradar/store.js';
+import { getWatched, watchedAllowsEvent } from '../xradar/store.js';
 import { pingIdsForEvent, mentionPayload } from '../xradar/pings.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -57,6 +57,7 @@ export function startXFeed(client) {
         try {
           const destId = destFromChannelId(channelId);
           const watched = destId ? getWatched(item.tweet?.username, destId) : null;
+          if (watched && !watchedAllowsEvent(watched, kind)) continue;
           const pingOpts = mentionPayload(pingIdsForEvent(watched, kind));
           await sendChannelAlert(client, channelId, embed, 'xfeed', null, pingOpts);
           await sleep(1200);

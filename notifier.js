@@ -103,12 +103,12 @@ async function tgFetch(method, body, { formData = null } = {}) {
 
 /**
  * @param {string|number} chatId
- * @param {{ text: string, photoUrl?: string|null, photoBuffer?: Buffer|Uint8Array|null, photoName?: string }} payload
+ * @param {{ text: string, photoUrl?: string|null, photoBuffer?: Buffer|Uint8Array|null, photoName?: string, replyMarkup?: object|null }} payload
  * @returns {Promise<boolean>}
  */
 export async function sendTelegramMessage(
   chatId,
-  { text, photoUrl = null, photoBuffer = null, photoName = 'chart.png' },
+  { text, photoUrl = null, photoBuffer = null, photoName = 'chart.png', replyMarkup = null },
 ) {
   try {
     if (!process.env.TELEGRAM_BOT_TOKEN) {
@@ -172,12 +172,14 @@ export async function sendTelegramMessage(
       return true;
     }
 
-    const res = await tgFetch('sendMessage', {
+    const body = {
       chat_id: chatId,
       text: fullText,
       parse_mode: 'HTML',
       disable_web_page_preview: true,
-    });
+    };
+    if (replyMarkup) body.reply_markup = replyMarkup;
+    const res = await tgFetch('sendMessage', body);
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       console.error('[tg] sendMessage failed:', res.status, body.slice(0, 200));

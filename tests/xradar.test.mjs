@@ -5,7 +5,8 @@ import { buildFollowCard, clip, profileUrl, pfpUrl } from '../xradar/card.js';
 import { parseHandleList, parseChannelIdList, destFromGuildId, destFromChannelId, getRadarDestinations, DEST_TP, DEST_PERSONAL } from '../xradar/config.js';
 import { targetFeedListId, describeListSync, listIdForDest } from '../xradar/listSync.js';
 import { applyPingPatch, mentionPayload, pingIdsForEvent, summarizePings, anyPingFlagSet } from '../xradar/pings.js';
-import { parseTgXwatch, pingTargetFromTelegramMessage } from '../xradar/tgParse.js';
+import { watchScopeFromFlags, watchedAllowsEvent, summarizeWatch } from '../xradar/store.js';
+import { parseTgXwatch, pingTargetFromTelegramMessage, xwatchNeedsHandlePrompt, xwatchPendingPrefix, xwatchArgsFromPendingReply } from '../xradar/tgParse.js';
 import { parseGraphQLTweet, extractListTimelineTweets } from '../xradar/xClient.js';
 
 const user = (id, username) => ({
@@ -283,13 +284,43 @@ test('pingIdsForEvent and summarizePings ignore unset events', () => {
 });
 
 test('parseTgXwatch reads add/ping/off and event words', () => {
-  assert.deepEqual(parseTgXwatch(['add', 'omisnista', 'ping', 'posts']), {
-    sub: 'add', handle: 'omisnista', ping: true, off: false,
+  assert.deepEqual(parseTgXwatch(['add', 'pelpa333', 'ping', 'posts']), {
+    sub: 'add', handle: 'pelpa333', ping: true, off: false,
     flags: { post: true, follow: null, reply: null },
   });
+  assert.deepEqual(parseTgXwatch(['pelpa333']), {
+    sub: 'add', handle: 'pelpa333', ping: false, off: false,
+    flags: { post: null, follow: null, reply: null },
+  });
+  assert.equal(parseTgXwatch(['pelpa333', 'posts']).flags.post, true);
+  assert.equal(parseTgXwatch(['pelpa333', 'posts']).ping, false);
   assert.equal(parseTgXwatch(['ping', '@Omisnista', 'follows', 'replies']).flags.follow, true);
   assert.equal(parseTgXwatch(['ping', 'omisnista', 'off']).off, true);
   assert.equal(parseTgXwatch(['list']).sub, 'list');
+});
+
+test('watchScopeFromFlags defaults to all card types and narrows when words are set', () => {
+  assert.deepEqual(watchScopeFromFlags({}), { post: true, follow: true, reply: true });
+  assert.deepEqual(watchScopeFromFlags({ post: true, follow: null, reply: null }), {
+    post: true, follow: false, reply: false,
+  });
+  assert.equal(summarizeWatch({ post: true, follow: true, reply: true }), 'all');
+  assert.equal(summarizeWatch({ post: true, follow: false, reply: false }), 'posts');
+  assert.equal(watchedAllowsEvent({}, 'follow'), true);
+  assert.equal(watchedAllowsEvent({ watch: { post: true, follow: false, reply: false } }, 'follow'), false);
+  assert.equal(watchedAllowsEvent({ watch: { post: true, follow: false, reply: false } }, 'post'), true);
+});
+
+test('xwatchNeedsHandlePrompt treats empty slash-menu /xwatch as a prompt', () => {
+  assert.equal(xwatchNeedsHandlePrompt([]), true);
+  assert.equal(xwatchNeedsHandlePrompt(['add']), true);
+  assert.equal(xwatchNeedsHandlePrompt(['ping']), true);
+  assert.equal(xwatchNeedsHandlePrompt(['list']), false);
+  assert.equal(xwatchNeedsHandlePrompt(['add', 'omisnista']), false);
+  assert.equal(xwatchNeedsHandlePrompt(['pelpa333']), false);
+  assert.deepEqual(xwatchPendingPrefix([]), ['add']);
+  assert.deepEqual(xwatchArgsFromPendingReply(['add'], 'omisnista ping posts'), ['add', 'omisnista', 'ping', 'posts']);
+  assert.deepEqual(xwatchArgsFromPendingReply(['add'], 'ping omisnista off'), ['ping', 'omisnista', 'off']);
 });
 
 test('pingTargetFromTelegramMessage prefers text_mention then reply then author', () => {

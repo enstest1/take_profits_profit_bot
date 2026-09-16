@@ -2,12 +2,12 @@
  * xradar/tgCommands.js — Telegram /xwatch add|remove|list|ping
  *
  * Same dest store as Discord /xwatch, but this service's /data is Golden Pocket
- * only. XFEED_SYNC_LIST_ID=none so we never write Discord X lists from TG.
+ * only. /xwatch follows; the Golden Pocket X feed list is posts/comments/replies.
  */
 
 import { normalizeXHandle } from '../xSocial.js';
 import { getUserByScreenName } from './xClient.js';
-import { addWatched, removeWatched, listWatched, getWatched, setWatchedPings } from './store.js';
+import { addWatched, removeWatched, listWatched, getWatched, setWatchedPings, setWatchedWatch, watchScopeFromFlags, summarizeWatch } from './store.js';
 import { DEST_PERSONAL } from './config.js';
 import { applyPingPatch, summarizePings, anyPingFlagSet } from './pings.js';
 import { syncHandleToFeedList, unsyncHandleFromFeedList } from './listSync.js';
@@ -33,10 +33,10 @@ function applyPings(handle, discordUserId, flags) {
 
 function listLineForTg(sync) {
   if (sync?.skipped === 'no_list') {
-    return 'Posts/replies come from their timeline (Telegram has no X list).';
+    return 'Follow radar updated. Posts/comments need the Golden Pocket X feed list (XFEED_SYNC_LIST_ID).';
   }
-  if (sync?.ok && sync.already) return 'Already on the posts list.';
-  if (sync?.ok) return 'Added to the posts list.';
+  if (sync?.ok && sync.already) return 'Already on the Golden Pocket X feed list (posts/comments/replies).';
+  if (sync?.ok) return 'Added to the Golden Pocket X feed list (posts/comments/replies).';
   if (sync?.ok === false) return 'Follow radar updated, but list sync failed: ' + (sync.error || 'unknown');
   return '';
 }
@@ -58,7 +58,9 @@ async function handleAdd(chatId, msg, parsed) {
   const handle = normalizeXHandle(parsed.handle);
   if (!handle) {
     return sendTelegramMessage(chatId, {
-      text: 'Usage: <code>/xwatch add handle ping posts</code>\nExample: <code>/xwatch add omisnista ping posts</code>',
+      text:
+        'Usage: <code>/xwatch pelpa333</code> (posts + comments + follows)\n' +
+        'Narrow: <code>/xwatch pelpa333 posts</code> or <code>/xwatch pelpa333 follows</code>',
     });
   }
 
@@ -71,19 +73,28 @@ async function handleAdd(chatId, msg, parsed) {
   }
 
   const { added } = addWatched(handle, profile, DEST);
-  const sync = await syncHandleToFeedList(profile, DEST);
+  const scope = watchScopeFromFlags(parsed.flags);
+  setWatchedWatch(handle, DEST, scope);
   const who = profile.username || handle;
   const extra = [];
-  extra.push(listLineForTg(sync));
+  extra.push('Watching: ' + summarizeWatch(scope) + '.');
 
-  const resolved = flagsOrPostsDefault(parsed.flags, parsed.ping);
+  // Posts/comments come from the X feed list; follows-only skips that list.
+  if (scope.post || scope.reply) {
+    extra.push(listLineForTg(await syncHandleToFeedList(profile, DEST)));
+  } else {
+    await unsyncHandleFromFeedList(profile, DEST);
+    extra.push('Not on the X feed list (follows only).');
+  }
+
+  const resolved = parsed.ping ? flagsOrPostsDefault(parsed.flags, true) : null;
   if (resolved) {
     extra.push(applyPings(handle, pingTargetFromTelegramMessage(msg), resolved));
   }
 
   const head = added
-    ? 'Watching <b>@' + who + '</b>. Cards always post.'
-    : 'Already watching <b>@' + who + '</b>.';
+    ? 'Watching <b>@' + who + '</b>.'
+    : 'Updated <b>@' + who + '</b>.';
   return sendTelegramMessage(chatId, { text: [head, ...extra.filter(Boolean)].join('\n') });
 }
 
@@ -145,13 +156,17 @@ async function handleList(chatId) {
   const handles = Object.keys(users);
   if (!handles.length) {
     return sendTelegramMessage(chatId, {
-      text: 'No X accounts yet. <code>/xwatch add omisnista ping posts</code> to start.',
+      text: 'No X accounts yet. <code>/xwatch pelpa333</code> to watch posts, comments, and follows.',
     });
   }
   const lines = handles.map((h) => {
     const u = users[h];
+    const scope = summarizeWatch(u.watch);
     const pings = summarizePings(u.pings, 'telegram');
-    return '• <b>@' + (u.username || h) + '</b>' + (pings ? '\n  ping ' + pings : '');
+    return (
+      '• <b>@' + (u.username || h) + '</b> · ' + scope +
+      (pings ? '\n  ping ' + pings : '')
+    );
   });
   return sendTelegramMessage(chatId, {
     text: '<b>X radar — ' + handles.length + ' account' + (handles.length === 1 ? '' : 's') + '</b>\n' + lines.join('\n'),
