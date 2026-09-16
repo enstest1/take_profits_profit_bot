@@ -120,6 +120,8 @@ export const FIB = {
     robinhood: envStr('FIB_GT_NETWORK_ROBINHOOD', 'robinhood'),
     ink: envStr('FIB_GT_NETWORK_INK', 'ink'),
     hype: envStr('FIB_GT_NETWORK_HYPE', 'hyperevm'),
+    arc: envStr('FIB_GT_NETWORK_ARC', 'arc'),
+    bsc: envStr('FIB_GT_NETWORK_BSC', 'bsc'),
   },
 
   /** GeckoTerminal free tier ≈ 30 calls/min → min spacing between calls. */

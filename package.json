@@ -21,7 +21,7 @@
     "test:kb": "node knowledge-bot/scripts/smoke.mjs",
     "xwatch:sync-list": "node scripts/sync-xwatch-to-list.mjs",
     "test:alert-cards": "node --test tests/alertCards/*.test.mjs",
-    "test:chains": "node --test tests/chains.test.mjs",
+    "test:chains": "node --test tests/chains.test.mjs tests/pairSelect.test.mjs",
     "test:poll": "node --test tests/pollHealth.test.mjs tests/pollLoop.test.mjs tests/rateLimiter.test.mjs",
     "alert-cards:revert": "node scripts/revert-alert-cards.mjs",
     "trencher:mock": "node scripts/send-trencher-mock-alerts.mjs",

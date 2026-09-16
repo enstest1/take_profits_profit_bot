@@ -16,7 +16,7 @@ import { recordCycle, markSummaryPosted, markCycleStarted } from './cycleStats.j
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import { rebuildCallerStats, updateCallerStatsForUser } from './callerStats.js';
 import { deriveLifecycle, lifecyclePrefix } from './signals/lifecycle.js';
-import { currentMultipleFromLive } from './signals/mult.js';
+import { currentMultipleFromLive, multiplesFromLive } from './signals/mult.js';
 import { evaluateVelocity } from './signals/velocity.js';
 import { evaluateLiquidityDivergence } from './signals/liquidity.js';
 import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
@@ -717,18 +717,50 @@ export async function pollTokens(client) {
     let dexProcessed = 0;
     for (const [chainId, items] of byChain) {
       const addrs = items.map((i) => i.address);
-      const liveMap = await batchFetch(chainId, addrs);
+      const pinnedPairs = {};
+      for (const { key, address } of items) {
+        const pin = db.tokens[key]?.pairAddress;
+        if (pin) pinnedPairs[address] = pin;
+      }
+      const liveMap = await batchFetch(chainId, addrs, { pinnedPairs });
       let chainProcessed = 0;
+      const missedHot = [];
       for (const { key, address } of items) {
         const lookup = chainId === 'solana' ? address : address.toLowerCase();
-        const live = liveMap.get(lookup);
-        if (!live) continue;
+        const live = liveMap.get(lookup) || liveMap.get(address) || liveMap.get(String(address).toLowerCase());
+        if (!live) {
+          if (pollTierForEntry(db.tokens[key]) === 'hot') missedHot.push({ key, address });
+          continue;
+        }
         try {
           await processTokenWithLive(client, key, db, live, milestoneOptsFor(key));
           chainProcessed += 1;
           dexProcessed += 1;
         } catch (e) {
           console.error('[poll] Error processing ' + key + ':', e.message);
+        }
+      }
+      // Batch miss used to silently skip a cycle (3+ min lag, missed 1x cards).
+      const fallbackCap = 20;
+      if (missedHot.length) {
+        console.warn(
+          '[poll] ' + chainId + ' batch missed ' + missedHot.length +
+          ' hot token(s) — single-fetch fallback (cap ' + fallbackCap + ')',
+        );
+      }
+      for (const { key, address } of missedHot.slice(0, fallbackCap)) {
+        try {
+          const dex = await fetchDexPairOnChain(chainId, address, {
+            retries: 1,
+            timeoutMs: 8_000,
+            pinnedPair: db.tokens[key]?.pairAddress,
+          });
+          if (!dex?.price) continue;
+          await processTokenWithLive(client, key, db, dex, milestoneOptsFor(key));
+          chainProcessed += 1;
+          dexProcessed += 1;
+        } catch (e) {
+          console.error('[poll] hot fallback ' + key + ':', e.message);
         }
       }
       chainBatchCounts[chainId] = chainProcessed + '/' + items.length;
@@ -818,41 +850,12 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     return;
   }
 
-  if (
-    livePrice == null ||
-    !Number.isFinite(livePrice) ||
-    livePrice <= 0 ||
-    callPx == null ||
-    !Number.isFinite(callPx) ||
-    callPx <= 0
-  ) {
+  const { currentMultiple } = multiplesFromLive(db.tokens[address], live);
+
+  if (currentMultiple == null) {
     db.tokens[address].lastChecked = Date.now();
     return;
   }
-
-  const multPrice = livePrice / callPx;
-
-  let multMcap = null;
-  const mcapCall =
-    entry.mcapAtCall == null || entry.mcapAtCall === '' ? null : Number(entry.mcapAtCall);
-  const mcapLive =
-    live.marketCap == null || live.marketCap === '' ? null : Number(live.marketCap);
-  if (
-    mcapCall != null &&
-    Number.isFinite(mcapCall) &&
-    mcapCall > 0 &&
-    mcapLive != null &&
-    Number.isFinite(mcapLive) &&
-    mcapLive > 0
-  ) {
-    multMcap = mcapLive / mcapCall;
-  }
-
-  // Use the higher of price× vs call or mcap× vs call so FDV/MCap moves still count when Dex price lags.
-  const currentMultiple =
-    multMcap != null && Number.isFinite(multMcap) && multMcap > 0
-      ? Math.max(multPrice, multMcap)
-      : multPrice;
 
   // Trench reset — below call (~0.99×) for 3 polls, max once per 24h; recovery uses highest-tier-only alerts.
   const milestonesFired = db.tokens[address].milestonesFired || [];
@@ -984,7 +987,10 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
   const storedPeak = Number(entry.peakMultiple) || 1;
   const newPeak = Math.max(storedPeak, currentMultiple);
   maybeResetRetestOnAth(db.tokens[address], storedPeak, newPeak);
-  db.tokens[address].lastPrice = String(livePrice);
+  if (livePrice != null && Number.isFinite(livePrice) && livePrice > 0) {
+    db.tokens[address].lastPrice = String(livePrice);
+  }
+  if (live.pairAddress) db.tokens[address].pairAddress = live.pairAddress;
   db.tokens[address].lastVolume = live.volume24h || 0;
   db.tokens[address].lastChecked = Date.now();
   if (entry.xHandle === undefined && live.xHandle) {
@@ -1015,6 +1021,7 @@ async function processTokenWithLive(client, address, db, live, milestoneOpts = {
   if (!entry) return;
 
   stampEntryValuation(entry, live);
+  if (live.pairAddress) db.tokens[address].pairAddress = live.pairAddress;
 
   if (live.source === 'dexscreener' && entry.platform === 'pumpfun') {
     db.tokens[address].platform = 'dexscreener';

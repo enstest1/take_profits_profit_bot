@@ -1,19 +1,11 @@
-import { parseEnabledChains, CHAINS } from './chains.js';
+import { parseEnabledChains, CHAINS, chainIdFromDexScreenerSlug } from './chains.js';
 import { rateLimiter } from './rateLimiter.js';
 import { xHandleFromPair } from './xSocial.js';
 import { enrichLiveFromPair } from './valuationAudit.js';
+import { selectBestPair, tokenAddressFromPair, tokenIsBase, trackedTokenFromPool } from './pairSelect.js';
 
 function normalizeChainId(chainId) {
   return String(chainId || '').toLowerCase();
-}
-
-function pairInvolvesToken(pair, address) {
-  const target = String(address || '').toLowerCase();
-  if (!target) return true;
-  return (
-    pair.baseToken?.address?.toLowerCase() === target ||
-    pair.quoteToken?.address?.toLowerCase() === target
-  );
 }
 
 function tokenMetaFromPair(pair, address) {
@@ -36,15 +28,10 @@ function tokenMetaFromPair(pair, address) {
   };
 }
 
-function pickBestPair(pairs, { enabledChains, chainHint, tokenAddress } = {}) {
+function pickBestPair(pairs, { enabledChains, chainHint, tokenAddress, pinnedPair } = {}) {
   const allowed = new Set((enabledChains || parseEnabledChains()).map(normalizeChainId));
   let filtered = pairs.filter((p) => allowed.has(normalizeChainId(p.chainId)));
   if (filtered.length === 0) return null;
-
-  if (tokenAddress) {
-    const involving = filtered.filter((p) => pairInvolvesToken(p, tokenAddress));
-    if (involving.length > 0) filtered = involving;
-  }
 
   if (chainHint) {
     const hint = normalizeChainId(chainHint);
@@ -52,6 +39,10 @@ function pickBestPair(pairs, { enabledChains, chainHint, tokenAddress } = {}) {
     if (onHint.length > 0) filtered = onHint;
   }
 
+  const chainId = chainHint || filtered[0]?.chainId;
+  if (tokenAddress) {
+    return selectBestPair(filtered, tokenAddress, { chainId, pinnedPair });
+  }
   return filtered.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
 }
 
@@ -68,11 +59,13 @@ function pairToToken(pair, address) {
     chain,
     name: meta.name,
     symbol: meta.symbol,
-    price: pair.priceUsd != null ? String(pair.priceUsd) : null,
-    marketCap: pair.marketCap ?? null,
-    fdv: pair.fdv ?? null,
+    price: tokenIsBase(pair, address) && pair.priceUsd != null ? String(pair.priceUsd) : null,
+    marketCap: tokenIsBase(pair, address) ? pair.marketCap ?? null : null,
+    fdv: tokenIsBase(pair, address) ? pair.fdv ?? null : null,
     pairAddress: pair.pairAddress || null,
     volume24h: (pair.volume && pair.volume.h24) || 0,
+    volume: pair.volume || null,
+    priceChange: pair.priceChange || null,
     liquidity: (pair.liquidity && pair.liquidity.usd) || 0,
     buys24h: (pair.txns && pair.txns.h24 && pair.txns.h24.buys) || 0,
     sells24h: (pair.txns && pair.txns.h24 && pair.txns.h24.sells) || 0,
@@ -91,10 +84,13 @@ function pairToToken(pair, address) {
 export function extractDexScreenerRefs(text) {
   const refs = [];
   if (!text) return refs;
-  const re = /dexscreener\.com\/([a-z0-9]+)\/(0x[a-fA-F0-9]{40})/gi;
+  const re = /dexscreener\.com\/([a-z0-9_-]+)\/(0x[a-fA-F0-9]{40})/gi;
   let m;
   while ((m = re.exec(text)) !== null) {
-    refs.push({ chainId: m[1].toLowerCase(), address: m[2].toLowerCase() });
+    refs.push({
+      chainId: chainIdFromDexScreenerSlug(m[1]),
+      address: m[2].toLowerCase(),
+    });
   }
   return refs;
 }
@@ -102,11 +98,12 @@ export function extractDexScreenerRefs(text) {
 /** Lookup by liquidity pool / pair contract (DexScreener pairs endpoint). */
 export async function fetchDexPairFromPool(chainId, poolAddress, options = {}) {
   const chain = normalizeChainId(chainId);
+  const slug = CHAINS[chain]?.dexScreenerSlug || chain;
   const attempts = options.retries ?? 2;
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await rateLimiter.fetch(
-        'https://api.dexscreener.com/latest/dex/pairs/' + chain + '/' + poolAddress,
+        'https://api.dexscreener.com/latest/dex/pairs/' + slug + '/' + poolAddress,
         { signal: AbortSignal.timeout(options.timeoutMs ?? 12_000) },
       );
       if (!res.ok) continue;
@@ -114,8 +111,13 @@ export async function fetchDexPairFromPool(chainId, poolAddress, options = {}) {
       const pairs = data.pairs || [];
       if (pairs.length === 0) continue;
       const pair = pairs[0];
-      const tokenAddr = pair.baseToken?.address;
+      const tokenAddr = trackedTokenFromPool(pair, chain);
       if (!tokenAddr) continue;
+      // Inverted pool (SOL as base): priceUsd is SOL — look up the mint's own pairs.
+      if (!tokenIsBase(pair, tokenAddr)) {
+        const resolved = await fetchDexPairOnChain(chain, tokenAddr, options);
+        if (resolved) return resolved;
+      }
       const meta = tokenMetaFromPair(pair, tokenAddr);
       if (!meta.name && !meta.symbol) continue;
       return pairToToken(pair, tokenAddr);
@@ -129,11 +131,12 @@ export async function fetchDexPairFromPool(chainId, poolAddress, options = {}) {
 /** Chain-scoped token lookup (often faster / more reliable than /tokens/{address}). */
 export async function fetchDexPairOnChain(chainId, tokenAddress, options = {}) {
   const chain = normalizeChainId(chainId);
+  const slug = CHAINS[chain]?.dexScreenerSlug || chain;
   const attempts = options.retries ?? 2;
   for (let i = 0; i < attempts; i++) {
     try {
       const res = await rateLimiter.fetch(
-        'https://api.dexscreener.com/token-pairs/v1/' + chain + '/' + tokenAddress,
+        'https://api.dexscreener.com/token-pairs/v1/' + slug + '/' + tokenAddress,
         { signal: AbortSignal.timeout(options.timeoutMs ?? 12_000) },
       );
       if (res.status === 429) {
@@ -143,12 +146,12 @@ export async function fetchDexPairOnChain(chainId, tokenAddress, options = {}) {
       if (!res.ok) continue;
       const pairs = await res.json();
       if (!Array.isArray(pairs) || pairs.length === 0) continue;
-      const pair = pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0))[0];
-      const target = String(tokenAddress).toLowerCase();
-      let tokenAddr = pair.baseToken?.address;
-      if (pair.baseToken?.address?.toLowerCase() !== target && pair.quoteToken?.address?.toLowerCase() === target) {
-        tokenAddr = pair.quoteToken.address;
-      }
+      const pair = selectBestPair(pairs, tokenAddress, {
+        chainId: chain,
+        pinnedPair: options.pinnedPair,
+      });
+      if (!pair) continue;
+      const tokenAddr = tokenAddressFromPair(pair, tokenAddress);
       if (!tokenAddr) continue;
       const meta = tokenMetaFromPair(pair, tokenAddr);
       if (!meta.name && !meta.symbol) continue;
@@ -288,9 +291,11 @@ export async function resolveEvmChainToken(chainId, rawAddr) {
   if (res.ok) {
     const pairs = await res.json();
     if (Array.isArray(pairs) && pairs.length > 0) {
-      const best = pairs.reduce((a, b) =>
-        ((a.liquidity?.usd || 0) >= (b.liquidity?.usd || 0) ? a : b));
-      return { tokenAddress: best.baseToken.address.toLowerCase(), pair: best };
+      const best = selectBestPair(pairs, addr, { chainId });
+      const tokenAddress = best ? tokenAddressFromPair(best, addr) : null;
+      if (best && tokenAddress) {
+        return { tokenAddress: tokenAddress.toLowerCase(), pair: best };
+      }
     }
   }
 
@@ -301,12 +306,29 @@ export async function resolveEvmChainToken(chainId, rawAddr) {
   if (res.ok) {
     const data = await res.json();
     const pair = data?.pairs?.[0] || data?.pair;
-    if (pair?.baseToken?.address) {
-      console.log(
-        '[' + chainId + '] pool address resolved to token ' + pair.baseToken.address +
-        ' (input was pair ' + addr.slice(0, 10) + '…)',
-      );
-      return { tokenAddress: pair.baseToken.address.toLowerCase(), pair };
+    if (pair?.baseToken?.address || pair?.quoteToken?.address) {
+      let chosen = pair;
+      const tokenAddress = String(
+        trackedTokenFromPool(pair, chainId) || pair.baseToken?.address || '',
+      ).toLowerCase();
+      if (tokenAddress && !tokenIsBase(pair, tokenAddress)) {
+        const tpRes = await rateLimiter.fetch(
+          'https://api.dexscreener.com/token-pairs/v1/' + slug + '/' + tokenAddress,
+          { signal: AbortSignal.timeout(8_000) },
+        );
+        if (tpRes.ok) {
+          const list = await tpRes.json();
+          const better = selectBestPair(Array.isArray(list) ? list : [], tokenAddress, { chainId });
+          if (better) chosen = better;
+        }
+      }
+      if (tokenAddress) {
+        console.log(
+          '[' + chainId + '] pool address resolved to token ' + tokenAddress +
+          ' (input was pair ' + addr.slice(0, 10) + '…)',
+        );
+        return { tokenAddress, pair: chosen };
+      }
     }
   }
 

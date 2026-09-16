@@ -1,6 +1,6 @@
 /** Platform-neutral auto-track path — shared by Discord and Telegram shells. */
 import { shouldSilenceAlerts } from './alertGate.js';
-import { fetchDexPair, resolveEvmChainToken, tokenDataFromEvmPair } from './dexPair.js';
+import { fetchDexPair, resolveEvmChainToken, tokenDataFromEvmPair, fetchDexPairFromPool } from './dexPair.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import {
   loadDB,
@@ -182,6 +182,14 @@ export async function fetchTokenData(address, messageText = '', { autotrack = fa
     ...dexOpts,
   });
   if (dex?.name) return { ...dex, platform: 'dexscreener' };
+
+  // DexScreener Meteora/Raydium links paste the POOL address, not the mint.
+  // EVM already does pool→token; Solana used to miss these entirely.
+  const fromPool = await fetchDexPairFromPool('solana', address, dexOpts);
+  if (fromPool?.name) {
+    console.log('[autotrack] solana pool resolved to mint ' + (fromPool.address || '').slice(0, 8) + '…');
+    return { ...fromPool, platform: 'dexscreener' };
+  }
 
   const pump = await fetchPumpFun(address);
   if (pump) {

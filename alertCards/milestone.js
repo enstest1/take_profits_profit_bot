@@ -63,7 +63,7 @@ export async function buildMilestoneAlert({
   const liquidity = live?.liquidity ?? entry.liquidityAtCall ?? null;
   const links = linksForStorageKey(storageKey);
 
-  let windows = resolveVolumeWindows({ liveWindows: live?.volumeWindows });
+  let windows = resolveVolumeWindows({ pair: live, liveWindows: live?.volumeWindows });
   let chartFile = null;
 
   if (!skipChart) {
@@ -76,7 +76,11 @@ export async function buildMilestoneAlert({
       pairAddress: live?.pairAddress || entry.pairAddress,
     });
     chartFile = chart.chartFile;
-    windows = resolveVolumeWindows({ liveWindows: live?.volumeWindows, candles5m: chart.candles5m });
+    windows = resolveVolumeWindows({
+      pair: live,
+      liveWindows: live?.volumeWindows,
+      candles5m: chart.candles5m,
+    });
   }
 
   const description = [

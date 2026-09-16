@@ -8,9 +8,14 @@
 
 import { rateLimiter } from '../rateLimiter.js';
 import { CHAINS, enabledChains, isEvmAddress, isSolanaAddress } from '../chains.js';
+import { selectBestPair, trackedTokenFromPool } from '../pairSelect.js';
 
-function bestPair(pairs) {
+function bestPair(pairs, tokenAddress, chainId) {
   if (!Array.isArray(pairs) || !pairs.length) return null;
+  if (tokenAddress) {
+    const picked = selectBestPair(pairs, tokenAddress, { chainId });
+    if (picked) return picked;
+  }
   return pairs.reduce((a, b) => ((a.liquidity?.usd || 0) >= (b.liquidity?.usd || 0) ? a : b));
 }
 
@@ -42,8 +47,9 @@ async function poolToToken(chainId, addr) {
     if (!res.ok) return null;
     const data = await res.json();
     const pair = data?.pairs?.[0] || data?.pair;
-    if (!pair?.baseToken?.address) return null;
-    return { tokenAddress: pair.baseToken.address, pair };
+    if (!pair?.baseToken?.address && !pair?.quoteToken?.address) return null;
+    const tokenAddress = trackedTokenFromPool(pair, chainId) || pair.baseToken?.address;
+    return { tokenAddress, pair };
   } catch {
     return null;
   }
@@ -83,7 +89,7 @@ export async function resolveTokenForFib(rawInput, chainHint = null) {
         pairs = [flipped.pair];
       }
     }
-    const pair = bestPair(pairs);
+    const pair = bestPair(pairs, tokenAddress, chainId);
     if (pair) found.push({ chainId, tokenAddress, pair });
   }
 

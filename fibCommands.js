@@ -26,7 +26,7 @@ import { updateFibWatch, readFibWatch, describeStatus, pairFromDexUrl } from './
 import { renderFibChart } from './fib/chartRender.js';
 import { chartFileName } from './fib/embeds.js';
 import { loadDB, ensureDBSchema } from './dbStore.js';
-import { makeStorageKey, CHAINS, enabledChains, isEvmAddress } from './chains.js';
+import { makeStorageKey, CHAINS, enabledChains, isEvmAddress, slashChainChoices } from './chains.js';
 
 const TF_CHOICES = [
   { name: '1m', value: '1m' },
@@ -39,14 +39,7 @@ const MODE_CHOICES = [
   { name: 'standard — confirmed 1m closes (default)', value: 'standard' },
   { name: 'fast — instant on touch', value: 'fast' },
 ];
-const CHAIN_CHOICES = [
-  { name: 'solana', value: 'solana' },
-  { name: 'base', value: 'base' },
-  { name: 'ethereum', value: 'ethereum' },
-  { name: 'robinhood', value: 'robinhood' },
-  { name: 'ink', value: 'ink' },
-  { name: 'hype (HyperEVM)', value: 'hype' },
-];
+const CHAIN_CHOICES = slashChainChoices();
 
 export const fibtrackCommand = new SlashCommandBuilder()
   .setName('fibtrack')

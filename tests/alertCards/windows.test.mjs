@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   extractVolumeWindowsFromPair,
   windowsFrom5mCandles,
+  resolveVolumeWindows,
 } from '../../alertCards/windows.js';
 
 test('extractVolumeWindowsFromPair uses h1 and m5 proxies', () => {
@@ -28,4 +29,15 @@ test('windowsFrom5mCandles aggregates last N bars', () => {
   assert.ok(Math.abs(w[0].pct - 10) < 0.01);
   assert.equal(w[1].vol, 60);
   assert.equal(w[2].vol, 30);
+});
+
+test('resolveVolumeWindows uses Dex pair volumes when candles are missing', () => {
+  const live = {
+    volume: { h1: 2000, m5: 80 },
+    priceChange: { h1: 12, m5: 1 },
+  };
+  const w = resolveVolumeWindows({ pair: live });
+  assert.equal(w[0].label, '1h');
+  assert.equal(w[0].vol, 2000);
+  assert.equal(w[0].pct, 12);
 });

@@ -47,6 +47,29 @@ export const CHAINS = {
     label: 'HYPE',
     // DexScreener lists Hyperliquid HyperEVM pairs under /hyperevm/, not /hype/.
     dexScreenerSlug: 'hyperevm',
+    choiceName: 'hype (HyperEVM)',
+    addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
+  },
+  arc: {
+    id: 'arc',
+    kind: 'evm',
+    emoji: '⚪',
+    label: 'ARC',
+    authorName: 'Arc',
+    // Circle Arc L1 (USDC gas). DexScreener slug matches dexscreener.com/arc/.
+    dexScreenerSlug: 'arc',
+    addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
+  },
+  bsc: {
+    id: 'bsc',
+    kind: 'evm',
+    emoji: '🟡',
+    label: 'BNB',
+    authorName: 'BNB',
+    choiceName: 'bnb (BSC)',
+    // DexScreener chain id is `bsc`; some links still use /bnb/.
+    dexScreenerSlug: 'bsc',
+    dexScreenerAliases: ['bnb'],
     addressRegex: /\b0x[a-fA-F0-9]{40}\b/g,
   },
 };
@@ -55,7 +78,7 @@ export const CHAINS = {
 export const SUPPORTED_CHAINS = Object.keys(CHAINS);
 
 /** Legacy EVM chain ids (stored tokens only — not enabled for auto-track). */
-export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract', 'robinhood', 'ink', 'hype'];
+export const EVM_CHAINS = ['ethereum', 'base', 'bsc', 'abstract', 'robinhood', 'ink', 'hype', 'arc'];
 
 export function enabledChains() {
   return String(process.env.ENABLED_CHAINS || 'solana')
@@ -121,9 +144,37 @@ export function chainLabel(chain) {
 
 /** Title-case chain name for embed author rows (e.g. robinhood → Robinhood). */
 export function chainAuthorName(chainId) {
-  const label = CHAINS[String(chainId || 'solana').toLowerCase()]?.label;
+  const c = CHAINS[String(chainId || 'solana').toLowerCase()];
+  if (c?.authorName) return c.authorName;
+  const label = c?.label;
   if (!label) return String(chainId || 'solana');
   return label.charAt(0) + label.slice(1).toLowerCase();
+}
+
+/** Slash-command chain choices (Discord max 25). */
+export function slashChainChoices() {
+  return Object.values(CHAINS).map((c) => ({
+    name: c.choiceName || c.id,
+    value: c.id,
+  }));
+}
+
+/** Map a DexScreener URL slug (hyperevm, bnb) back to our registry id. */
+export function chainIdFromDexScreenerSlug(slug) {
+  const s = String(slug || '').toLowerCase();
+  for (const c of Object.values(CHAINS)) {
+    if (c.dexScreenerSlug === s || c.id === s) return c.id;
+    if (Array.isArray(c.dexScreenerAliases) && c.dexScreenerAliases.includes(s)) return c.id;
+  }
+  return s;
+}
+
+/** All URL slugs that should count as this chain on DexScreener. */
+export function dexScreenerSlugsFor(chainId) {
+  const chain = CHAINS[chainId];
+  if (!chain) return [chainId];
+  const slugs = [chain.dexScreenerSlug, chain.id, ...(chain.dexScreenerAliases || [])];
+  return [...new Set(slugs.filter(Boolean).map((x) => String(x).toLowerCase()))];
 }
 
 export function enabledChainsFooter() {
@@ -215,7 +266,7 @@ export function resolveArchivedKey(db, storageKey, rawInput) {
 }
 
 /** DexScreener URL slug for a chain (may differ from registry id, e.g. hype → hyperevm). */
-function dexScreenerSlugFor(chainId) {
+export function dexScreenerSlugFor(chainId) {
   return CHAINS[chainId]?.dexScreenerSlug || chainId;
 }
 
@@ -238,17 +289,20 @@ export function extractAddresses(text) {
   for (const chainId of enabledChains()) {
     const chain = CHAINS[chainId];
 
-    const dexSlug = dexScreenerSlugFor(chainId);
+    const dexSlugs = dexScreenerSlugsFor(chainId);
+    const dexSlug = dexSlugs[0];
 
     if (chain.kind === 'evm') {
-      const urlRe = new RegExp('dexscreener\\.com\\/' + dexSlug + '\\/(0x[a-fA-F0-9]{40})', 'gi');
-      let um;
-      while ((um = urlRe.exec(body)) !== null) {
-        const raw = um[1];
-        const dedupeKey = chainId + ':' + raw.toLowerCase();
-        if (seen.has(dedupeKey)) continue;
-        seen.add(dedupeKey);
-        found.push({ chainId, raw });
+      for (const slug of dexSlugs) {
+        const urlRe = new RegExp('dexscreener\\.com\\/' + slug + '\\/(0x[a-fA-F0-9]{40})', 'gi');
+        let um;
+        while ((um = urlRe.exec(body)) !== null) {
+          const raw = um[1];
+          const dedupeKey = chainId + ':' + raw.toLowerCase();
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          found.push({ chainId, raw });
+        }
       }
     }
 
