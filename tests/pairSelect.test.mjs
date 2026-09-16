@@ -64,6 +64,21 @@ test('recent volume beats a dead high-liq Meteora ghost', () => {
   assert.equal(picked.pairAddress, 'live');
 });
 
+test('Arc native USDC quote is recognized', () => {
+  const ARC_USDC = '0x3600000000000000000000000000000000000000';
+  const ARCAT = '0x07704B06981eA962b87296362a1281484d160000';
+  const p = {
+    pairAddress: 'arc-pool',
+    priceUsd: '0.002',
+    baseToken: { address: ARCAT, symbol: 'ARCAT' },
+    quoteToken: { address: ARC_USDC, symbol: 'USDC' },
+    liquidity: { usd: 200000 },
+    volume: { m5: 20000, h1: 500000, h24: 2e6 },
+  };
+  const picked = selectBestPair([p], ARCAT, { chainId: 'arc' });
+  assert.equal(picked.pairAddress, 'arc-pool');
+});
+
 test('trackedTokenFromPool returns the meme when SOL is listed as base', () => {
   const inverted = pair({ base: WSOL, quote: MINT });
   assert.equal(trackedTokenFromPool(inverted, 'solana'), MINT);

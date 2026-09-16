@@ -1,5 +1,5 @@
 {
-  "updated": "2026-08-28",
+  "updated": "2026-09-16",
   "warning": "No tokens, cookies, or API keys. Railway env is source of truth for live flags. Never put Collective/Blackjack/Genny channels on perpetual-clarity.",
   "instances": [
     {
@@ -25,7 +25,10 @@
         ],
         "xwatchSync": "dest-scoped (personal list vs TP list)"
       },
-      "features": ["memecoin TP 100x", "NFT TP 20x (TP4APH)", "mint scanner", "xfeed", "xradar", "fib"]
+      "features": ["memecoin TP 100x (solana,arc,bsc,base,ink,hype,ethereum,robinhood)", "NFT TP 20x (TP4APH)", "mint scanner", "xfeed", "xradar", "fib"],
+      "flags": {
+        "ENABLED_CHAINS": "solana,arc,bsc,base,ink,hype,ethereum,robinhood"
+      }
     },
     {
       "id": "collective",

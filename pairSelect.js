@@ -38,7 +38,7 @@ const NATIVE_QUOTES = {
     '0x5555555555555555555555555555555555555555',
   ]),
   arc: new Set([
-    // Native gas is USDC; address lands once DexScreener publishes Arc pairs.
+    '0x3600000000000000000000000000000000000000', // native USDC (Arc gas)
   ]),
 };
 
