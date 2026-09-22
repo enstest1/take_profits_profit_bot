@@ -1,6 +1,6 @@
 /** Platform-neutral auto-track path — shared by Discord and Telegram shells. */
 import { shouldSilenceAlerts } from './alertGate.js';
-import { fetchDexPair, resolveEvmChainToken, tokenDataFromEvmPair, fetchDexPairFromPool } from './dexPair.js';
+import { fetchDexPair, fetchDexPairOnChain, resolveEvmChainToken, tokenDataFromEvmPair, fetchDexPairFromPool } from './dexPair.js';
 import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import {
   loadDB,
@@ -176,11 +176,16 @@ export async function fetchTokenData(address, messageText = '', { autotrack = fa
 
   const dexOpts = autotrack ? { retries: 5, timeoutMs: 25_000 } : { retries: 2, timeoutMs: 12_000 };
 
-  const dex = await fetchDexPair(address, {
+  let dex = await fetchDexPair(address, {
     enabledChains: ['solana'],
     chainHint: 'solana',
     ...dexOpts,
   });
+  // latest/dex/tokens can return only meteoradbc (no USD). token-pairs lists the AMM.
+  if (dex?.name && !(Number(dex.price) > 0)) {
+    const onChain = await fetchDexPairOnChain('solana', address, dexOpts);
+    if (onChain?.name && Number(onChain.price) > 0) dex = onChain;
+  }
   if (dex?.name) return { ...dex, platform: 'dexscreener' };
 
   // DexScreener Meteora/Raydium links paste the POOL address, not the mint.

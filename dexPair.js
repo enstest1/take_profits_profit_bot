@@ -3,6 +3,7 @@ import { rateLimiter } from './rateLimiter.js';
 import { xHandleFromPair } from './xSocial.js';
 import { enrichLiveFromPair } from './valuationAudit.js';
 import { selectBestPair, tokenAddressFromPair, tokenIsBase, trackedTokenFromPool } from './pairSelect.js';
+import { enrichTokenUsdFromJupiter } from './jupPrice.js';
 
 function normalizeChainId(chainId) {
   return String(chainId || '').toLowerCase();
@@ -120,7 +121,7 @@ export async function fetchDexPairFromPool(chainId, poolAddress, options = {}) {
       }
       const meta = tokenMetaFromPair(pair, tokenAddr);
       if (!meta.name && !meta.symbol) continue;
-      return pairToToken(pair, tokenAddr);
+      return enrichTokenUsdFromJupiter(pairToToken(pair, tokenAddr));
     } catch {
       /* retry */
     }
@@ -155,7 +156,7 @@ export async function fetchDexPairOnChain(chainId, tokenAddress, options = {}) {
       if (!tokenAddr) continue;
       const meta = tokenMetaFromPair(pair, tokenAddr);
       if (!meta.name && !meta.symbol) continue;
-      return pairToToken(pair, tokenAddr);
+      return enrichTokenUsdFromJupiter(pairToToken(pair, tokenAddr));
     } catch {
       if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400));
     }
@@ -263,7 +264,7 @@ export async function fetchDexPair(address, options = {}) {
         continue;
       }
 
-      return pairToToken(pair, address);
+      return enrichTokenUsdFromJupiter(pairToToken(pair, address));
     } catch (e) {
       lastErr = e;
     }

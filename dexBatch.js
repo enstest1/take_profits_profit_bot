@@ -117,7 +117,22 @@ export async function batchFetch(chainId, addresses, { timeoutMs = 12_000, pinne
     }
     if (!pairs) continue;
     const best = pickBestPairPerToken(pairs, chunk, chainId, pinnedPairs);
-    for (const [mint, pair] of best) out.set(mint, pairToLive(pair, mint, chainId));
+    for (const [mint, pair] of best) {
+      const live = pairToLive(pair, mint, chainId);
+      // /tokens/v1 often returns only the unpriced meteoradbc row. Omit it so
+      // the poller falls back to token-pairs/v1, which has the priced AMM.
+      if (!(Number(live.price) > 0)) {
+        console.warn(
+          '[dexBatch] ' +
+            String(mint).slice(0, 8) +
+            '… unpriced ' +
+            (pair.dexId || '?') +
+            ' — skip for pair fallback',
+        );
+        continue;
+      }
+      out.set(mint, live);
+    }
   }
   return out;
 }

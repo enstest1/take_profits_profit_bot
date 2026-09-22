@@ -56,6 +56,32 @@ test('selectBestPair ignores quote-only rows instead of using the other token pr
   assert.equal(selectBestPair([quoteOnly], MINT, { chainId: 'solana' }), null);
 });
 
+test('priced Meteora AMM beats unpriced meteoradbc bonding-curve row', () => {
+  const dbc = pair({
+    pairAddress: 'dbc',
+    priceUsd: null,
+    liq: 0,
+    vol: {},
+  });
+  dbc.dexId = 'meteoradbc';
+  dbc.priceNative = '0.0001360';
+  const amm = pair({
+    pairAddress: 'amm',
+    priceUsd: '0.00000546',
+    liq: 2_000,
+    vol: { m5: 400, h1: 2_000 },
+  });
+  amm.dexId = 'meteora';
+  const picked = selectBestPair([dbc, amm], MINT, { chainId: 'solana' });
+  assert.equal(picked.pairAddress, 'amm');
+});
+
+test('selectBestPair still returns a DBC-only row so Jupiter can price it', () => {
+  const dbc = pair({ pairAddress: 'dbc-only', priceUsd: null, liq: 0 });
+  const picked = selectBestPair([dbc], MINT, { chainId: 'solana' });
+  assert.equal(picked.pairAddress, 'dbc-only');
+});
+
 test('recent volume beats a dead high-liq Meteora ghost', () => {
   const ghost = pair({ liq: 2_000_000, pairAddress: 'ghost', vol: { h24: 12 } });
   const live = pair({ liq: 40_000, pairAddress: 'live', vol: { m5: 12_000, h1: 40_000 } });

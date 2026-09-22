@@ -89,7 +89,8 @@ export async function sendTrackingEmbed(message, token, storageKey, db, buildEnt
   const entry = buildEntryFn();
   if (token.liquidity > 0) entry.liquidityAtCall = token.liquidity;
   if (token.fdv != null) entry.fdvAtCall = token.fdv;
-  if (token.pairAddress) entry.pairAddress = token.pairAddress;
+  // Jupiter-priced meteoradbc rows have no Dex USD — do not pin that pool.
+  if (token.pairAddress && token.priceSource !== 'jupiter') entry.pairAddress = token.pairAddress;
   stampEntryValuation(entry, token);
   logValuationAudit('autotrack', token.symbol || storageKey, valuationFromLive(token));
   db.tokens[storageKey] = entry;

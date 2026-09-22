@@ -78,14 +78,20 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Dex publishes USD on AMM rows; meteoradbc bonding-curve rows usually do not. */
+export function pairHasUsdPrice(pair) {
+  return num(pair?.priceUsd) > 0;
+}
+
 /**
  * Alive enough to keep using a pinned pool (avoid sticky-dead Meteora ghosts).
+ * Unpriced DBC rows are not a pin we can 1x off.
  * @param {object} pair
  */
 export function pairIsLive(pair) {
   if (!pair) return false;
-  const price = num(pair.priceUsd);
-  if (!(price > 0)) return false;
+  // Unpriced DBC rows are not a pin we can 1x off — wait for the AMM or Jupiter.
+  if (!pairHasUsdPrice(pair)) return false;
   const liq = num(pair.liquidity?.usd);
   const vol = num(pair.volume?.m5) + num(pair.volume?.h1);
   return liq > 50 || vol > 0;
@@ -99,6 +105,8 @@ export function scorePair(pair, tokenAddress, chainId) {
   if (!pairInvolvesToken(pair, tokenAddress)) return -Infinity;
   const base = tokenIsBase(pair, tokenAddress);
   let s = base ? 1e12 : 0;
+  // meteoradbc often has the token as base but priceUsd=null — lose to any priced AMM.
+  if (!pairHasUsdPrice(pair)) s -= 1e11;
   if (isNativeQuotePair(pair, tokenAddress, chainId)) s += 1e9;
   const liq = num(pair.liquidity?.usd);
   const m5 = num(pair.volume?.m5);
@@ -127,7 +135,10 @@ export function selectBestPair(pairs, tokenAddress, opts = {}) {
   }
 
   const asBase = list.filter((p) => tokenIsBase(p, tokenAddress));
-  const pool = asBase.length ? asBase : [];
+  // When Dex lists both meteoradbc (no USD) and a real Meteora/Raydium AMM,
+  // only the priced row can drive cards. Fall back to unpriced if that is all we have.
+  const priced = asBase.filter(pairHasUsdPrice);
+  const pool = priced.length ? priced : asBase;
   // Quote-only: do not invent a USD price from the other token's priceUsd.
   if (!pool.length) {
     console.warn(

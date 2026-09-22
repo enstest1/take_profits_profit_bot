@@ -728,7 +728,8 @@ export async function pollTokens(client) {
       for (const { key, address } of items) {
         const lookup = chainId === 'solana' ? address : address.toLowerCase();
         const live = liveMap.get(lookup) || liveMap.get(address) || liveMap.get(String(address).toLowerCase());
-        if (!live) {
+        // Null-price meteoradbc "hits" used to skip fallback and starve 1x cards.
+        if (!live || !(Number(live.price) > 0)) {
           if (pollTierForEntry(db.tokens[key]) === 'hot') missedHot.push({ key, address });
           continue;
         }
@@ -741,7 +742,7 @@ export async function pollTokens(client) {
         }
       }
       // Batch miss used to silently skip a cycle (3+ min lag, missed 1x cards).
-      const fallbackCap = 20;
+      const fallbackCap = 40;
       if (missedHot.length) {
         console.warn(
           '[poll] ' + chainId + ' batch missed ' + missedHot.length +
@@ -1021,7 +1022,8 @@ async function processTokenWithLive(client, address, db, live, milestoneOpts = {
   if (!entry) return;
 
   stampEntryValuation(entry, live);
-  if (live.pairAddress) db.tokens[address].pairAddress = live.pairAddress;
+  // Do not pin an unpriced meteoradbc pool — later ticks need the AMM pair.
+  if (live.pairAddress && Number(live.price) > 0) db.tokens[address].pairAddress = live.pairAddress;
 
   if (live.source === 'dexscreener' && entry.platform === 'pumpfun') {
     db.tokens[address].platform = 'dexscreener';
