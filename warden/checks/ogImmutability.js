@@ -20,6 +20,18 @@ export function checkOgImmutability(prevSnap, currSnap, raise) {
       ) {
         continue;
       }
+      // One-time anchor fix: first live tick was a different pool than the paste.
+      // Not a reset after a milestone — milestonesFired must still be empty.
+      if (
+        field === 'priceAtCall' &&
+        curr.priceAtCallRebased === true &&
+        prev.priceAtCallRebased !== true &&
+        (!Array.isArray(curr.milestonesFired) || curr.milestonesFired.length === 0) &&
+        !curr.gainAlertFired &&
+        !curr.takeProfitFired
+      ) {
+        continue;
+      }
       raise(
         'REG-1',
         'CRITICAL',

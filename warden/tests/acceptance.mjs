@@ -111,6 +111,50 @@ function collect(fn, prev, curr) {
   assert.ok(issues.some((i) => i.id === 'REG-1'), 'postedAt mutation should REG-1');
 }
 
+// One-time call rebase (bad pool → real pool) is not an OG rewrite.
+// A second price change, or a rebase after a milestone, still is.
+{
+  const key = 'MintKey123';
+  const prev = snap({
+    [key]: { postedAt: 100, postedBy: 'a', priceAtCall: '0.5', milestonesFired: [] },
+  });
+  const curr = snap({
+    [key]: {
+      postedAt: 100,
+      postedBy: 'a',
+      priceAtCall: '1',
+      priceAtCallRebased: true,
+      milestonesFired: [],
+    },
+  });
+  const ok = collect(checkOgImmutability, prev, curr);
+  assert.equal(ok.length, 0, 'first anchor rebase should be silent');
+
+  const again = snap({
+    [key]: {
+      postedAt: 100,
+      postedBy: 'a',
+      priceAtCall: '2',
+      priceAtCallRebased: true,
+      milestonesFired: [],
+    },
+  });
+  const second = collect(checkOgImmutability, curr, again);
+  assert.ok(second.some((i) => i.id === 'REG-1'), 'second priceAtCall change should REG-1');
+
+  const afterAlert = snap({
+    [key]: {
+      postedAt: 100,
+      postedBy: 'a',
+      priceAtCall: '1',
+      priceAtCallRebased: true,
+      milestonesFired: [1],
+    },
+  });
+  const late = collect(checkOgImmutability, prev, afterAlert);
+  assert.ok(late.some((i) => i.id === 'REG-1'), 'rebase after a milestone should REG-1');
+}
+
 // Test 10: velocityWindow bloat
 {
   const key = 'k';

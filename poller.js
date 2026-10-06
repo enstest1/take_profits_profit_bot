@@ -17,6 +17,7 @@ import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
 import { rebuildCallerStats, updateCallerStatsForUser } from './callerStats.js';
 import { deriveLifecycle, lifecyclePrefix } from './signals/lifecycle.js';
 import { currentMultipleFromLive, multiplesFromLive } from './signals/mult.js';
+import { rebaseCallAnchor, shouldIgnoreCallPin } from './signals/callAnchor.js';
 import { evaluateVelocity } from './signals/velocity.js';
 import { evaluateLiquidityDivergence } from './signals/liquidity.js';
 import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
@@ -211,6 +212,17 @@ function pollTierForEntry(entry) {
 
   // Old tokens that never hit a milestone — cold (was hot for all ~1700 dead tokens)
   return 'cold';
+}
+
+/**
+ * Fresh calls skip the pin for the first live tick so selectBestPair can
+ * pick the pool the scan is on. After anchorLocked, the pin sticks.
+ * @param {object} entry
+ * @returns {string|null}
+ */
+function pinnedPairFor(entry) {
+  if (!entry?.pairAddress || shouldIgnoreCallPin(entry)) return null;
+  return entry.pairAddress;
 }
 
 function shouldPollAddressThisCycle(address, entry, cycleNum) {
@@ -719,7 +731,7 @@ export async function pollTokens(client) {
       const addrs = items.map((i) => i.address);
       const pinnedPairs = {};
       for (const { key, address } of items) {
-        const pin = db.tokens[key]?.pairAddress;
+        const pin = pinnedPairFor(db.tokens[key]);
         if (pin) pinnedPairs[address] = pin;
       }
       const liveMap = await batchFetch(chainId, addrs, { pinnedPairs });
@@ -754,7 +766,7 @@ export async function pollTokens(client) {
           const dex = await fetchDexPairOnChain(chainId, address, {
             retries: 1,
             timeoutMs: 8_000,
-            pinnedPair: db.tokens[key]?.pairAddress,
+            pinnedPair: pinnedPairFor(db.tokens[key]) || undefined,
           });
           if (!dex?.price) continue;
           await processTokenWithLive(client, key, db, dex, milestoneOptsFor(key));
@@ -851,11 +863,39 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     return;
   }
 
+  // Pool switch or Jupiter→AMM on a call that has not alerted yet. Replace the
+  // anchor and skip this tick so 100k-on-50k cannot print a 1x.
+  const reb = rebaseCallAnchor(db.tokens[address], live);
+  if (reb) {
+    const row = db.tokens[address];
+    console.log(
+      '[rebase] ' + (row.symbol || row.name) + ' ' + reb.reason +
+      ' price ' + row.priceAtCall + ' → ' + reb.priceAtCall +
+      ' mcap ' + row.mcapAtCall + ' → ' + (reb.mcapAtCall ?? row.mcapAtCall) +
+      ' pair ' + (row.pairAddress || 'none') + ' → ' + (reb.pairAddress || 'none'),
+    );
+    row.priceAtCall = reb.priceAtCall;
+    row.priceAtCallRebased = true;
+    row.anchorLocked = true;
+    if (reb.mcapAtCall != null) row.mcapAtCall = reb.mcapAtCall;
+    if (reb.pairAddress) row.pairAddress = reb.pairAddress;
+    row.lastPrice = reb.priceAtCall;
+    row.peakMultiple = 1;
+    row.lastChecked = Date.now();
+    if (row.priceSource === 'jupiter') delete row.priceSource;
+    return;
+  }
+
   const { currentMultiple } = multiplesFromLive(db.tokens[address], live);
 
   if (currentMultiple == null) {
     db.tokens[address].lastChecked = Date.now();
     return;
+  }
+
+  // This tick confirmed the pool. Later polls pin it so a hop cannot fake a 1x.
+  if (shouldIgnoreCallPin(db.tokens[address])) {
+    db.tokens[address].anchorLocked = true;
   }
 
   // Trench reset — below call (~0.99×) for 3 polls, max once per 24h; recovery uses highest-tier-only alerts.
@@ -991,7 +1031,8 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
   if (livePrice != null && Number.isFinite(livePrice) && livePrice > 0) {
     db.tokens[address].lastPrice = String(livePrice);
   }
-  if (live.pairAddress) db.tokens[address].pairAddress = live.pairAddress;
+  // Unpriced meteoradbc rows are not a pin we can 1x off.
+  if (live.pairAddress && Number(live.price) > 0) db.tokens[address].pairAddress = live.pairAddress;
   db.tokens[address].lastVolume = live.volume24h || 0;
   db.tokens[address].lastChecked = Date.now();
   if (entry.xHandle === undefined && live.xHandle) {
@@ -1022,8 +1063,8 @@ async function processTokenWithLive(client, address, db, live, milestoneOpts = {
   if (!entry) return;
 
   stampEntryValuation(entry, live);
-  // Do not pin an unpriced meteoradbc pool — later ticks need the AMM pair.
-  if (live.pairAddress && Number(live.price) > 0) db.tokens[address].pairAddress = live.pairAddress;
+  // pairAddress stays as the call pin until evaluateGainAndMilestones decides
+  // whether this tick is a rebase. Writing it here hid the pool switch.
 
   if (live.source === 'dexscreener' && entry.platform === 'pumpfun') {
     db.tokens[address].platform = 'dexscreener';

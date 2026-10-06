@@ -72,6 +72,9 @@ export function buildTrackedEntry(token, storageKey, message, ageStr) {
     alertChannelId: message.channelId,
     priceAtCall: token.price || null,
     mcapAtCall: token.marketCap || null,
+    // Jupiter filled a Dex row that had no USD. The poller rebases onto the AMM
+    // before any 1x, and does not treat that handoff as a gain.
+    ...(token.priceSource ? { priceSource: token.priceSource } : {}),
     volumeAtCall: token.volume24h || 0,
     lastPrice: token.price || null,
     lastVolume: token.volume24h || 0,
@@ -176,15 +179,17 @@ export async function fetchTokenData(address, messageText = '', { autotrack = fa
 
   const dexOpts = autotrack ? { retries: 5, timeoutMs: 25_000 } : { retries: 2, timeoutMs: 12_000 };
 
-  let dex = await fetchDexPair(address, {
-    enabledChains: ['solana'],
-    chainHint: 'solana',
-    ...dexOpts,
-  });
-  // latest/dex/tokens can return only meteoradbc (no USD). token-pairs lists the AMM.
-  if (dex?.name && !(Number(dex.price) > 0)) {
-    const onChain = await fetchDexPairOnChain('solana', address, dexOpts);
-    if (onChain?.name && Number(onChain.price) > 0) dex = onChain;
+  // Same list the poller uses. /latest/dex/tokens is a short list and used to
+  // win as soon as it had any USD, so the call locked a cheaper pool than the
+  // scan. The next poll priced the real pool, saw 2×, and printed a 1x.
+  let dex = await fetchDexPairOnChain('solana', address, dexOpts);
+  if (!(Number(dex?.price) > 0)) {
+    const broad = await fetchDexPair(address, {
+      enabledChains: ['solana'],
+      chainHint: 'solana',
+      ...dexOpts,
+    });
+    if (Number(broad?.price) > 0 || (!dex?.name && broad?.name)) dex = broad;
   }
   if (dex?.name) return { ...dex, platform: 'dexscreener' };
 
