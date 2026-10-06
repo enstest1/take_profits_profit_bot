@@ -863,6 +863,28 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
     return;
   }
 
+  // Frozen pump curve was replaced at paste time. Keep that cap. When the AMM
+  // shows up, pin it and measure the milestone from the scan, not from 49.8k.
+  const pending = db.tokens[address];
+  if (pending.priceSource === 'pump-curve') {
+    const liveDex = String(live.dexId || '').toLowerCase();
+    if (liveDex === 'pumpfun' || !live.pairAddress) {
+      pending.lastChecked = Date.now();
+      console.log(
+        '[anchor] ' + (pending.symbol || pending.name) +
+        ' waiting for AMM — call kept at ' + pending.mcapAtCall,
+      );
+      return;
+    }
+    console.log(
+      '[anchor] ' + (pending.symbol || pending.name) +
+      ' adopting ' + live.pairAddress + ' — call kept at ' + pending.priceAtCall,
+    );
+    pending.pairAddress = live.pairAddress;
+    pending.anchorLocked = true;
+    delete pending.priceSource;
+  }
+
   // Pool switch or Jupiter→AMM on a call that has not alerted yet. Replace the
   // anchor and skip this tick so 100k-on-50k cannot print a 1x.
   const reb = rebaseCallAnchor(db.tokens[address], live);
@@ -894,7 +916,8 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
   }
 
   // This tick confirmed the pool. Later polls pin it so a hop cannot fake a 1x.
-  if (shouldIgnoreCallPin(db.tokens[address])) {
+  // A pump-curve cap is still waiting for the AMM — don't lock the dead curve.
+  if (shouldIgnoreCallPin(db.tokens[address]) && db.tokens[address].priceSource !== 'pump-curve') {
     db.tokens[address].anchorLocked = true;
   }
 
@@ -1031,8 +1054,14 @@ async function evaluateGainAndMilestones(client, address, db, entry, live, miles
   if (livePrice != null && Number.isFinite(livePrice) && livePrice > 0) {
     db.tokens[address].lastPrice = String(livePrice);
   }
-  // Unpriced meteoradbc rows are not a pin we can 1x off.
-  if (live.pairAddress && Number(live.price) > 0) db.tokens[address].pairAddress = live.pairAddress;
+  // Unpriced meteoradbc rows and the frozen pump.fun curve are not a pin we can 1x off.
+  if (
+    live.pairAddress &&
+    Number(live.price) > 0 &&
+    db.tokens[address].priceSource !== 'pump-curve'
+  ) {
+    db.tokens[address].pairAddress = live.pairAddress;
+  }
   db.tokens[address].lastVolume = live.volume24h || 0;
   db.tokens[address].lastChecked = Date.now();
   if (entry.xHandle === undefined && live.xHandle) {

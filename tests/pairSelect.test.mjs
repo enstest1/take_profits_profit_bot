@@ -82,6 +82,33 @@ test('selectBestPair still returns a DBC-only row so Jupiter can price it', () =
   assert.equal(picked.pairAddress, 'dbc-only');
 });
 
+test('live PumpSwap beats a frozen pump.fun curve that still has a price', () => {
+  const curve = pair({
+    pairAddress: 'curve',
+    priceUsd: '0.00004975',
+    liq: 0,
+    vol: {},
+  });
+  curve.dexId = 'pumpfun';
+  curve.marketCap = 49757;
+  const swap = pair({
+    pairAddress: 'swap',
+    priceUsd: '0.000195',
+    liq: 20_000,
+    vol: { m5: 500, h1: 4000 },
+  });
+  swap.dexId = 'pumpswap';
+  const picked = selectBestPair([curve, swap], MINT, { chainId: 'solana' });
+  assert.equal(picked.pairAddress, 'swap');
+});
+
+test('a frozen pump.fun curve is still returned when it is the only row', () => {
+  const curve = pair({ pairAddress: 'curve-only', priceUsd: '0.00004975', liq: 0 });
+  curve.dexId = 'pumpfun';
+  const picked = selectBestPair([curve], MINT, { chainId: 'solana' });
+  assert.equal(picked.pairAddress, 'curve-only');
+});
+
 test('recent volume beats a dead high-liq Meteora ghost', () => {
   const ghost = pair({ liq: 2_000_000, pairAddress: 'ghost', vol: { h24: 12 } });
   const live = pair({ liq: 40_000, pairAddress: 'live', vol: { m5: 12_000, h1: 40_000 } });

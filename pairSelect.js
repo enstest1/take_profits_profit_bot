@@ -84,6 +84,22 @@ export function pairHasUsdPrice(pair) {
 }
 
 /**
+ * Graduated pump.fun coins keep a frozen curve row. It still has priceUsd,
+ * but no liquidity and no flow — that print is the old cap (49.8k under a 195k scan).
+ * A curve that is still trading (liquidity or recent volume) is not frozen.
+ * @param {object} pair Raw Dex pair, or a normalized token with numeric liquidity
+ * @returns {boolean}
+ */
+export function isFrozenPumpCurve(pair) {
+  if (String(pair?.dexId || '').toLowerCase() !== 'pumpfun') return false;
+  if (pair?.liquidity && typeof pair.liquidity === 'object') return !pairIsLive(pair);
+  const liq = num(pair?.liquidity);
+  // h24 on a migrated curve is leftover. Only recent flow means the curve is still the market.
+  const vol = num(pair?.volume?.m5) + num(pair?.volume?.h1);
+  return !(liq > 50 || vol > 0);
+}
+
+/**
  * Alive enough to keep using a pinned pool (avoid sticky-dead Meteora ghosts).
  * Unpriced DBC rows are not a pin we can 1x off.
  * @param {object} pair
@@ -137,8 +153,10 @@ export function selectBestPair(pairs, tokenAddress, opts = {}) {
   const asBase = list.filter((p) => tokenIsBase(p, tokenAddress));
   // When Dex lists both meteoradbc (no USD) and a real Meteora/Raydium AMM,
   // only the priced row can drive cards. Fall back to unpriced if that is all we have.
+  // A frozen pump.fun curve loses to any live AMM so we don't lock the pre-migration cap.
   const priced = asBase.filter(pairHasUsdPrice);
-  const pool = priced.length ? priced : asBase;
+  const tradable = priced.filter((p) => !isFrozenPumpCurve(p));
+  const pool = tradable.length ? tradable : priced.length ? priced : asBase;
   // Quote-only: do not invent a USD price from the other token's priceUsd.
   if (!pool.length) {
     console.warn(

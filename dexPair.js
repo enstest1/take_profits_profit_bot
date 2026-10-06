@@ -75,6 +75,7 @@ function pairToToken(pair, address) {
     dexUrl: pair.url || null,
     imageUrl: (pair.info && pair.info.imageUrl) || null,
     pairCreatedAt: pair.pairCreatedAt || null,
+    dexId: pair.dexId || null,
     source: 'dexscreener',
     xHandle: xHandleFromPair(pair),
   };

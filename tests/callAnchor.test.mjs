@@ -79,3 +79,12 @@ test('an old call or one that already alerted does not rebase', () => {
   assert.equal(rebaseCallAnchor(fresh({ anchorLocked: true }), live, NOW), null);
   assert.equal(rebaseCallAnchor(fresh({ gainAlertFired: true }), live, NOW), null);
 });
+
+test('a cap corrected off the frozen pump curve is not rebased when the AMM is 10x', () => {
+  const reb = rebaseCallAnchor(
+    fresh({ priceSource: 'pump-curve', pairAddress: null, priceAtCall: '0.000195', mcapAtCall: 195_000 }),
+    { price: '0.000539', marketCap: 539_000, pairAddress: 'pumpswap', dexId: 'pumpswap' },
+    NOW,
+  );
+  assert.equal(reb, null);
+});

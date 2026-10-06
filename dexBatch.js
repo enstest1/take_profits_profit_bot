@@ -71,6 +71,7 @@ function pairToLive(pair, mint, chainId) {
     priceChange1h: pair.priceChange?.h1 ?? null,
     dexUrl: pair.url || null,
     imageUrl: pair.info?.imageUrl || null,
+    dexId: pair.dexId || null,
     source: 'dexscreener',
     xHandle: xHandleFromPair(pair),
   };

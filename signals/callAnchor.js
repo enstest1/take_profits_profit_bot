@@ -47,6 +47,9 @@ function callAlreadyAlerted(entry) {
 export function rebaseCallAnchor(entry, live, now = Date.now()) {
   if (!entry || !shouldIgnoreCallPin(entry, now)) return null;
   if (callAlreadyAlerted(entry)) return null;
+  // Cap was already corrected off the frozen curve. A later AMM print is the
+  // move from that scan, not a new anchor.
+  if (entry.priceSource === 'pump-curve') return null;
 
   const livePrice = Number(live?.price);
   if (!(livePrice > 0)) return null;

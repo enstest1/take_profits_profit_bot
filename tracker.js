@@ -1,7 +1,7 @@
 /** Platform-neutral auto-track path — shared by Discord and Telegram shells. */
 import { shouldSilenceAlerts } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain, resolveEvmChainToken, tokenDataFromEvmPair, fetchDexPairFromPool } from './dexPair.js';
-import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
+import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice, applyLivePumpCap } from './pumpfunApi.js';
 import {
   loadDB,
   saveDB,
@@ -22,6 +22,7 @@ import { onAlreadyTracking, sendTrackingEmbed } from './autotrackHelpers.js';
 import { xHandleFromPair } from './xSocial.js';
 import { isBlockedChannel } from './blockedChannels.js';
 import { isCaMutedChannel } from './caMuteChannels.js';
+import { isFrozenPumpCurve } from './pairSelect.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -190,6 +191,23 @@ export async function fetchTokenData(address, messageText = '', { autotrack = fa
       ...dexOpts,
     });
     if (Number(broad?.price) > 0 || (!dex?.name && broad?.name)) dex = broad;
+  }
+  // Dex keeps the pre-migration pump.fun pair after graduation. Its priceUsd is
+  // the old cap (Tweetcraft: 49.8k on the card, ~195k on the scan). Use the live cap.
+  if (dex?.name && isFrozenPumpCurve(dex)) {
+    const pump = await fetchPumpFun(address);
+    if (applyLivePumpCap(dex, pump)) {
+      console.log(
+        '[autotrack] ' + (dex.symbol || address.slice(0, 8)) +
+        ' frozen pump curve replaced with live cap ' + Math.round(dex.marketCap),
+      );
+    } else {
+      dex.pairAddress = null;
+      console.warn(
+        '[autotrack] ' + (dex.symbol || address.slice(0, 8)) +
+        ' frozen pump curve — pump API had no cap, not pinning that pool',
+      );
+    }
   }
   if (dex?.name) return { ...dex, platform: 'dexscreener' };
 
