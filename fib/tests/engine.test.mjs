@@ -225,3 +225,35 @@ test('manual pull freezes anchors and a moved take-profit line replaces the 1.61
   tick(s, manualTp1 * 1.01, 15_000);
   assert.equal(s.anchors.high.v, frozenHigh, 'manual high must not slide');
 });
+
+
+test('custom take-profit saved below live price fires once on the next poll', () => {
+  const { s } = armed('fast');
+  tick(s, HIGH * 0.99, 10_000);
+  tick(s, lvl(0.20), 11_000); // entry armed
+
+  const live = HIGH * 1.08;
+  const manualLow = LOW;
+  const manualHigh = HIGH;
+  const custom = HIGH * 1.03;
+
+  applyManualAnchors(
+    s,
+    {
+      low: { v: manualLow, t: 900_000 },
+      high: { v: manualHigh, t: 2_100_000 },
+      timeframe: '1h',
+      takeProfitValue: custom,
+      at: 12_000,
+    },
+    live,
+    12_000,
+  );
+
+  assert.equal(s.takeProfitAlert.forceOnNextTick, true);
+  s.lastValue = live;
+  const ev = liveTick(s, live, live * 1.001, 13_000);
+  assert.deepEqual(ev.map((e) => e.kind), ['take_profit']);
+  const again = liveTick(s, live * 1.001, live * 1.002, 14_000);
+  assert.equal(again.filter((e) => e.kind === 'take_profit').length, 0);
+});
