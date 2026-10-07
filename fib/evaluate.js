@@ -227,8 +227,10 @@ async function runFibTick(ctx, state, live, now = Date.now()) {
 export async function evaluateFib(client, db, storageKey, entry, live) {
   if (!FIB.ENABLED) return false;
 
-  // Control flags written by /fibtrack (commands never touch db.tokens — see fibCommands.js).
+  // Control flags written by /fibtrack + the web editor. Track whether a control
+  // mutation occurred so manual anchors are persisted even if the tick emits no alert.
   const ctl = db.fibWatch ? db.fibWatch[storageKey] : null;
+  let controlChanged = false;
   if (ctl?.suppress) return false;
 
   if (!entry.fib && FIB.AUTO) {
@@ -246,6 +248,7 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
     shell.nextDetectAt = 0;
     shell.lastRecalcAt = ctl.recalcAt;
     entry.fib = shell;
+    controlChanged = true;
     console.log('[fib] ' + (entry.symbol || storageKey) + ' recalculate applied (' + mode + '/' + tf + ')');
   }
 
@@ -255,6 +258,7 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
         ? num(live?.marketCap)
         : num(live?.price);
     engine.applyManualAnchors(entry.fib, ctl.manualOverride, v ?? entry.fib.lastValue, ctl.manualOverride.at);
+    controlChanged = true;
     console.log(
       '[fib] ' + (entry.symbol || storageKey) +
       ' manual web pull applied (rev ' + entry.fib.anchorRevision + ', ' + entry.fib.timeframe + ')',
@@ -274,7 +278,7 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
   const before = JSON.stringify(entry.fib.fired) + entry.fib.status + entry.fib.cycleId + (entry.fib.nextDetectAt || 0);
   const sent = await runFibTick(ctx, entry.fib, live);
   const after = JSON.stringify(entry.fib.fired) + entry.fib.status + entry.fib.cycleId + (entry.fib.nextDetectAt || 0);
-  if (sent || before !== after) saveDB(db);
+  if (sent || controlChanged || before !== after) saveDB(db);
   return sent;
 }
 
