@@ -6,6 +6,7 @@
 import { EmbedBuilder } from 'discord.js';
 import { chainBadge, chainLabel } from '../chains.js';
 import { FIB } from './config.js';
+import { buildFibEditorUrl } from './editorWeb.js';
 
 const DISCLAIMER = 'Levels are market structure, not financial advice · fib v1';
 
@@ -71,7 +72,10 @@ const KINDS = {
     line: (ev, s) =>
       'Wick touched the **' + ratioLabel(ev.ratio) + '** level (' + fmtUsd(ev.level) +
       ') — the top of the red zone. Deepest tracked retracement of this cycle.' +
-      (s.targets ? '\nTargets armed: **TP1 ' + fmtUsd(s.targets.tp1) + '** · **TP2 ' + fmtUsd(s.targets.tp2) + '**' : ''),
+      (s.targets
+        ? '\nTargets armed: **Take Profit ' + fmtUsd(s.takeProfitAlert?.value ?? s.targets.tp1) +
+          '** · 1.618 ref ' + fmtUsd(s.targets.tp1) + ' · **TP2 ' + fmtUsd(s.targets.tp2) + '**'
+        : ''),
   },
   entry_held: {
     color: 0x22c55e,
@@ -85,6 +89,14 @@ const KINDS = {
     emoji: '🔁',
     title: (s, c) => c.symbol + ' reclaimed the swing high',
     line: (ev) => 'Back at the impulse high (**' + fmtUsd(ev.level) + '**). Extension targets in play.',
+  },
+  take_profit: {
+    color: 0x52d7ff,
+    emoji: '💰',
+    title: (s, c) => c.symbol + ' — TAKE PROFIT',
+    line: (ev) =>
+      'Tagged your custom **Take Profit alert ' + fmtUsd(ev.level) +
+      '**. The fixed 1.618 Fibonacci reference remains at **' + fmtUsd(ev.fibTarget) + '**.',
   },
   tp1: {
     color: 0x8b5cf6,
@@ -124,7 +136,12 @@ export function buildFibEmbed(ev, state, ctx, hasChart = false) {
       { name: 'Swing low → high', value: fmtUsd(state.anchors.low.v) + ' → ' + fmtUsd(state.anchors.high.v), inline: true },
       { name: 'Impulse age', value: fmtAge(Date.now() - (state.anchors.low.t || 0)), inline: true },
     )
-    .setFooter({ text: DISCLAIMER + ' · cycle #' + state.cycleId + ' · ' + state.mode })
+    .setFooter({
+      text:
+        DISCLAIMER + ' · cycle #' + state.cycleId + ' · ' + state.mode +
+        ' · ' + (state.anchorSource === 'manual' ? 'MANUAL' : 'AUTO') +
+        ' rev ' + (state.anchorRevision || 1),
+    })
     .setTimestamp();
 
   if (ev.kind === 'golden' || ev.kind === 'level') {
@@ -145,6 +162,8 @@ export function buildFibEmbed(ev, state, ctx, hasChart = false) {
 
   const links = [];
   if (ctx.dexUrl) links.push('[Chart](' + ctx.dexUrl + ')');
+  const editorUrl = buildFibEditorUrl(ctx.key, state.cycleId);
+  if (editorUrl) links.push('[Adjust Fib](' + editorUrl + ')');
   embed.addFields({
     name: chainLabel(ctx.chainId),
     value: '`' + ctx.address + '`' + (links.length ? '\n' + links.join(' · ') : ''),

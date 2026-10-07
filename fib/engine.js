@@ -34,10 +34,14 @@ export function initStateShell(mode = 'standard', timeframe = null, now = Date.n
     cycleStartedAt: null,
     anchors: null,
     anchorsReason: null,
+    anchorSource: 'auto',
+    anchorRevision: 0,
     levels: null,
     entryRatio: null,
     entryValue: null,
     targets: null,
+    takeProfitAlert: null,
+    lastManualAt: 0,
     fired: null,
     pending: null,
     heldCount: 0,
@@ -70,10 +74,21 @@ export function recomputeDerived(state) {
         tp2: high.v + 1.236 * (high.v - entryValue),
       }
     : null;
+
+  // The visible 1.618 extension is always preserved. By default it is also the
+  // notification trigger; the web editor may move only the notification line.
+  if (state.targets && state.takeProfitAlert?.customized !== true) {
+    state.takeProfitAlert = {
+      value: state.targets.tp1,
+      customized: false,
+      armedAt: state.takeProfitAlert?.armedAt || null,
+      firedAt: state.takeProfitAlert?.firedAt || null,
+    };
+  }
 }
 
 function freshFired() {
-  const fired = { golden: null, alerts: {}, entryHeld: null, reclaim: null, tp1: null, tp2: null, invalidated: null };
+  const fired = { golden: null, alerts: {}, entryHeld: null, reclaim: null, takeProfit: null, tp1: null, tp2: null, invalidated: null };
   for (const r of FIB.ALERT_RATIOS) fired.alerts[rkey(r)] = null;
   return fired;
 }
@@ -136,6 +151,9 @@ function sweepFireDownTo(state, lvl, value, now, events) {
 export function armCycle(state, det, currentValue, now = Date.now()) {
   state.anchors = { low: { v: det.low.v, t: det.low.t }, high: { v: det.high.v, t: det.high.t } };
   state.anchorsReason = det.reason;
+  state.anchorSource = 'auto';
+  state.anchorRevision = 1;
+  state.takeProfitAlert = null;
   state.cycleId = (state.cycleId || 0) + 1;
   state.cycleStartedAt = now;
   state.fired = freshFired();
@@ -187,6 +205,81 @@ export function armCycle(state, det, currentValue, now = Date.now()) {
 }
 
 /**
+ * Replace the detector's anchors with an explicit manual pull from the web editor.
+ * The cycle id is preserved; anchorRevision increments. Existing entry context is
+ * carried forward so a correction after entry does not pretend the trade never armed.
+ */
+export function applyManualAnchors(state, override, currentValue, now = Date.now()) {
+  if (!state || !override?.low || !override?.high) return state;
+  const lowV = Number(override.low.v);
+  const highV = Number(override.high.v);
+  const lowT = Number(override.low.t);
+  const highT = Number(override.high.t);
+  if (!(lowV > 0) || !(highV > lowV) || !Number.isFinite(lowT) || !Number.isFinite(highT) || lowT >= highT) {
+    throw new Error('invalid manual anchors');
+  }
+
+  const hadEntry =
+    state.status === 'target_mode' ||
+    !!state.fired?.alerts?.[rkey(state.entryRatio)];
+
+  state.anchors = {
+    low: { v: lowV, t: lowT },
+    high: { v: highV, t: highT },
+  };
+  state.anchorsReason = override.reason || 'manual web editor';
+  state.anchorSource = 'manual';
+  state.anchorRevision = (state.anchorRevision || 1) + 1;
+  state.lastManualAt = Number(override.at) || now;
+  if (override.timeframe) state.timeframe = override.timeframe;
+  state.fired = freshFired();
+  state.pending = {};
+  state.heldCount = 0;
+  state.status = 'armed';
+  state.takeProfitAlert = null;
+  state.updatedAt = now;
+  recomputeDerived(state);
+
+  if (state.targets) {
+    const range = highV - lowV;
+    const requested = Number(override.takeProfitValue);
+    const chosen = Number.isFinite(requested)
+      ? Math.max(highV, Math.min(state.targets.tp1, requested))
+      : state.targets.tp1;
+    const tolerance = Math.max(range * 0.001, state.targets.tp1 * 0.000001);
+    state.takeProfitAlert = {
+      value: chosen,
+      customized: Math.abs(chosen - state.targets.tp1) > tolerance,
+      armedAt: now,
+      firedAt: null,
+    };
+  }
+
+  if (hadEntry) {
+    for (const L of downLevels(state)) markFired(state, L.key, now);
+    state.status = 'target_mode';
+  } else if (currentValue != null && Number.isFinite(currentValue)) {
+    for (const L of downLevels(state)) {
+      if (currentValue <= L.value) {
+        markFired(state, L.key, now);
+        if (L.ratio === state.entryRatio) state.status = 'target_mode';
+      }
+    }
+  }
+
+  if (state.status === 'target_mode' && currentValue != null && Number.isFinite(currentValue)) {
+    if (currentValue >= state.anchors.high.v) state.fired.reclaim = now;
+    if (state.targets && currentValue >= state.targets.tp1) state.fired.tp1 = now;
+    if (state.targets && currentValue >= state.targets.tp2) {
+      state.fired.tp2 = now;
+      state.status = 'completed';
+    }
+  }
+
+  return state;
+}
+
+/**
  * Live sample tick (every poll, ~15s). Mutates state, returns events.
  * prevValue = the lastValue persisted BEFORE this sample (caller passes it in).
  */
@@ -202,7 +295,7 @@ export function liveTick(state, prevValue, value, now = Date.now()) {
 
   // ---- upward: re-anchoring / new cycle (ARMED only — once the entry is touched the
   // trade plan is frozen: target_mode owns the upside via reclaim/TP1/TP2 below) ----
-  if (state.status === 'armed' && value > high.v) {
+  if (state.anchorSource !== 'manual' && state.status === 'armed' && value > high.v) {
     const fired = anyDownFired(state);
     if (!fired) {
       // Impulse still forming — slide the top pin, keep the cycle.
@@ -228,9 +321,37 @@ export function liveTick(state, prevValue, value, now = Date.now()) {
       events.push({ kind: 'reclaim', value, level: state.anchors.high.v, at: now });
     }
     if (state.targets) {
+      const customTp =
+        state.takeProfitAlert?.customized === true &&
+        Number.isFinite(Number(state.takeProfitAlert.value))
+          ? Number(state.takeProfitAlert.value)
+          : null;
+
+      if (
+        customTp != null &&
+        !state.fired.takeProfit &&
+        prevValue != null &&
+        prevValue < customTp &&
+        value >= customTp
+      ) {
+        state.fired.takeProfit = now;
+        state.takeProfitAlert.firedAt = now;
+        events.push({
+          kind: 'take_profit',
+          value,
+          level: customTp,
+          fibTarget: state.targets.tp1,
+          at: now,
+        });
+      }
+
       if (!state.fired.tp1 && value >= state.targets.tp1) {
         state.fired.tp1 = now;
-        events.push({ kind: 'tp1', value, level: state.targets.tp1, at: now });
+        // If the editor moved the notification trigger, 1.618 remains a tracked
+        // reference level but does not send a second take-profit card.
+        if (customTp == null) {
+          events.push({ kind: 'tp1', value, level: state.targets.tp1, at: now });
+        }
       }
       if (!state.fired.tp2 && value >= state.targets.tp2) {
         state.fired.tp2 = now;

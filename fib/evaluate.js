@@ -249,6 +249,18 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
     console.log('[fib] ' + (entry.symbol || storageKey) + ' recalculate applied (' + mode + '/' + tf + ')');
   }
 
+  if (ctl?.manualOverride?.at && ctl.manualOverride.at > (entry.fib.lastManualAt || 0)) {
+    const v =
+      entry.fib.metric === 'marketCap'
+        ? num(live?.marketCap)
+        : num(live?.price);
+    engine.applyManualAnchors(entry.fib, ctl.manualOverride, v ?? entry.fib.lastValue, ctl.manualOverride.at);
+    console.log(
+      '[fib] ' + (entry.symbol || storageKey) +
+      ' manual web pull applied (rev ' + entry.fib.anchorRevision + ', ' + entry.fib.timeframe + ')',
+    );
+  }
+
   const ctx = {
     key: storageKey,
     chainId: (entry.chain || 'solana').toLowerCase(),

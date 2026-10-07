@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { loadDB } from './dbStore.js';
 import { cycleStats, refreshGitSha, pollHealth } from './cycleStats.js';
 import { processHeliusPayload, isDevSellEnabled } from './webhooks/devSell.js';
+import { handleFibEditorRequest } from './fib/editorWeb.js';
 
 function pathOnly(url) {
   return (url || '/').split('?')[0];
@@ -17,6 +18,15 @@ export function routeRequest(req, res, client, getDb) {
     const h = pollHealth();
     res.writeHead(h.ok ? 200 : 503);
     res.end(h.ok ? 'ok' : h.reason);
+    return;
+  }
+
+  if (path === '/fib-editor' || path.startsWith('/api/fib-editor/')) {
+    void handleFibEditorRequest(req, res).catch((e) => {
+      console.error('[fib/editor] route:', e.message);
+      if (!res.headersSent) res.writeHead(500);
+      if (!res.writableEnded) res.end('editor error');
+    });
     return;
   }
 
@@ -86,6 +96,7 @@ export function startHttpServer(client, getDb) {
   const server = http.createServer((req, res) => routeRequest(req, res, client, getDb));
   server.listen(port, () => {
     const parts = ['/health'];
+    if (process.env.FIB_EDITOR_SECRET) parts.push('/fib-editor');
     if (isDevSellEnabled()) parts.push('/helius-webhook');
     if (process.env.WARDEN_TOKEN) parts.push('/warden/status', '/warden/snapshot');
     console.log('[http] listening on :' + port + ' — ' + parts.join(', '));
