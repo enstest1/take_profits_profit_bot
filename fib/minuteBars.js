@@ -1,30 +1,42 @@
 /**
- * fib/minuteBars.js — builds 1-minute bars from the ~15s live poll samples, in memory only.
- * Used for standard-mode crossing confirmation, entry-held detection, and invalidation
- * (all bar-CLOSE based) with zero extra API calls. Never persisted (keeps tracked.json
- * lean and Warden's schema bounds untouched).
+ * fib/minuteBars.js — builds sampled OHLC bars from the ~15s live poll stream.
  *
- * update(key, value, now) → the just-CLOSED bar { start, o, h, l, c } when a new minute
- * begins (possibly several missed minutes collapse into the last known bar), else null.
+ * Default behavior remains 1-minute bars for existing fib logic. Telegram Golden
+ * Pocket also asks for a separate 5-minute stream so its pre-buy confirmation
+ * costs zero extra provider calls.
  */
 
-const bars = new Map(); // key → { start, o, h, l, c }
+const bars = new Map(); // interval:key -> { start, o, h, l, c }
 
-const minuteStart = (ms) => Math.floor(ms / 60_000) * 60_000;
+function barStart(ms, intervalMs) {
+  return Math.floor(ms / intervalMs) * intervalMs;
+}
 
-export function update(key, value, now = Date.now()) {
+function mapKey(key, intervalMs) {
+  return String(intervalMs) + ':' + String(key);
+}
+
+/**
+ * update(key, value, now, intervalMs?) -> just-closed sampled bar when a new
+ * interval begins, otherwise null.
+ */
+export function update(key, value, now = Date.now(), intervalMs = 60_000) {
   if (value == null || !Number.isFinite(value)) return null;
-  const start = minuteStart(now);
-  const cur = bars.get(key);
+  const span = Number(intervalMs);
+  if (!Number.isFinite(span) || span < 1_000) throw new Error('invalid bar interval');
+
+  const k = mapKey(key, span);
+  const start = barStart(now, span);
+  const cur = bars.get(k);
 
   if (!cur) {
-    bars.set(key, { start, o: value, h: value, l: value, c: value });
+    bars.set(k, { start, o: value, h: value, l: value, c: value });
     return null;
   }
 
   if (start > cur.start) {
-    const closed = { ...cur };
-    bars.set(key, { start, o: value, h: value, l: value, c: value });
+    const closed = { ...cur, end: cur.start + span };
+    bars.set(k, { start, o: value, h: value, l: value, c: value });
     return closed;
   }
 
@@ -34,11 +46,17 @@ export function update(key, value, now = Date.now()) {
   return null;
 }
 
-export function currentBar(key) {
-  return bars.get(key) || null;
+export function currentBar(key, intervalMs = 60_000) {
+  return bars.get(mapKey(key, intervalMs)) || null;
 }
 
 export function reset(key) {
-  if (key == null) bars.clear();
-  else bars.delete(key);
+  if (key == null) {
+    bars.clear();
+    return;
+  }
+  const suffix = ':' + String(key);
+  for (const k of bars.keys()) {
+    if (k.endsWith(suffix)) bars.delete(k);
+  }
 }
