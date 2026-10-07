@@ -207,17 +207,17 @@ async function demoStateResponse(tf) {
 
   // The DexScreener URL identifies the ORBANCY TOKEN, not its LP contract.
   // Resolve the token to its actual pair first, then request OHLC from that pool.
+  // Candle availability must not depend on DexScreener metadata. Resolve the
+  // GeckoTerminal pool directly from the token first; DexScreener is optional
+  // and is used only for nicer symbol/market-cap scaling when available.
+  const resolved = await resolveTopPool(DEMO_CHAIN, DEMO_TOKEN_ADDRESS);
   const pair = await fetchDexPairOnChain(DEMO_CHAIN, DEMO_TOKEN_ADDRESS, {
     retries: 2,
     timeoutMs: 10_000,
-  });
-  if (!pair) return { status: 502, body: { error: 'demo_pair_unavailable' } };
+  }).catch(() => null);
 
-  let pool = pair.pairAddress || null;
-  if (!pool) {
-    const resolved = await resolveTopPool(DEMO_CHAIN, DEMO_TOKEN_ADDRESS);
-    if (!resolved.error) pool = resolved.poolAddress;
-  }
+  let pool = resolved.error ? null : resolved.poolAddress;
+  if (!pool && pair?.pairAddress) pool = pair.pairAddress;
   if (!pool) return { status: 502, body: { error: 'demo_pool_unavailable' } };
 
   let got = await fetchCandles(DEMO_CHAIN, pool, pickedTf, {
@@ -242,8 +242,8 @@ async function demoStateResponse(tf) {
     return { status: 502, body: { error: got.error || 'demo_candles_unavailable' } };
   }
 
-  const px = Number(pair.price);
-  const mcap = Number(pair.marketCap ?? pair.fdv);
+  const px = Number(pair?.price);
+  const mcap = Number(pair?.marketCap ?? pair?.fdv);
   const factor = Number.isFinite(px) && px > 0 && Number.isFinite(mcap) && mcap > 0 ? mcap / px : null;
   const candles = factor
     ? got.candles.map((c) => ({
@@ -265,10 +265,10 @@ async function demoStateResponse(tf) {
       demo: true,
       demoSource: 'live_market',
       key: 'demo',
-      symbol: pair.symbol || 'ORBANCY',
-      name: pair.name || 'ORBANCY',
+      symbol: pair?.symbol || 'ORBANCY',
+      name: pair?.name || 'Orbancy',
       chain: DEMO_CHAIN,
-      address: pair.address || DEMO_TOKEN_ADDRESS,
+      address: pair?.address || DEMO_TOKEN_ADDRESS,
       dexUrl: DEMO_DEX_URL,
       cycleId: 2,
       status: 'armed',
