@@ -252,6 +252,12 @@ export function applyManualAnchors(state, override, currentValue, now = Date.now
       customized: Math.abs(chosen - state.targets.tp1) > tolerance,
       armedAt: now,
       firedAt: null,
+      // If the user drags the alert below the live price, send the Take Profit
+      // card on the next poll instead of waiting for price to dip and re-cross.
+      forceOnNextTick:
+        currentValue != null &&
+        Number.isFinite(currentValue) &&
+        currentValue >= chosen,
     };
   }
 
@@ -330,12 +336,16 @@ export function liveTick(state, prevValue, value, now = Date.now()) {
       if (
         customTp != null &&
         !state.fired.takeProfit &&
-        prevValue != null &&
-        prevValue < customTp &&
-        value >= customTp
+        value >= customTp &&
+        (
+          state.takeProfitAlert?.forceOnNextTick === true ||
+          prevValue == null ||
+          prevValue < customTp
+        )
       ) {
         state.fired.takeProfit = now;
         state.takeProfitAlert.firedAt = now;
+        state.takeProfitAlert.forceOnNextTick = false;
         events.push({
           kind: 'take_profit',
           value,
