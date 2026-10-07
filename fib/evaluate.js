@@ -177,7 +177,18 @@ async function runFibTick(ctx, state, live, now = Date.now()) {
       events = engine.liveTick(state, prev, value, now);
 
       const closed = bars.update(ctx.key, value, now);
-      if (closed) events = events.concat(engine.barClose(state, closed.c, now));
+      if (closed) events = events.concat(engine.barClose(state, closed.c, closed.end || now));
+
+      // Telegram Golden Pocket pre-buy confirmation uses its own completed 5m
+      // sampled bars. No extra OHLC/provider calls are made.
+      if (state.telegramGoldenPocket) {
+        const closed5m = bars.update(ctx.key, value, now, FIB.TG_PREBUY_INTERVAL_MS);
+        if (closed5m) {
+          events = events.concat(
+            engine.telegramGoldenPocketClose(state, closed5m.c, closed5m.end || now),
+          );
+        }
+      }
 
       const newCycle = events.find((e) => e.kind === 'new_cycle');
       if (newCycle) {
@@ -213,8 +224,14 @@ async function runFibTick(ctx, state, live, now = Date.now()) {
         console.error('[fib/chart] ' + ctx.symbol + ':', e.message);
       }
     }
-    const embed = buildFibEmbed(ev, state, ctx, !!files);
-    const ok = await ctx.send(embed, 'fib_' + ev.kind, files);
+    // Telegram Golden Pocket uses stronger stage-specific copy without
+    // changing Discord's existing entry-touch card.
+    const displayEv =
+      state.telegramGoldenPocket && process.env.PLATFORM === 'telegram' && ev.kind === 'entry_touch'
+        ? { ...ev, kind: 'size_in' }
+        : ev;
+    const embed = buildFibEmbed(displayEv, state, ctx, !!files);
+    const ok = await ctx.send(embed, 'fib_' + displayEv.kind, files);
     if (ok) {
       sentAny = true;
       console.log('[fib] ' + ctx.symbol + ' alert: ' + ev.kind + ' @ ' + (ev.value?.toPrecision?.(4) ?? ev.value));
@@ -233,10 +250,24 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
   let controlChanged = false;
   if (ctl?.suppress) return false;
 
-  if (!entry.fib && FIB.AUTO) {
+  const tgGoldenPocket =
+    process.env.PLATFORM === 'telegram' && ctl?.goldenPocketEnabled === true;
+
+  if (!entry.fib && (FIB.AUTO || tgGoldenPocket || ctl?.manualOverride)) {
     entry.fib = engine.initStateShell('standard', FIB.DEFAULT_TIMEFRAME);
+    if (tgGoldenPocket || ctl?.manualOverride) {
+      entry.fib.telegramGoldenPocket = true;
+      controlChanged = true;
+    }
   }
   if (!entry.fib) return false;
+
+  if (tgGoldenPocket && entry.fib.telegramGoldenPocket !== true) {
+    entry.fib.telegramGoldenPocket = true;
+    entry.fib.pocketConfirmCount = 0;
+    entry.fib.pocketBypassedAt = null;
+    controlChanged = true;
+  }
 
   if (ctl?.recalcAt && ctl.recalcAt > (entry.fib.lastRecalcAt || 0)) {
     const mode = ctl.mode || entry.fib.mode;
@@ -247,12 +278,19 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
     shell.status = 'detecting';
     shell.nextDetectAt = 0;
     shell.lastRecalcAt = ctl.recalcAt;
+    if (tgGoldenPocket) shell.telegramGoldenPocket = true;
     entry.fib = shell;
     controlChanged = true;
     console.log('[fib] ' + (entry.symbol || storageKey) + ' recalculate applied (' + mode + '/' + tf + ')');
   }
 
   if (ctl?.manualOverride?.at && ctl.manualOverride.at > (entry.fib.lastManualAt || 0)) {
+    if (ctl.manualOverride.metric) entry.fib.metric = ctl.manualOverride.metric;
+    if (Number.isFinite(Number(ctl.manualOverride.supplyFactor))) {
+      entry.fib.supplyFactor = Number(ctl.manualOverride.supplyFactor);
+    }
+    if (ctl.manualOverride.poolAddress) entry.fib.poolAddress = ctl.manualOverride.poolAddress;
+    if (process.env.PLATFORM === 'telegram') entry.fib.telegramGoldenPocket = true;
     const v =
       entry.fib.metric === 'marketCap'
         ? num(live?.marketCap)
@@ -275,9 +313,15 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
     send: (embed, kind, files) => sendTokenAlert(client, db, storageKey, embed, kind, 'fib', files),
   };
 
-  const before = JSON.stringify(entry.fib.fired) + entry.fib.status + entry.fib.cycleId + (entry.fib.nextDetectAt || 0);
+  const before =
+    JSON.stringify(entry.fib.fired) + entry.fib.status + entry.fib.cycleId +
+    (entry.fib.nextDetectAt || 0) + ':' + (entry.fib.pocketConfirmCount || 0) + ':' +
+    (entry.fib.pocketBypassedAt || 0) + ':' + (entry.fib.telegramGoldenPocket ? 1 : 0);
   const sent = await runFibTick(ctx, entry.fib, live);
-  const after = JSON.stringify(entry.fib.fired) + entry.fib.status + entry.fib.cycleId + (entry.fib.nextDetectAt || 0);
+  const after =
+    JSON.stringify(entry.fib.fired) + entry.fib.status + entry.fib.cycleId +
+    (entry.fib.nextDetectAt || 0) + ':' + (entry.fib.pocketConfirmCount || 0) + ':' +
+    (entry.fib.pocketBypassedAt || 0) + ':' + (entry.fib.telegramGoldenPocket ? 1 : 0);
   if (sent || controlChanged || before !== after) saveDB(db);
   return sent;
 }
