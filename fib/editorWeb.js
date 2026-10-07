@@ -311,6 +311,15 @@ export async function handleFibEditorRequest(req, res) {
   const path = u.pathname;
 
   if (req.method === 'GET' && path === '/fib-editor') {
+    const hasSignedParams =
+      u.searchParams.has('key') ||
+      u.searchParams.has('cycle') ||
+      u.searchParams.has('exp') ||
+      u.searchParams.has('sig');
+
+    // Bare /fib-editor is a public, non-writing demo. Signed links from Discord
+    // still open the live cycle and keep all save/revert actions authenticated.
+    if (!hasSignedParams) return html(res, 200, editorPage());
     const auth = authQuery(req.url);
     if (!auth.ok) return html(res, 403, errorPage(auth.error));
     return html(res, 200, editorPage());
@@ -376,7 +385,7 @@ function editorPage() {
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 40% -20%,#0f1a20 0,#05090d 45%);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif}
 button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;padding:0 24px;background:rgba(5,9,13,.94)}
 .logo{width:38px;height:38px;border:2px solid #edf2f4;border-radius:50%;display:grid;place-items:center;position:relative}.logo:after{content:"";width:24px;height:9px;border:2px solid #edf2f4;border-radius:50%;position:absolute}.logo i{width:9px;height:9px;border-radius:50%;background:#e9dc9a;z-index:2}
-.brand{font-weight:800;letter-spacing:.08em}.sub{color:#8ba1b6;border-left:1px solid #33404a;padding-left:14px}.grow{flex:1}
+.brand{font-weight:800;letter-spacing:.08em}.sub{color:#8ba1b6;border-left:1px solid #33404a;padding-left:14px}.demoBadge{display:none;font-size:11px;font-weight:900;letter-spacing:.08em;color:#08130b;background:#b8ff00;border-radius:999px;padding:5px 9px}.demoBadge.show{display:inline-flex}.grow{flex:1}
 .toplink{color:#a7d1ff;text-decoration:none;font-weight:650;margin-left:12px}.toplink[hidden]{display:none}.shell{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px;max-width:1680px;margin:auto}
 .main{min-width:0}.asset{display:flex;align-items:center;gap:12px;margin:3px 4px 14px}.tokenmark{width:46px;height:46px;border:1px solid #8795a0;border-radius:50%;display:grid;place-items:center;font-weight:800}.asset h1{font-size:28px;margin:0}.meta{color:#8eb3d5;font-size:14px;margin-top:2px}.tfs{margin-left:auto;display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}.tf{min-width:54px;padding:10px 12px;border:0;border-right:1px solid var(--border);background:#0b1118;color:#9eb0bf;cursor:pointer}.tf:last-child{border-right:0}.tf.active{color:#dfffea;background:#102018;box-shadow:inset 0 0 0 1px #26ce5b}.chartbox{position:relative;background:#03070a;border:1px solid var(--border);border-radius:10px;overflow:hidden}.charthead{position:absolute;z-index:3;left:15px;top:12px;pointer-events:none}.charttitle{font-weight:750}.ohlc{font-size:12px;color:#94a6b4;margin-top:4px}.ohlc strong{color:var(--green)}canvas{display:block;width:100%;height:620px;touch-action:none}.hint{display:flex;gap:8px;align-items:center;color:#91a2b0;padding:10px 13px;border:1px solid var(--border);border-top:0;border-radius:0 0 10px 10px;background:#080e13;font-size:13px}.hint b{color:#e4edf3}
 .side{display:flex;flex-direction:column;gap:12px}.card{background:linear-gradient(180deg,#0d141c,#0a1016);border:1px solid var(--border);border-radius:10px;padding:16px}.card h2{font-size:16px;margin:0 0 14px}.mode{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.pill{font-size:12px;font-weight:900;padding:5px 12px;border-radius:999px;background:var(--green);color:#061108}.pill.manual{background:var(--gold);color:#181500}.row{display:grid;grid-template-columns:1fr auto;gap:12px;padding:9px 0;border-top:1px solid #15212b}.row:first-of-type{border-top:0}.lab{color:#9eafbd}.val{font-weight:750;text-align:right}.small{font-size:12px;color:#708394}.levels .row:nth-child(2) .val{color:var(--green)}.levels .gold .lab,.levels .gold .val{color:var(--gold)}.levels .entry .lab,.levels .entry .val{color:var(--red)}.levels .alert .lab,.levels .alert .val{color:var(--cyan);font-weight:800}
@@ -388,7 +397,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
 </style>
 </head>
 <body>
-<header class="topbar"><div class="logo"><i></i></div><div class="brand">TAKE PROFITS</div><div class="sub">Fib Editor</div><div class="grow"></div><a id="dexTop" class="toplink" target="_blank" rel="noreferrer" hidden>View on DexScreener ↗</a></header>
+<header class="topbar"><div class="logo"><i></i></div><div class="brand">TAKE PROFITS</div><div class="sub">Fib Editor</div><span class="demoBadge" id="demoBadge">PUBLIC DEMO</span><div class="grow"></div><a id="dexTop" class="toplink" target="_blank" rel="noreferrer" hidden>View on DexScreener ↗</a></header>
 <main class="shell">
 <section class="main">
   <div class="asset"><div class="tokenmark" id="mark">TP</div><div><h1 id="symbol">Loading…</h1><div class="meta" id="meta">Fetching cycle</div></div>
@@ -430,8 +439,9 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   const root = document;
   const canvas = root.getElementById('chart');
   const ctx = canvas.getContext('2d');
-  const els = Object.fromEntries(['symbol','meta','mark','chartTitle','ohlc','modePill','cycle','lowVal','lowTime','highVal','highTime','tp1Val','alertVal','oneVal','goldVal','entryVal','zeroVal','goldLab','entryLab','metricLabel','impulse','tfStat','sourceStat','revStat','saveBtn','undoBtn','redoBtn','autoBtn','dirty','toast','dexTop','dexBottom'].map(id => [id, root.getElementById(id)]));
+  const els = Object.fromEntries(['symbol','meta','mark','chartTitle','ohlc','modePill','cycle','lowVal','lowTime','highVal','highTime','tp1Val','alertVal','oneVal','goldVal','entryVal','zeroVal','goldLab','entryLab','metricLabel','impulse','tfStat','sourceStat','revStat','saveBtn','undoBtn','redoBtn','autoBtn','dirty','toast','dexTop','dexBottom','demoBadge'].map(id => [id, root.getElementById(id)]));
   const qs = new URLSearchParams(location.search);
+  const isDemo = !qs.get('key');
   let data = null, candles = [], low = null, high = null, alertValue = null, dirty = false, dragging = null, history = [], future = [], activeTf = null;
   let plot = null;
 
@@ -447,30 +457,94 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   function snapshot(){return {low:{...low},high:{...high},alertValue};}
   function pushHistory(){if(low&&high){history.push(snapshot()); if(history.length>50)history.shift(); future=[];}}
   function restore(s){low={...s.low};high={...s.high};alertValue=s.alertValue;dirty=true;sync();draw();}
-  function setDirty(v=true){dirty=v;els.dirty.textContent=v?'Unsaved manual changes':'';els.saveBtn.disabled=!data||!v;els.undoBtn.disabled=!history.length;els.redoBtn.disabled=!future.length;}
+  function setDirty(v=true){dirty=v;els.dirty.textContent=v?(data?.demo?'Demo changes only — nothing will be saved':'Unsaved manual changes'):'';els.saveBtn.disabled=!data||!v||!!data?.demo;els.undoBtn.disabled=!history.length;els.redoBtn.disabled=!future.length;}
   function toast(msg){els.toast.textContent=msg;els.toast.classList.add('show');setTimeout(()=>els.toast.classList.remove('show'),3200);}
   function api(path, extra=''){const p=new URLSearchParams(qs); if(extra){const e=new URLSearchParams(extra); for(const [k,v] of e)p.set(k,v);} return path+'?'+p.toString();}
 
+  function demoState(tf='5m'){
+    const steps={ '1m':60_000,'5m':300_000,'15m':900_000,'1h':3_600_000,'4h':14_400_000 };
+    const step=steps[tf]||steps['5m'];
+    const count=140;
+    const end=Date.now()-step;
+    const start=end-step*(count-1);
+    const candles=[];
+    const target=i=>{
+      if(i<18)return 132000-(i*900);
+      if(i<=55)return 112000+(i-18)*(437000/37);
+      if(i<=92)return 549000-(i-55)*(270000/37);
+      if(i<=120)return 279000+(i-92)*(165000/28);
+      return 444000-(i-120)*(26000/19);
+    };
+    let prev=132000;
+    for(let i=0;i<count;i++){
+      const center=target(i)+Math.sin(i*0.71)*9000+Math.sin(i*0.19)*5000;
+      const o=i===0?center:prev;
+      const c=center+Math.sin(i*1.17)*6500;
+      const wick=7000+Math.abs(Math.sin(i*.47))*11000;
+      let h=Math.max(o,c)+wick;
+      let l=Math.max(1000,Math.min(o,c)-wick*.82);
+      if(i===18)l=112000;
+      if(i===55)h=549000;
+      const v=26000+Math.abs(Math.sin(i*.37))*62000+(i>45&&i<62?52000:0);
+      candles.push({t:start+i*step,o,h,l,c,v});
+      prev=c;
+    }
+    const lowC=candles[18], highC=candles[55], last=candles[candles.length-1];
+    return {
+      demo:true,
+      key:'demo',
+      symbol:'ORBIT',
+      name:'Take Profits Demo',
+      chain:'robinhood',
+      address:'0xDEMO00000000000000000000000000000000FIB',
+      dexUrl:null,
+      cycleId:2,
+      status:'armed',
+      mode:'standard',
+      timeframe:tf,
+      fibTimeframe:tf,
+      metric:'marketCap',
+      anchorSource:'auto',
+      anchorRevision:1,
+      anchors:{low:{t:lowC.t,v:112000},high:{t:highC.t,v:549000}},
+      levels:null,
+      targets:null,
+      takeProfitAlert:null,
+      lastValue:last.c,
+      ratios:{goldenUpper:0.382,goldenLower:0.236,entry:0.236},
+      candles
+    };
+  }
+
   async function load(tf){
-    els.saveBtn.disabled=true; activeTf=tf||activeTf||qs.get('tf')||null;
-    const extra=activeTf?'tf='+encodeURIComponent(activeTf):'';
-    const res=await fetch(api('/api/fib-editor/state',extra),{cache:'no-store'});
-    const j=await res.json(); if(!res.ok) throw new Error(j.error||'load_failed');
+    els.saveBtn.disabled=true; activeTf=tf||activeTf||qs.get('tf')||(isDemo?'5m':null);
+    let j;
+    if(isDemo){
+      j=demoState(activeTf||'5m');
+    }else{
+      const extra=activeTf?'tf='+encodeURIComponent(activeTf):'';
+      const res=await fetch(api('/api/fib-editor/state',extra),{cache:'no-store'});
+      j=await res.json(); if(!res.ok) throw new Error(j.error||'load_failed');
+    }
     data=j; candles=j.candles||[]; activeTf=j.timeframe;
     low={...j.anchors.low}; high={...j.anchors.high};
     const lv=levels(); alertValue=Number(j.takeProfitAlert?.value); if(!Number.isFinite(alertValue))alertValue=lv.tp1;
     history=[];future=[];setDirty(false);renderMeta();sync();resize();draw();
     root.querySelectorAll('.tf').forEach(b=>b.classList.toggle('active',b.dataset.tf===activeTf));
-    els.autoBtn.disabled=false;
+    els.autoBtn.disabled=!!j.demo;
+    if(j.demo){
+      els.saveBtn.textContent='Open from Discord to Save';
+      els.demoBadge.classList.add('show');
+    }
   }
 
   function renderMeta(){
     els.symbol.textContent=data.symbol; els.mark.textContent=(data.symbol||'TP').slice(0,2).toUpperCase();
-    els.meta.textContent=(data.chain||'').toUpperCase()+' · '+String(data.address||'').slice(0,12)+'…'+String(data.address||'').slice(-6);
+    els.meta.textContent=data.demo?'PUBLIC DEMO · drag the Fib anchors and Take Profit alert':(data.chain||'').toUpperCase()+' · '+String(data.address||'').slice(0,12)+'…'+String(data.address||'').slice(-6);
     els.chartTitle.textContent=data.symbol+' · '+activeTf+' ('+(data.metric==='price'?'Price':'Market Cap')+')';
-    const manual=(data.anchorSource||'auto')==='manual'; els.modePill.textContent=manual?'MANUAL':'AUTO'; els.modePill.classList.toggle('manual',manual);
+    const manual=(data.anchorSource||'auto')==='manual'; els.modePill.textContent=data.demo?'DEMO':(manual?'MANUAL':'AUTO'); els.modePill.classList.toggle('manual',manual||data.demo);
     els.cycle.textContent='Cycle #'+data.cycleId; els.metricLabel.textContent='('+(data.metric==='price'?'Price':'Market Cap')+')';
-    els.tfStat.textContent=activeTf; els.sourceStat.textContent=manual?'MANUAL':'AUTO (ATR)'; els.revStat.textContent=String(data.anchorRevision||1);
+    els.tfStat.textContent=activeTf; els.sourceStat.textContent=data.demo?'DEMO / AUTO':(manual?'MANUAL':'AUTO (ATR)'); els.revStat.textContent=String(data.anchorRevision||1);
     if(data.dexUrl){els.dexTop.href=data.dexUrl;els.dexTop.hidden=false;els.dexBottom.href=data.dexUrl}else{els.dexBottom.style.display='none'}
   }
   function sync(){
@@ -542,8 +616,8 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   root.getElementById('tfs').addEventListener('click',e=>{const b=e.target.closest('.tf');if(!b||b.dataset.tf===activeTf)return;load(b.dataset.tf).catch(err=>toast('Could not load timeframe: '+err.message))});
   els.undoBtn.addEventListener('click',()=>{if(!history.length)return;future.push(snapshot());restore(history.pop())});
   els.redoBtn.addEventListener('click',()=>{if(!future.length)return;history.push(snapshot());restore(future.pop())});
-  els.saveBtn.addEventListener('click',async()=>{els.saveBtn.disabled=true;els.saveBtn.textContent='Saving…';try{const res=await fetch(api('/api/fib-editor/save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeframe:activeTf,lowT:low.t,highT:high.t,takeProfitValue:alertValue})});const j=await res.json();if(!res.ok)throw new Error(j.error||'save_failed');data.anchorSource='manual';data.anchorRevision=(data.anchorRevision||1)+1;renderMeta();setDirty(false);toast(j.queued?'Saved — bot will apply it on the next poll.':'Manual pull + Take Profit alert saved.')}catch(err){toast('Save failed: '+err.message);setDirty(true)}finally{els.saveBtn.textContent='✓ Save Pull + Alert';els.saveBtn.disabled=!dirty}});
-  els.autoBtn.addEventListener('click',async()=>{if(!confirm('Revert this cycle to fresh automatic Fib detection?'))return;els.autoBtn.disabled=true;try{const res=await fetch(api('/api/fib-editor/auto'),{method:'POST'});const j=await res.json();if(!res.ok)throw new Error(j.error||'auto_failed');toast(j.queued?'Auto re-detection queued.':'Reverted to auto detection.');setTimeout(()=>location.reload(),1200)}catch(err){toast('Could not revert: '+err.message);els.autoBtn.disabled=false}});
+  els.saveBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode does not change the bot. Use Adjust Fib from a Discord card to save.');return;}els.saveBtn.disabled=true;els.saveBtn.textContent='Saving…';try{const res=await fetch(api('/api/fib-editor/save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeframe:activeTf,lowT:low.t,highT:high.t,takeProfitValue:alertValue})});const j=await res.json();if(!res.ok)throw new Error(j.error||'save_failed');data.anchorSource='manual';data.anchorRevision=(data.anchorRevision||1)+1;renderMeta();setDirty(false);toast(j.queued?'Saved — bot will apply it on the next poll.':'Manual pull + Take Profit alert saved.')}catch(err){toast('Save failed: '+err.message);setDirty(true)}finally{els.saveBtn.textContent='✓ Save Pull + Alert';els.saveBtn.disabled=!dirty}});
+  els.autoBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode only. Live Revert to Auto is available from a signed Discord link.');return;}if(!confirm('Revert this cycle to fresh automatic Fib detection?'))return;els.autoBtn.disabled=true;try{const res=await fetch(api('/api/fib-editor/auto'),{method:'POST'});const j=await res.json();if(!res.ok)throw new Error(j.error||'auto_failed');toast(j.queued?'Auto re-detection queued.':'Reverted to auto detection.');setTimeout(()=>location.reload(),1200)}catch(err){toast('Could not revert: '+err.message);els.autoBtn.disabled=false}});
   addEventListener('resize',()=>{resize();draw()});
   load(qs.get('tf')||null).catch(err=>{toast('Editor could not load: '+err.message);els.symbol.textContent='Fib editor unavailable';els.meta.textContent=err.message});
 })();
