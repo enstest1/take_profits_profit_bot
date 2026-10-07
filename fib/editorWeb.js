@@ -464,64 +464,129 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   function demoState(tf='5m'){
     const steps={ '1m':60_000,'5m':300_000,'15m':900_000,'1h':3_600_000,'4h':14_400_000 };
     const step=steps[tf]||steps['5m'];
-    const count=156;
+
+    // Keep the demo intentionally close to the visual density of a real DEX chart.
+    // The old 156-bar series made each body only a few pixels wide and the linear
+    // synthetic path made the candles look like a staircase.
+    const count=104;
     const end=Math.floor((Date.now()-step)/step)*step;
     const start=end-step*(count-1);
     const candles=[];
     const swingLow=108000;
     const swingHigh=548000;
-    const redTag=swingLow+(swingHigh-swingLow)*0.236; // exact 0.236 touch
+    const redTag=swingLow+(swingHigh-swingLow)*0.236;
 
-    const path=i=>{
-      if(i<18) return 142000-(i*1650);                            // quiet pre-launch
-      if(i<=48) return 112000+(i-18)*(436000/30);                // impulse to high
-      if(i<=61) return 548000-(i-48)*(76000/13);                 // first pullback
-      if(i<=70) return 472000+(i-61)*(52000/9);                  // lower-high bounce
-      if(i<=91) return 524000-(i-70)*((524000-redTag)/21);       // deep retrace to 0.236
-      if(i<=113) return redTag+(i-91)*((442000-redTag)/22);      // reaction off red line
-      if(i<=130) return 442000+(i-113)*(98000/17);               // continuation
-      if(i<=144) return 540000-(i-130)*(126000/14);              // cool-off
-      return 414000+(i-144)*(26000/11);                          // current recovery
+    // Hand-shaped market structure: impulse, local pullbacks, deep retrace into
+    // the 0.236 red line, then a second expansion. Interpolation is only used
+    // between realistic structural waypoints, not as one long straight ramp.
+    const points=[
+      [0,138000],[7,129000],[12,134000],[16,swingLow],
+      [21,172000],[24,154000],[30,252000],[33,232000],
+      [39,382000],[42,355000],[47,swingHigh],
+      [52,466000],[56,506000],[61,427000],[66,344000],
+      [72,redTag],[76,258000],[82,345000],[87,468000],
+      [91,448000],[95,526000],[99,452000],[103,431000]
+    ];
+
+    const centerAt=i=>{
+      for(let p=1;p<points.length;p++){
+        const a=points[p-1],b=points[p];
+        if(i<=b[0]){
+          const u=(i-a[0])/(b[0]-a[0]);
+          const smooth=u*u*(3-2*u);
+          return a[1]+(b[1]-a[1])*smooth;
+        }
+      }
+      return points[points.length-1][1];
     };
 
-    let prev=139000;
-    for(let i=0;i<count;i++){
-      const base=path(i);
-      const micro=(Math.sin(i*1.37)*4300)+(Math.sin(i*.43)*2700);
-      let close=base+micro;
-      let open=i===0?base-1800:prev;
-      // Keep bodies modest so the chart reads like exchange candles, not bars.
-      const maxBody=Math.max(4500,base*.026);
-      if(Math.abs(close-open)>maxBody) close=open+Math.sign(close-open)*maxBody;
-      const wickBase=2800+Math.abs(Math.sin(i*.77))*6200;
-      let high=Math.max(open,close)+wickBase*(.72+Math.abs(Math.sin(i*.31))*.45);
-      let low=Math.max(1000,Math.min(open,close)-wickBase*(.65+Math.abs(Math.cos(i*.29))*.38));
+    // Deterministic pseudo-randomness so refreshes do not reshuffle the chart.
+    let seed=0x9e3779b9 ^ (step>>>0);
+    const rnd=()=>{
+      seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+      return seed/4294967296;
+    };
 
-      if(i===18){low=swingLow; open=Math.max(open,swingLow+5000); close=Math.max(close,swingLow+9000);}
-      if(i===48){high=swingHigh; close=Math.min(close,swingHigh-6500);}
-      if(i===91){
+    let prevClose=136000;
+    for(let i=0;i<count;i++){
+      const center=centerAt(i);
+      const prevCenter=i?centerAt(i-1):center;
+      const drift=center-prevCenter;
+
+      // Small opening gaps + independent close noise produce proper candle bodies
+      // and occasional counter-trend bars instead of a continuous diagonal ribbon.
+      let open=i===0 ? center-2500 : prevClose+(rnd()-.5)*Math.max(1800,prevClose*.010);
+      const noise=(rnd()-.5)*Math.max(9000,center*.050);
+      let close=open+drift+noise;
+
+      // Pull close back toward the structural path without forcing it to equal it.
+      close=close*.62+center*.38;
+      const maxBody=Math.max(7500,center*.060);
+      if(Math.abs(close-open)>maxBody) close=open+Math.sign(close-open)*maxBody;
+
+      const wickScale=Math.max(5200,center*.026);
+      let high=Math.max(open,close)+wickScale*(.35+rnd()*.95);
+      let low=Math.max(1000,Math.min(open,close)-wickScale*(.35+rnd()*.95));
+
+      if(i===16){
+        low=swingLow;
+        open=Math.max(open,swingLow+6500);
+        close=Math.max(close,swingLow+10500);
+      }
+      if(i===47){
+        high=swingHigh;
+        open=Math.min(open,swingHigh-30000);
+        close=Math.min(Math.max(close,open+8500),swingHigh-7000);
+      }
+      if(i===72){
         low=redTag;
-        open=redTag+18500;
-        close=redTag+11800;
-        high=Math.max(high,open+7200);
+        open=redTag+23500;
+        close=redTag+14500;
+        high=Math.max(high,open+8500);
       }
 
-      // Never let non-anchor noise steal the selected swing extremes.
-      if(i!==18&&i<48) low=Math.max(low,swingLow+2500);
-      if(i!==48) high=Math.min(high,swingHigh-1800);
-      if(i>48&&i!==91) low=Math.max(low,redTag+2600);
+      // Preserve the intended Fib anchors/retrace as the true extrema.
+      if(i!==16&&i<47) low=Math.max(low,swingLow+2800);
+      if(i!==47) high=Math.min(high,swingHigh-2200);
+      if(i>47&&i!==72) low=Math.max(low,redTag+3000);
 
+      // Guarantee valid OHLC after clamping.
+      high=Math.max(high,open,close);
+      low=Math.min(low,open,close);
+      if(i!==47) high=Math.min(high,swingHigh-2200);
+      if(i>47&&i!==72){
+        open=Math.max(open,redTag+3400);
+        close=Math.max(close,redTag+3400);
+        low=Math.max(low,redTag+3000);
+      }
+
+      const up=close>=open;
       const volume=
-        15000+
-        Math.abs(Math.sin(i*.39))*26000+
-        (i>=18&&i<=52?46000:0)+
-        (i>=86&&i<=95?27000:0)+
-        (i>=112&&i<=132?18000:0);
-      candles.push({t:start+i*step,o:open,h:high,l:low,c:close,v:volume});
-      prev=close;
+        13000+
+        rnd()*21000+
+        Math.abs(close-open)*.12+
+        (i>=16&&i<=49?36000:0)+
+        (i>=67&&i<=75?25000:0)+
+        (i>=80&&i<=96?13000:0);
+
+      candles.push({t:start+i*step,o:open,h:high,l:low,c:close,v:volume,up});
+      prevClose=close;
     }
 
-    const lowC=candles[18], highC=candles[48], last=candles[candles.length-1];
+    // Reassert exact structural candles after generic validity guards.
+    const lowC=candles[16];
+    lowC.l=swingLow;
+    lowC.h=Math.max(lowC.h,lowC.o,lowC.c);
+
+    const highC=candles[47];
+    highC.h=swingHigh;
+    highC.l=Math.min(highC.l,highC.o,highC.c);
+
+    const tagC=candles[72];
+    tagC.l=redTag;
+    tagC.h=Math.max(tagC.h,tagC.o,tagC.c);
+
+    const last=candles[candles.length-1];
     return {
       demo:true,
       key:'demo',
@@ -617,16 +682,16 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     for(let g=0;g<=7;g++){const x=left+pw*g/7;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,top+ph);ctx.stroke()}
     const maxV=Math.max(...candles.map(c=>c.v||0),1);
     const slot=pw/candles.length;
-    const cw=Math.max(1.8,Math.min(7.2,slot*.58));
+    const cw=Math.max(3,Math.min(9,slot*.72));
     candles.forEach((c,i)=>{
       const x=X(i),up=c.c>=c.o;
       const col=up?'#17c89a':'#ef5365';
       const yo=Y(c.o),yc=Y(c.c),yh=Y(c.h),yl=Y(c.l);
       ctx.save();
-      ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,Math.min(1.35,slot*.13));
+      ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=1;
       ctx.beginPath();ctx.moveTo(Math.round(x)+.5,yh);ctx.lineTo(Math.round(x)+.5,yl);ctx.stroke();
-      const bodyTop=Math.min(yo,yc),bodyH=Math.max(1.4,Math.abs(yo-yc));
-      ctx.fillRect(Math.round(x-cw/2),bodyTop,Math.max(1,Math.round(cw)),bodyH);
+      const bodyTop=Math.min(yo,yc),bodyH=Math.max(2.2,Math.abs(yo-yc));
+      ctx.fillRect(Math.round(x-cw/2),bodyTop,Math.max(2,Math.round(cw)),bodyH);
       const vh=Math.sqrt((c.v||0)/maxV)*volH;
       ctx.globalAlpha=.32;
       ctx.fillRect(Math.round(x-cw/2),top+ph+gap+volH-vh,Math.max(1,Math.round(cw)),vh);
