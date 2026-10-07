@@ -370,7 +370,7 @@ function errorPage(reason) {
     : 'This Fib editor link is invalid or no longer available.';
   return '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fib Editor</title>' +
     '<body style="margin:0;background:#05090d;color:#eaf2f8;font:16px system-ui;display:grid;place-items:center;min-height:100vh">' +
-    '<div style="max-width:560px;padding:32px"><h1>Take Profits · Fib Editor</h1><p style="color:#9fb0bf">' + msg + '</p></div></body>';
+    '<div style="max-width:560px;padding:32px"><h1>Golden Pocket · Fib Editor</h1><p style="color:#9fb0bf">' + msg + '</p></div></body>';
 }
 
 function editorPage() {
@@ -379,15 +379,15 @@ function editorPage() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Take Profits · Fib Editor</title>
+<title>Golden Pocket · Fib Editor</title>
 <style>
-:root{color-scheme:dark;--bg:#05090d;--panel:#0b1118;--panel2:#0f1720;--border:#1d2a35;--text:#eef4f8;--muted:#8293a3;--green:#4cff78;--lime:#b8ff00;--gold:#f5d90a;--red:#ff4f4f;--blue:#83bfff;--cyan:#52d7ff}
+:root{color-scheme:dark;--bg:#06090d;--panel:#0b1118;--panel2:#0f1720;--border:#1d2a35;--text:#eef4f8;--muted:#8293a3;--green:#19c79a;--lime:#b8ff00;--gold:#f2c84b;--red:#f04f62;--blue:#83bfff;--cyan:#52d7ff}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 40% -20%,#0f1a20 0,#05090d 45%);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif}
 button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;padding:0 24px;background:rgba(5,9,13,.94)}
-.logo{width:38px;height:38px;border:2px solid #edf2f4;border-radius:50%;display:grid;place-items:center;position:relative}.logo:after{content:"";width:24px;height:9px;border:2px solid #edf2f4;border-radius:50%;position:absolute}.logo i{width:9px;height:9px;border-radius:50%;background:#e9dc9a;z-index:2}
+.logo{width:40px;height:40px;border:1px solid #6d5511;border-radius:12px;display:grid;place-items:center;position:relative;overflow:hidden;background:radial-gradient(circle at 50% 52%,#ffe875 0 12%,#8a6b17 13% 18%,transparent 19% 30%,#e7b62c 31% 35%,transparent 36%),linear-gradient(145deg,#171204,#070904);box-shadow:inset 0 0 18px #d9aa221f,0 0 18px #d9aa2214}.logo:before{content:"";position:absolute;width:28px;height:17px;border:1.5px solid #e9bf46;border-radius:50%;transform:rotate(-15deg);opacity:.95}.logo:after{content:"";position:absolute;left:7px;right:7px;bottom:6px;height:8px;border:1px solid #d59f23;border-top:0;border-radius:0 0 9px 9px;background:linear-gradient(180deg,#d3a21a22,#f7d75b55)}.logo i{width:8px;height:8px;border-radius:50%;background:#fff1a6;box-shadow:0 0 9px #ffd95f;z-index:2}
 .brand{font-weight:800;letter-spacing:.08em}.sub{color:#8ba1b6;border-left:1px solid #33404a;padding-left:14px}.demoBadge{display:none;font-size:11px;font-weight:900;letter-spacing:.08em;color:#08130b;background:#b8ff00;border-radius:999px;padding:5px 9px}.demoBadge.show{display:inline-flex}.grow{flex:1}
 .toplink{color:#a7d1ff;text-decoration:none;font-weight:650;margin-left:12px}.toplink[hidden]{display:none}.shell{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px;max-width:1680px;margin:auto}
-.main{min-width:0}.asset{display:flex;align-items:center;gap:12px;margin:3px 4px 14px}.tokenmark{width:46px;height:46px;border:1px solid #8795a0;border-radius:50%;display:grid;place-items:center;font-weight:800}.asset h1{font-size:28px;margin:0}.meta{color:#8eb3d5;font-size:14px;margin-top:2px}.tfs{margin-left:auto;display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}.tf{min-width:54px;padding:10px 12px;border:0;border-right:1px solid var(--border);background:#0b1118;color:#9eb0bf;cursor:pointer}.tf:last-child{border-right:0}.tf.active{color:#dfffea;background:#102018;box-shadow:inset 0 0 0 1px #26ce5b}.chartbox{position:relative;background:#03070a;border:1px solid var(--border);border-radius:10px;overflow:hidden}.charthead{position:absolute;z-index:3;left:15px;top:12px;pointer-events:none}.charttitle{font-weight:750}.ohlc{font-size:12px;color:#94a6b4;margin-top:4px}.ohlc strong{color:var(--green)}canvas{display:block;width:100%;height:620px;touch-action:none}.hint{display:flex;gap:8px;align-items:center;color:#91a2b0;padding:10px 13px;border:1px solid var(--border);border-top:0;border-radius:0 0 10px 10px;background:#080e13;font-size:13px}.hint b{color:#e4edf3}
+.main{min-width:0}.asset{display:flex;align-items:center;gap:12px;margin:3px 4px 14px}.tokenmark{width:46px;height:46px;border:1px solid #8795a0;border-radius:50%;display:grid;place-items:center;font-weight:800}.asset h1{font-size:28px;margin:0}.meta{color:#8eb3d5;font-size:14px;margin-top:2px}.tfs{margin-left:auto;display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}.tf{min-width:54px;padding:10px 12px;border:0;border-right:1px solid var(--border);background:#0b1118;color:#9eb0bf;cursor:pointer;transition:.14s ease}.tf:last-child{border-right:0}.tf:hover{background:#111a23;color:#d5e1e9}.tf.active{color:#fff0a6;background:#211b0d;box-shadow:inset 0 0 0 1px #9e791d}.tf:disabled{opacity:.55;cursor:wait}.chartbox{position:relative;background:#03070a;border:1px solid var(--border);border-radius:10px;overflow:hidden}.charthead{position:absolute;z-index:3;left:15px;top:12px;pointer-events:none}.charttitle{font-weight:750}.ohlc{font-size:12px;color:#94a6b4;margin-top:4px}.ohlc strong{color:var(--green)}canvas{display:block;width:100%;height:620px;touch-action:none}.hint{display:flex;gap:8px;align-items:center;color:#91a2b0;padding:10px 13px;border:1px solid var(--border);border-top:0;border-radius:0 0 10px 10px;background:#080e13;font-size:13px}.hint b{color:#e4edf3}
 .side{display:flex;flex-direction:column;gap:12px}.card{background:linear-gradient(180deg,#0d141c,#0a1016);border:1px solid var(--border);border-radius:10px;padding:16px}.card h2{font-size:16px;margin:0 0 14px}.mode{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.pill{font-size:12px;font-weight:900;padding:5px 12px;border-radius:999px;background:var(--green);color:#061108}.pill.manual{background:var(--gold);color:#181500}.row{display:grid;grid-template-columns:1fr auto;gap:12px;padding:9px 0;border-top:1px solid #15212b}.row:first-of-type{border-top:0}.lab{color:#9eafbd}.val{font-weight:750;text-align:right}.small{font-size:12px;color:#708394}.levels .row:nth-child(2) .val{color:var(--green)}.levels .gold .lab,.levels .gold .val{color:var(--gold)}.levels .entry .lab,.levels .entry .val{color:var(--red)}.levels .alert .lab,.levels .alert .val{color:var(--cyan);font-weight:800}
 .alertbox{padding:12px;border:1px solid #1e4654;border-radius:8px;background:#08151a;margin-top:12px}.alertbox strong{color:var(--cyan)}.alertbox p{margin:5px 0 0;color:#8ca7b1;font-size:12px;line-height:1.4}
 .actions{display:grid;gap:9px}.btn{border:1px solid #283744;background:#111a22;color:#dbe6ed;border-radius:8px;padding:12px 14px;font-weight:750;cursor:pointer}.btn:hover{background:#16222d}.btn.primary{border-color:#1d6e3e;background:#173d27;color:#dffff0}.btn.danger{border-color:#5c3333;background:#241415}.btn:disabled{opacity:.42;cursor:not-allowed}.dirty{font-size:12px;color:#f2dc74;margin:8px 0 0;min-height:16px}.toast{position:fixed;right:20px;bottom:20px;max-width:360px;padding:12px 14px;border:1px solid #31536a;border-radius:9px;background:#0b1821;color:#d9eefb;box-shadow:0 12px 40px #0008;display:none;z-index:10}.toast.show{display:block}
@@ -397,14 +397,14 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
 </style>
 </head>
 <body>
-<header class="topbar"><div class="logo"><i></i></div><div class="brand">TAKE PROFITS</div><div class="sub">Fib Editor</div><span class="demoBadge" id="demoBadge">PUBLIC DEMO</span><div class="grow"></div><a id="dexTop" class="toplink" target="_blank" rel="noreferrer" hidden>View on DexScreener ↗</a></header>
+<header class="topbar"><div class="logo"><i></i></div><div class="brand">GOLDEN POCKET</div><div class="sub">Fib Editor</div><span class="demoBadge" id="demoBadge">PUBLIC DEMO</span><div class="grow"></div><a id="dexTop" class="toplink" target="_blank" rel="noreferrer" hidden>View on DexScreener ↗</a></header>
 <main class="shell">
 <section class="main">
   <div class="asset"><div class="tokenmark" id="mark">TP</div><div><h1 id="symbol">Loading…</h1><div class="meta" id="meta">Fetching cycle</div></div>
     <div class="tfs" id="tfs"><button class="tf" data-tf="1m">1m</button><button class="tf" data-tf="5m">5m</button><button class="tf" data-tf="15m">15m</button><button class="tf" data-tf="1h">1h</button><button class="tf" data-tf="4h">4h</button></div>
   </div>
   <div class="chartbox"><div class="charthead"><div class="charttitle" id="chartTitle">Fib chart</div><div class="ohlc" id="ohlc"></div></div><canvas id="chart"></canvas></div>
-  <div class="hint">↕ <b>Drag the green low/high handles</b> to snap the Fib pull to candle wicks. Drag the <b style="color:var(--cyan)">TAKE PROFIT ALERT</b> line down from 1.618 to choose when Discord should notify you.</div>
+  <div class="hint">↕ <b>Drag the gold low/high handles</b> to snap the Fib pull to candle wicks. Drag the <b style="color:var(--cyan)">TAKE PROFIT ALERT</b> line down from 1.618 to choose when Discord should notify you.</div>
   <div class="footergrid">
     <div class="mini"><h3>Cycle Info</h3><div class="stats"><div class="stat"><span>Impulse</span><b id="impulse">—</b></div><div class="stat"><span>Timeframe</span><b id="tfStat">—</b></div><div class="stat"><span>Source</span><b id="sourceStat">—</b></div><div class="stat"><span>Revision</span><b id="revStat">—</b></div></div></div>
     <div class="mini links"><h3>Token Links</h3><a id="dexBottom" target="_blank" rel="noreferrer">DexScreener ↗</a></div>
@@ -464,37 +464,69 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   function demoState(tf='5m'){
     const steps={ '1m':60_000,'5m':300_000,'15m':900_000,'1h':3_600_000,'4h':14_400_000 };
     const step=steps[tf]||steps['5m'];
-    const count=140;
-    const end=Date.now()-step;
+    const count=156;
+    const end=Math.floor((Date.now()-step)/step)*step;
     const start=end-step*(count-1);
     const candles=[];
-    const target=i=>{
-      if(i<18)return 132000-(i*900);
-      if(i<=55)return 112000+(i-18)*(437000/37);
-      if(i<=92)return 549000-(i-55)*(270000/37);
-      if(i<=120)return 279000+(i-92)*(165000/28);
-      return 444000-(i-120)*(26000/19);
+    const swingLow=108000;
+    const swingHigh=548000;
+    const redTag=swingLow+(swingHigh-swingLow)*0.236; // exact 0.236 touch
+
+    const path=i=>{
+      if(i<18) return 142000-(i*1650);                            // quiet pre-launch
+      if(i<=48) return 112000+(i-18)*(436000/30);                // impulse to high
+      if(i<=61) return 548000-(i-48)*(76000/13);                 // first pullback
+      if(i<=70) return 472000+(i-61)*(52000/9);                  // lower-high bounce
+      if(i<=91) return 524000-(i-70)*((524000-redTag)/21);       // deep retrace to 0.236
+      if(i<=113) return redTag+(i-91)*((442000-redTag)/22);      // reaction off red line
+      if(i<=130) return 442000+(i-113)*(98000/17);               // continuation
+      if(i<=144) return 540000-(i-130)*(126000/14);              // cool-off
+      return 414000+(i-144)*(26000/11);                          // current recovery
     };
-    let prev=132000;
+
+    let prev=139000;
     for(let i=0;i<count;i++){
-      const center=target(i)+Math.sin(i*0.71)*9000+Math.sin(i*0.19)*5000;
-      const o=i===0?center:prev;
-      const c=center+Math.sin(i*1.17)*6500;
-      const wick=7000+Math.abs(Math.sin(i*.47))*11000;
-      let h=Math.max(o,c)+wick;
-      let l=Math.max(1000,Math.min(o,c)-wick*.82);
-      if(i===18)l=112000;
-      if(i===55)h=549000;
-      const v=26000+Math.abs(Math.sin(i*.37))*62000+(i>45&&i<62?52000:0);
-      candles.push({t:start+i*step,o,h,l,c,v});
-      prev=c;
+      const base=path(i);
+      const micro=(Math.sin(i*1.37)*4300)+(Math.sin(i*.43)*2700);
+      let close=base+micro;
+      let open=i===0?base-1800:prev;
+      // Keep bodies modest so the chart reads like exchange candles, not bars.
+      const maxBody=Math.max(4500,base*.026);
+      if(Math.abs(close-open)>maxBody) close=open+Math.sign(close-open)*maxBody;
+      const wickBase=2800+Math.abs(Math.sin(i*.77))*6200;
+      let high=Math.max(open,close)+wickBase*(.72+Math.abs(Math.sin(i*.31))*.45);
+      let low=Math.max(1000,Math.min(open,close)-wickBase*(.65+Math.abs(Math.cos(i*.29))*.38));
+
+      if(i===18){low=swingLow; open=Math.max(open,swingLow+5000); close=Math.max(close,swingLow+9000);}
+      if(i===48){high=swingHigh; close=Math.min(close,swingHigh-6500);}
+      if(i===91){
+        low=redTag;
+        open=redTag+18500;
+        close=redTag+11800;
+        high=Math.max(high,open+7200);
+      }
+
+      // Never let non-anchor noise steal the selected swing extremes.
+      if(i!==18&&i<48) low=Math.max(low,swingLow+2500);
+      if(i!==48) high=Math.min(high,swingHigh-1800);
+      if(i>48&&i!==91) low=Math.max(low,redTag+2600);
+
+      const volume=
+        15000+
+        Math.abs(Math.sin(i*.39))*26000+
+        (i>=18&&i<=52?46000:0)+
+        (i>=86&&i<=95?27000:0)+
+        (i>=112&&i<=132?18000:0);
+      candles.push({t:start+i*step,o:open,h:high,l:low,c:close,v:volume});
+      prev=close;
     }
-    const lowC=candles[18], highC=candles[55], last=candles[candles.length-1];
+
+    const lowC=candles[18], highC=candles[48], last=candles[candles.length-1];
     return {
       demo:true,
       key:'demo',
       symbol:'ORBIT',
-      name:'Take Profits Demo',
+      name:'Golden Pocket Demo',
       chain:'robinhood',
       address:'0xDEMO00000000000000000000000000000000FIB',
       dexUrl:null,
@@ -506,7 +538,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
       metric:'marketCap',
       anchorSource:'auto',
       anchorRevision:1,
-      anchors:{low:{t:lowC.t,v:112000},high:{t:highC.t,v:549000}},
+      anchors:{low:{t:lowC.t,v:swingLow},high:{t:highC.t,v:swingHigh}},
       levels:null,
       targets:null,
       takeProfitAlert:null,
@@ -516,8 +548,14 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     };
   }
 
+  function setTimeframeBusy(busy){
+    root.querySelectorAll('.tf').forEach(b=>{ b.disabled=busy; });
+  }
+
   async function load(tf){
-    els.saveBtn.disabled=true; activeTf=tf||activeTf||qs.get('tf')||(isDemo?'5m':null);
+    els.saveBtn.disabled=true;
+    setTimeframeBusy(true);
+    activeTf=tf||activeTf||qs.get('tf')||(isDemo?'5m':null);
     let j;
     if(isDemo){
       j=demoState(activeTf||'5m');
@@ -530,7 +568,12 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     low={...j.anchors.low}; high={...j.anchors.high};
     const lv=levels(); alertValue=Number(j.takeProfitAlert?.value); if(!Number.isFinite(alertValue))alertValue=lv.tp1;
     history=[];future=[];setDirty(false);renderMeta();sync();resize();draw();
-    root.querySelectorAll('.tf').forEach(b=>b.classList.toggle('active',b.dataset.tf===activeTf));
+    root.querySelectorAll('.tf').forEach(b=>{
+      const on=b.dataset.tf===activeTf;
+      b.classList.toggle('active',on);
+      b.setAttribute('aria-pressed',on?'true':'false');
+    });
+    setTimeframeBusy(false);
     els.autoBtn.disabled=!!j.demo;
     if(j.demo){
       els.saveBtn.textContent='Open from Discord to Save';
@@ -572,12 +615,28 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     ctx.strokeStyle='#10202a';ctx.lineWidth=1;ctx.font='11px system-ui';ctx.fillStyle='#718392';
     for(let g=0;g<=5;g++){const y=top+ph*g/5;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(left+pw,y);ctx.stroke();const v=ymax-(ymax-ymin)*g/5;ctx.fillText(fmt(v),left+pw+8,y+4)}
     for(let g=0;g<=7;g++){const x=left+pw*g/7;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,top+ph);ctx.stroke()}
-    const maxV=Math.max(...candles.map(c=>c.v||0),1),cw=Math.max(1,Math.min(8,pw/candles.length*.62));
-    candles.forEach((c,i)=>{const x=X(i),up=c.c>=c.o,col=up?'#4cff78':'#f4f7f9';ctx.strokeStyle=col;ctx.fillStyle=col;ctx.beginPath();ctx.moveTo(x,Y(c.h));ctx.lineTo(x,Y(c.l));ctx.stroke();const a=Y(Math.max(c.o,c.c)),b=Math.max(1,Math.abs(Y(c.o)-Y(c.c)));ctx.fillRect(x-cw/2,a,cw,b);const vh=Math.sqrt((c.v||0)/maxV)*volH;ctx.globalAlpha=.45;ctx.fillRect(x-cw/2,top+ph+gap+volH-vh,cw,vh);ctx.globalAlpha=1});
+    const maxV=Math.max(...candles.map(c=>c.v||0),1);
+    const slot=pw/candles.length;
+    const cw=Math.max(1.8,Math.min(7.2,slot*.58));
+    candles.forEach((c,i)=>{
+      const x=X(i),up=c.c>=c.o;
+      const col=up?'#17c89a':'#ef5365';
+      const yo=Y(c.o),yc=Y(c.c),yh=Y(c.h),yl=Y(c.l);
+      ctx.save();
+      ctx.strokeStyle=col;ctx.fillStyle=col;ctx.lineWidth=Math.max(1,Math.min(1.35,slot*.13));
+      ctx.beginPath();ctx.moveTo(Math.round(x)+.5,yh);ctx.lineTo(Math.round(x)+.5,yl);ctx.stroke();
+      const bodyTop=Math.min(yo,yc),bodyH=Math.max(1.4,Math.abs(yo-yc));
+      ctx.fillRect(Math.round(x-cw/2),bodyTop,Math.max(1,Math.round(cw)),bodyH);
+      const vh=Math.sqrt((c.v||0)/maxV)*volH;
+      ctx.globalAlpha=.32;
+      ctx.fillRect(Math.round(x-cw/2),top+ph+gap+volH-vh,Math.max(1,Math.round(cw)),vh);
+      ctx.restore();
+    });
     const line=(v,col,label,w=1.3,dash=[])=>{const y=Y(v);ctx.save();ctx.strokeStyle=col;ctx.lineWidth=w;ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(left+pw,y);ctx.stroke();ctx.setLineDash([]);ctx.font='700 12px system-ui';const text=label+'  '+fmt(v),tw=ctx.measureText(text).width+14;ctx.fillStyle='#071015';ctx.strokeStyle=col;ctx.lineWidth=1;roundRect(left+pw-tw-7,y-12,tw,23,5);ctx.fill();ctx.stroke();ctx.fillStyle=col;ctx.fillText(text,left+pw-tw,y+4);ctx.restore()};
-    // Golden pocket
-    ctx.fillStyle='rgba(245,217,10,.10)';ctx.fillRect(left,Math.min(Y(lv.gold),Y(lv.entry)),pw,Math.abs(Y(lv.gold)-Y(lv.entry)));
-    line(low.v,'#80919e','0.0');line(lv.entry,'#ff4f4f',String(data.ratios.entry),1.4);line(lv.gold,'#f5d90a',String(data.ratios.goldenUpper),1.6);line(high.v,'#dbe5eb','1.0',1.4);
+    // Fib reaction zones: red below 0.236, gold between 0.236 and 0.382.
+    ctx.fillStyle='rgba(240,79,98,.055)';ctx.fillRect(left,Math.min(Y(lv.entry),Y(low.v)),pw,Math.abs(Y(lv.entry)-Y(low.v)));
+    ctx.fillStyle='rgba(242,200,75,.085)';ctx.fillRect(left,Math.min(Y(lv.gold),Y(lv.entry)),pw,Math.abs(Y(lv.gold)-Y(lv.entry)));
+    line(low.v,'#758693','0.0');line(lv.entry,'#f04f62',String(data.ratios.entry),1.6);line(lv.gold,'#f2c84b',String(data.ratios.goldenUpper),1.6);line(high.v,'#dbe5eb','1.0',1.4);
     // Movable notification trigger is separate from the Fib extension. Draw it first
     // so the fixed 1.618 remains visually dominant when both start at the same price.
     line(alertValue,'#52d7ff','TAKE PROFIT ALERT',2,[7,5]);
@@ -598,7 +657,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
       plot.alertHandle={x:hx0,y:hy0,w:hw,h:hh};
     }
     const li=idxForTime(low.t),hi=idxForTime(high.t),lx=X(li),ly=Y(low.v),hx=X(hi),hy=Y(high.v);
-    ctx.save();ctx.strokeStyle='#9aa8b3';ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(hx,hy);ctx.stroke();ctx.setLineDash([]);[[lx,ly],[hx,hy]].forEach(([x,y])=>{ctx.fillStyle='#071015';ctx.strokeStyle='#4cff78';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.stroke()});ctx.restore();
+    ctx.save();ctx.strokeStyle='#9aa8b3';ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(hx,hy);ctx.stroke();ctx.setLineDash([]);[[lx,ly],[hx,hy]].forEach(([x,y])=>{ctx.fillStyle='#071015';ctx.strokeStyle='#f2c84b';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.stroke()});ctx.restore();
     // Current value
     if(Number.isFinite(Number(data.lastValue))){const v=Number(data.lastValue);ctx.strokeStyle='#b8ff00';ctx.setLineDash([2,4]);ctx.beginPath();ctx.moveTo(left,Y(v));ctx.lineTo(left+pw,Y(v));ctx.stroke();ctx.setLineDash([])}
     // x labels
@@ -613,13 +672,17 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   canvas.addEventListener('pointerup',e=>{dragging=null;try{canvas.releasePointerCapture(e.pointerId)}catch{}});
   canvas.addEventListener('pointercancel',()=>dragging=null);
 
-  root.getElementById('tfs').addEventListener('click',e=>{const b=e.target.closest('.tf');if(!b||b.dataset.tf===activeTf)return;load(b.dataset.tf).catch(err=>toast('Could not load timeframe: '+err.message))});
+  root.getElementById('tfs').addEventListener('click',e=>{
+    const b=e.target.closest('.tf');
+    if(!b||b.disabled||b.dataset.tf===activeTf)return;
+    load(b.dataset.tf).catch(err=>{setTimeframeBusy(false);toast('Could not load timeframe: '+err.message)});
+  });
   els.undoBtn.addEventListener('click',()=>{if(!history.length)return;future.push(snapshot());restore(history.pop())});
   els.redoBtn.addEventListener('click',()=>{if(!future.length)return;history.push(snapshot());restore(future.pop())});
   els.saveBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode does not change the bot. Use Adjust Fib from a Discord card to save.');return;}els.saveBtn.disabled=true;els.saveBtn.textContent='Saving…';try{const res=await fetch(api('/api/fib-editor/save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeframe:activeTf,lowT:low.t,highT:high.t,takeProfitValue:alertValue})});const j=await res.json();if(!res.ok)throw new Error(j.error||'save_failed');data.anchorSource='manual';data.anchorRevision=(data.anchorRevision||1)+1;renderMeta();setDirty(false);toast(j.queued?'Saved — bot will apply it on the next poll.':'Manual pull + Take Profit alert saved.')}catch(err){toast('Save failed: '+err.message);setDirty(true)}finally{els.saveBtn.textContent='✓ Save Pull + Alert';els.saveBtn.disabled=!dirty}});
   els.autoBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode only. Live Revert to Auto is available from a signed Discord link.');return;}if(!confirm('Revert this cycle to fresh automatic Fib detection?'))return;els.autoBtn.disabled=true;try{const res=await fetch(api('/api/fib-editor/auto'),{method:'POST'});const j=await res.json();if(!res.ok)throw new Error(j.error||'auto_failed');toast(j.queued?'Auto re-detection queued.':'Reverted to auto detection.');setTimeout(()=>location.reload(),1200)}catch(err){toast('Could not revert: '+err.message);els.autoBtn.disabled=false}});
   addEventListener('resize',()=>{resize();draw()});
-  load(qs.get('tf')||null).catch(err=>{toast('Editor could not load: '+err.message);els.symbol.textContent='Fib editor unavailable';els.meta.textContent=err.message});
+  load(qs.get('tf')||null).catch(err=>{setTimeframeBusy(false);toast('Editor could not load: '+err.message);els.symbol.textContent='Fib editor unavailable';els.meta.textContent=err.message});
 })();
 </script>
 </body></html>`;
