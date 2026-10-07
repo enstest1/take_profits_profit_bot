@@ -88,6 +88,16 @@ export const FIB = {
   /** Standard-mode crossing confirmation: consecutive 1-minute closes beyond the level. */
   CONFIRM_CLOSES: envNum('FIB_CONFIRM_CLOSES', 2),
 
+  /**
+   * Telegram Golden Pocket pre-buy confirmation.
+   * Two completed 5m closes must remain inside 0.382 → 0.236 before the
+   * pre-buy notification is emitted. Platform-gated in evaluate.js so Discord
+   * keeps the existing Fibonacci alert behavior.
+   */
+  TG_PREBUY_TIMEFRAME: envStr('FIB_TG_PREBUY_TIMEFRAME', '5m'),
+  TG_PREBUY_INTERVAL_MS: envNum('FIB_TG_PREBUY_INTERVAL_MS', 5 * 60_000),
+  TG_PREBUY_CONFIRM_CLOSES: envNum('FIB_TG_PREBUY_CONFIRM_CLOSES', 2),
+
   /** Behavior when a cycle arms with price already below levels: 'deepest' fires the zone price is in now; 'none' arms silently. */
   ALERT_ON_ARM: envStr('FIB_ALERT_ON_ARM', 'deepest'),
 
