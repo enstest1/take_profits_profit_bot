@@ -40,6 +40,29 @@ function ratioLabel(r) {
 }
 
 const KINDS = {
+  golden_prebuy: {
+    color: 0xf2c84b,
+    emoji: '🟡',
+    title: (s, c) => c.symbol + ' — GOLDEN POCKET CONFIRMED',
+    line: (ev, s) =>
+      '**' + (ev.confirmCloses || FIB.TG_PREBUY_CONFIRM_CLOSES) + ' consecutive ' +
+      (ev.confirmTimeframe || FIB.TG_PREBUY_TIMEFRAME) +
+      ' closes** confirmed inside the **0.382 → 0.236** pocket.' +
+      '\nStart allocating / get ready to enter. Watching **0.236 ' +
+      fmtUsd(s.entryValue) + '** for the main size-in signal.',
+  },
+  size_in: {
+    color: 0xef4444,
+    emoji: '🎯',
+    title: (s, c) => c.symbol + ' — SIZE IN · 0.236 TAGGED',
+    line: (ev, s) =>
+      'Price touched/crossed the **0.236** level at **' + fmtUsd(ev.level) +
+      '** — the main Golden Pocket size-in signal has fired.' +
+      (s.targets
+        ? '\nTargets armed: **Take Profit ' + fmtUsd(s.takeProfitAlert?.value ?? s.targets.tp1) +
+          '** · 1.618 ref ' + fmtUsd(s.targets.tp1) + ' · **TP2 ' + fmtUsd(s.targets.tp2) + '**'
+        : ''),
+  },
   golden: {
     color: 0x14b8a6,
     emoji: '🌗',
@@ -144,7 +167,7 @@ export function buildFibEmbed(ev, state, ctx, hasChart = false) {
     })
     .setTimestamp();
 
-  if (ev.kind === 'golden' || ev.kind === 'level') {
+  if (ev.kind === 'golden' || ev.kind === 'golden_prebuy' || ev.kind === 'level') {
     embed.addFields({
       name: 'Next levels',
       value: Object.keys(state.levels.alerts)
@@ -156,7 +179,7 @@ export function buildFibEmbed(ev, state, ctx, hasChart = false) {
     });
   }
 
-  if (ev.kind === 'entry_touch' && hasChart) {
+  if ((ev.kind === 'entry_touch' || ev.kind === 'size_in') && hasChart) {
     embed.setImage('attachment://' + chartFileName(ctx.symbol));
   }
 

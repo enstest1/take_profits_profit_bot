@@ -14,6 +14,7 @@ import { stampEntryValuation, logValuationAudit, valuationFromLive } from './val
 import { isAlertCardsEnabledForChannel, buildAutotrackPayload } from './alertCards/index.js';
 import { isBlockedChannel } from './blockedChannels.js';
 import { isCaMutedChannel } from './caMuteChannels.js';
+import { buildGoldenPocketSetupUrl } from './fib/editorWeb.js';
 
 export function fmtUsd(n) {
   if (!n || isNaN(Number(n))) return '—';
@@ -80,6 +81,20 @@ export async function sendTrackingEmbed(message, token, storageKey, db, buildEnt
       .setFooter({ text: chainLabel(chainKey) })
       .setTimestamp();
     if (token.imageUrl) embed.setThumbnail(token.imageUrl);
+  }
+
+  // Telegram only: Card #1 gives the tracked token a signed Golden Pocket
+  // setup link. Opening it does not change tracking until the user saves a
+  // manual pull or chooses auto detection.
+  if (process.env.PLATFORM === 'telegram') {
+    const goldenUrl = buildGoldenPocketSetupUrl(storageKey);
+    if (goldenUrl) {
+      embed.addFields({
+        name: 'Golden Pocket',
+        value: '[Open Fib Editor](' + goldenUrl + ') · manual pull / alerts',
+        inline: false,
+      });
+    }
   }
 
   const sentMsg =

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FIB } from '../config.js';
-import { initStateShell, armCycle, applyManualAnchors, liveTick, barClose, recomputeDerived } from '../engine.js';
+import { initStateShell, armCycle, applyManualAnchors, liveTick, barClose, telegramGoldenPocketClose, recomputeDerived } from '../engine.js';
 
 // TENDIES-like reference impulse (values are market cap USD). Never hardcoded in prod —
 // this is just a realistic fixture: low $97.94K → high $8.03M.
@@ -256,4 +256,68 @@ test('custom take-profit saved below live price fires once on the next poll', ()
   assert.deepEqual(ev.map((e) => e.kind), ['take_profit']);
   const again = liveTick(s, live * 1.001, live * 1.002, 14_000);
   assert.equal(again.filter((e) => e.kind === 'take_profit').length, 0);
+});
+
+
+test('Telegram Golden Pocket: two consecutive 5m closes inside 0.382→0.236 fire pre-buy once', () => {
+  const { s } = armed('standard');
+  s.telegramGoldenPocket = true;
+
+  let ev = telegramGoldenPocketClose(s, lvl(0.35), 300_000);
+  assert.equal(ev.length, 0);
+  assert.equal(s.pocketConfirmCount, 1);
+
+  ev = telegramGoldenPocketClose(s, lvl(0.34), 600_000);
+  assert.deepEqual(ev.map((e) => e.kind), ['golden_prebuy']);
+  assert.ok(s.fired.golden);
+  assert.equal(s.pocketConfirmCount, 0);
+
+  ev = telegramGoldenPocketClose(s, lvl(0.33), 900_000);
+  assert.equal(ev.length, 0, 'pre-buy must only fire once per cycle');
+});
+
+test('Telegram Golden Pocket: close back above 0.382 resets first confirmation', () => {
+  const { s } = armed('standard');
+  s.telegramGoldenPocket = true;
+
+  telegramGoldenPocketClose(s, lvl(0.35), 300_000);
+  assert.equal(s.pocketConfirmCount, 1);
+
+  telegramGoldenPocketClose(s, lvl(0.45), 600_000);
+  assert.equal(s.pocketConfirmCount, 0);
+
+  let ev = telegramGoldenPocketClose(s, lvl(0.36), 900_000);
+  assert.equal(ev.length, 0);
+  ev = telegramGoldenPocketClose(s, lvl(0.35), 1_200_000);
+  assert.deepEqual(ev.map((e) => e.kind), ['golden_prebuy']);
+});
+
+test('Telegram Golden Pocket: 0.236 touch supersedes unfinished pre-buy confirmation', () => {
+  const { s } = armed('standard');
+  s.telegramGoldenPocket = true;
+
+  let ev = telegramGoldenPocketClose(s, lvl(0.35), 300_000);
+  assert.equal(ev.length, 0);
+  assert.equal(s.pocketConfirmCount, 1);
+
+  tick(s, lvl(0.40), 310_000);
+  ev = tick(s, lvl(0.20), 320_000);
+  assert.deepEqual(ev.map((e) => e.kind), ['entry_touch']);
+  assert.equal(s.status, 'target_mode');
+  assert.equal(s.pocketConfirmCount, 0);
+  assert.ok(s.pocketBypassedAt);
+
+  ev = telegramGoldenPocketClose(s, lvl(0.34), 600_000);
+  assert.equal(ev.length, 0, 'pre-buy must never arrive after size-in');
+  assert.equal(s.fired.golden, null);
+});
+
+test('Telegram Golden Pocket: arming already below 0.236 emits only size-in entry', () => {
+  const s = initStateShell('standard', '1h', 1_000);
+  s.metric = 'marketCap';
+  s.telegramGoldenPocket = true;
+  const events = armCycle(s, det(), lvl(0.1), 2_000);
+  assert.deepEqual(events.map((e) => e.kind), ['entry_touch']);
+  assert.equal(s.status, 'target_mode');
+  assert.equal(s.fired.golden, null);
 });

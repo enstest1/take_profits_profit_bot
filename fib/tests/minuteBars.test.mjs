@@ -38,3 +38,26 @@ test('non-finite samples are ignored', () => {
   assert.equal(update('k', NaN, T + 1_000), null);
   assert.equal(currentBar('k'), null);
 });
+
+
+test('5m stream closes independently from the default 1m stream', () => {
+  const FIVE = 5 * M;
+  const T5 = T - (T % FIVE);
+
+  update('k', 100, T5 + 1_000); // default 1m
+  update('k', 200, T5 + 1_000, FIVE); // Telegram Golden Pocket 5m
+
+  const oneClosed = update('k', 110, T5 + M + 1_000);
+  assert.ok(oneClosed);
+  assert.equal(oneClosed.c, 100);
+
+  // 5m bar is still open at +1m.
+  assert.equal(update('k', 210, T5 + M + 1_000, FIVE), null);
+  assert.equal(currentBar('k', FIVE).c, 210);
+
+  const fiveClosed = update('k', 220, T5 + FIVE + 1_000, FIVE);
+  assert.ok(fiveClosed);
+  assert.equal(fiveClosed.start, T5);
+  assert.equal(fiveClosed.end, T5 + FIVE);
+  assert.equal(fiveClosed.c, 210);
+});

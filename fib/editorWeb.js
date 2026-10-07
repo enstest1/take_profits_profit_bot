@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import * as engine from './engine.js';
 import { FIB } from './config.js';
 import { fetchCandles, resolveTopPool } from './geckoTerminal.js';
+import { detectImpulse } from './swingDetector.js';
 import { pairFromDexUrl, updateFibWatch } from './store.js';
 import { ensureDBSchema, loadDB } from '../dbStore.js';
 import { parseStorageKey } from '../chains.js';
@@ -58,20 +59,45 @@ export function buildFibEditorUrl(key, cycleId, now = Date.now()) {
   );
 }
 
+/**
+ * Signed Telegram setup link for a token that is already tracked but does not
+ * have a Golden Pocket cycle yet. Saving or choosing auto from this link
+ * attaches Golden Pocket to the token.
+ */
+export function buildGoldenPocketSetupUrl(key, now = Date.now()) {
+  const base = baseUrl();
+  if (!base || !secret() || !key) return null;
+  const exp = Math.floor(now / 1000) + EDIT_TTL_SEC;
+  const payload = 'setup|' + String(key) + '|' + exp;
+  const sig = hmac(payload);
+  return (
+    base + '/fib-editor?setup=1&key=' + encodeURIComponent(String(key)) +
+    '&exp=' + exp + '&sig=' + sig
+  );
+}
+
 function authQuery(url) {
   if (!secret()) return { ok: false, error: 'editor_disabled' };
   const u = new URL(url || '/', 'http://fib.local');
   const key = u.searchParams.get('key') || '';
-  const cycle = Number(u.searchParams.get('cycle'));
   const exp = Number(u.searchParams.get('exp'));
   const sig = u.searchParams.get('sig') || '';
-  if (!key || !Number.isInteger(cycle) || cycle < 1 || !Number.isFinite(exp) || !sig) {
-    return { ok: false, error: 'bad_link' };
-  }
+  const setup = u.searchParams.get('setup') === '1';
+
+  if (!key || !Number.isFinite(exp) || !sig) return { ok: false, error: 'bad_link' };
   if (Math.floor(Date.now() / 1000) > exp) return { ok: false, error: 'link_expired' };
+
+  if (setup) {
+    const expected = hmac('setup|' + key + '|' + exp);
+    if (!safeEqual(sig, expected)) return { ok: false, error: 'bad_signature' };
+    return { ok: true, setup: true, key, cycle: 0, exp, sig, url: u };
+  }
+
+  const cycle = Number(u.searchParams.get('cycle'));
+  if (!Number.isInteger(cycle) || cycle < 1) return { ok: false, error: 'bad_link' };
   const expected = hmac(key + '|' + cycle + '|' + exp);
   if (!safeEqual(sig, expected)) return { ok: false, error: 'bad_signature' };
-  return { ok: true, key, cycle, exp, sig, url: u };
+  return { ok: true, setup: false, key, cycle, exp, sig, url: u };
 }
 
 function json(res, status, body) {
@@ -114,6 +140,31 @@ function locate(db, key) {
   return null;
 }
 
+function locateTracked(db, key) {
+  const active = locate(db, key);
+  if (active) return active;
+  const t = db.tokens?.[key];
+  if (t) return { where: 'tokens-setup', entry: t, fib: null };
+  return null;
+}
+
+function inferredMetric(entry) {
+  const px = Number(entry?.lastPrice ?? entry?.priceAtCall);
+  const mc = Number(
+    entry?.lastValuation?.marketCap ??
+    entry?.lastValuation?.market_cap ??
+    entry?.mcapAtCall,
+  );
+  const supplyFactor =
+    Number.isFinite(px) && px > 0 && Number.isFinite(mc) && mc > 0
+      ? mc / px
+      : null;
+  return {
+    metric: supplyFactor ? 'marketCap' : 'price',
+    supplyFactor,
+  };
+}
+
 function convertCandles(candles, fib) {
   if (fib.metric !== 'marketCap' || !fib.supplyFactor) return candles;
   const f = Number(fib.supplyFactor);
@@ -132,7 +183,7 @@ async function candlesFor(key, loc, tf, { fresh = false, limit = 1000 } = {}) {
   const parsed = parseStorageKey(key);
   const chainId = (loc.entry.chain || parsed.chainId || '').toLowerCase();
   const address = loc.entry.address || parsed.address;
-  let pool = loc.fib.poolAddress || loc.entry.pairAddress || pairFromDexUrl(loc.entry.dexUrl);
+  let pool = loc.fib?.poolAddress || loc.entry.pairAddress || pairFromDexUrl(loc.entry.dexUrl);
   if (!pool) {
     const r = await resolveTopPool(chainId, address);
     if (r.error) throw new Error('pool_' + r.error);
@@ -140,7 +191,7 @@ async function candlesFor(key, loc, tf, { fresh = false, limit = 1000 } = {}) {
   }
   const got = await fetchCandles(chainId, pool, tf, { limit, fresh });
   if (got.error) throw new Error('candles_' + got.error);
-  return { candles: convertCandles(got.candles, loc.fib), pool, chainId, address };
+  return { candles: convertCandles(got.candles, loc.fib || {}), pool, chainId, address };
 }
 
 function publicState(key, loc, tf, candles) {
@@ -485,7 +536,69 @@ async function demoStateResponse(tf) {
   }
 }
 
+async function setupStateResponse(auth, tf) {
+  const db = ensureDBSchema(loadDB());
+  const loc = locateTracked(db, auth.key);
+  if (!loc) return { status: 404, body: { error: 'tracked_token_not_found' } };
+
+  // If Golden Pocket is already active, transparently open the active cycle.
+  if (loc.fib?.cycleId > 0) {
+    const activeAuth = { ...auth, setup: false, cycle: loc.fib.cycleId };
+    return stateResponse(activeAuth, tf);
+  }
+
+  const pickedTf = VALID_TF.has(tf) ? tf : FIB.DEFAULT_TIMEFRAME;
+  const shell = engine.initStateShell('standard', pickedTf);
+  shell.telegramGoldenPocket = true;
+  const metric = inferredMetric(loc.entry);
+  shell.metric = metric.metric;
+  shell.supplyFactor = metric.supplyFactor;
+
+  const tempLoc = { ...loc, fib: shell };
+  const got = await candlesFor(auth.key, tempLoc, pickedTf, { fresh: false, limit: FIB.CANDLE_LIMIT });
+  shell.poolAddress = got.pool;
+
+  const opts = {
+    minImpulsePct: FIB.MIN_IMPULSE_PCT,
+    minCandles: FIB.MIN_CANDLES,
+    pivotStrength: FIB.PIVOT_STRENGTH,
+    reversalPct: FIB.REVERSAL_PCT,
+    atrMult: FIB.ATR_MULT,
+    goldenUpper: FIB.HIGH_CONFIRM_RATIO,
+    anchorOrigin: FIB.ANCHOR_ORIGIN,
+    launchFallback: true,
+  };
+  const det = detectImpulse(got.candles, opts);
+  if (det.ok) {
+    engine.armCycle(shell, det, got.candles.at(-1)?.c ?? null, Date.now());
+  } else {
+    const fallback = pickDemoAnchors(got.candles);
+    if (!fallback) return { status: 409, body: { error: 'no_impulse_found' } };
+    engine.armCycle(
+      shell,
+      {
+        ok: true,
+        low: fallback.low,
+        high: fallback.high,
+        highConfirmed: true,
+        reason: 'setup preview — best visible low-to-high excursion',
+      },
+      got.candles.at(-1)?.c ?? null,
+      Date.now(),
+    );
+  }
+
+  shell.cycleId = 0; // preview only; save/auto attaches the real Telegram cycle.
+  const previewLoc = { where: 'tokens-setup', entry: loc.entry, fib: shell };
+  const body = publicState(auth.key, previewLoc, pickedTf, got.candles);
+  body.setup = true;
+  body.status = 'preview';
+  body.cycleId = 0;
+  return { status: 200, body };
+}
+
 async function stateResponse(auth, tf) {
+  if (auth.setup) return setupStateResponse(auth, tf);
   const db = ensureDBSchema(loadDB());
   const loc = locate(db, auth.key);
   if (!loc) return { status: 404, body: { error: 'fib_not_found' } };
@@ -506,6 +619,7 @@ function queueIntegratedOverride(key, loc, override) {
     };
     cur.manualOverride = override;
     cur.manualAt = override.at;
+    if (process.env.PLATFORM === 'telegram') cur.goldenPocketEnabled = true;
     cur.rev = (cur.rev || 0) + 1;
     delete cur.suppress;
     fw[key] = cur;
@@ -547,6 +661,7 @@ function queueIntegratedAuto(key, loc, now) {
       symbol: loc.entry.symbol,
     };
     cur.recalcAt = now;
+    if (process.env.PLATFORM === 'telegram') cur.goldenPocketEnabled = true;
     delete cur.manualOverride;
     delete cur.manualAt;
     cur.rev = (cur.rev || 0) + 1;
@@ -564,13 +679,23 @@ async function saveManual(auth, body) {
   }
 
   const db = ensureDBSchema(loadDB());
-  const loc = locate(db, auth.key);
-  if (!loc) return { status: 404, body: { error: 'fib_not_found' } };
-  if (Number(loc.fib.cycleId) !== auth.cycle) {
+  const loc = auth.setup ? locateTracked(db, auth.key) : locate(db, auth.key);
+  if (!loc) return { status: 404, body: { error: auth.setup ? 'tracked_token_not_found' : 'fib_not_found' } };
+  if (!auth.setup && Number(loc.fib.cycleId) !== auth.cycle) {
     return { status: 409, body: { error: 'cycle_changed', currentCycle: loc.fib.cycleId } };
   }
 
-  const got = await candlesFor(auth.key, loc, tf, { fresh: true, limit: 1000 });
+  let workingLoc = loc;
+  if (auth.setup && !loc.fib) {
+    const shell = engine.initStateShell('standard', tf);
+    shell.telegramGoldenPocket = true;
+    const metric = inferredMetric(loc.entry);
+    shell.metric = metric.metric;
+    shell.supplyFactor = metric.supplyFactor;
+    workingLoc = { ...loc, fib: shell };
+  }
+
+  const got = await candlesFor(auth.key, workingLoc, tf, { fresh: false, limit: 1000 });
   const lowC = got.candles.find((c) => Number(c.t) === lowT);
   const highC = got.candles.find((c) => Number(c.t) === highT);
   if (!lowC || !highC) return { status: 409, body: { error: 'anchor_candle_not_found' } };
@@ -591,11 +716,14 @@ async function saveManual(auth, body) {
     high,
     timeframe: tf,
     takeProfitValue,
+    metric: workingLoc.fib?.metric || 'price',
+    supplyFactor: workingLoc.fib?.supplyFactor || null,
+    poolAddress: got.pool || workingLoc.fib?.poolAddress || null,
     at: now,
     reason: 'manual web editor',
   };
 
-  if (loc.where === 'watch') {
+  if (!auth.setup && loc.where === 'watch') {
     if (!applyWatchOverride(auth.key, override)) {
       return { status: 409, body: { error: 'save_conflict' } };
     }
@@ -611,9 +739,9 @@ async function saveManual(auth, body) {
 
 async function revertAuto(auth) {
   const db = ensureDBSchema(loadDB());
-  const loc = locate(db, auth.key);
-  if (!loc) return { status: 404, body: { error: 'fib_not_found' } };
-  if (Number(loc.fib.cycleId) !== auth.cycle) {
+  const loc = auth.setup ? locateTracked(db, auth.key) : locate(db, auth.key);
+  if (!loc) return { status: 404, body: { error: auth.setup ? 'tracked_token_not_found' : 'fib_not_found' } };
+  if (!auth.setup && Number(loc.fib.cycleId) !== auth.cycle) {
     return { status: 409, body: { error: 'cycle_changed', currentCycle: loc.fib.cycleId } };
   }
   const now = Date.now();
@@ -636,7 +764,7 @@ export async function handleFibEditorRequest(req, res) {
       u.searchParams.has('exp') ||
       u.searchParams.has('sig');
 
-    // Bare /fib-editor is a public, non-writing demo. Signed links from Discord
+    // Bare /fib-editor is a public, non-writing demo. Signed links from Telegram
     // still open the live cycle and keep all save/revert actions authenticated.
     if (!hasSignedParams) return html(res, 200, editorPage());
     const auth = authQuery(req.url);
@@ -695,7 +823,7 @@ export async function handleFibEditorRequest(req, res) {
 
 function errorPage(reason) {
   const msg = reason === 'link_expired'
-    ? 'This editor link expired. Open a newer Fib card in Discord for a fresh link.'
+    ? 'This editor link expired. Open a newer Golden Pocket card in Telegram for a fresh link.'
     : 'This Fib editor link is invalid or no longer available.';
   return '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fib Editor</title>' +
     '<body style="margin:0;background:#05090d;color:#eaf2f8;font:16px system-ui;display:grid;place-items:center;min-height:100vh">' +
@@ -733,7 +861,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     <div class="tfs" id="tfs"><button class="tf" data-tf="1m">1m</button><button class="tf" data-tf="5m">5m</button><button class="tf" data-tf="15m">15m</button><button class="tf" data-tf="1h">1h</button><button class="tf" data-tf="4h">4h</button></div>
   </div>
   <div class="chartbox"><div class="charthead"><div class="charttitle" id="chartTitle">Fib chart</div><div class="ohlc" id="ohlc"></div></div><canvas id="chart"></canvas></div>
-  <div class="hint">↕ <b>Drag the gold low/high handles</b> to snap the Fib pull to candle wicks. Drag the <b style="color:var(--cyan)">TAKE PROFIT ALERT</b> line down from 1.618 to choose when Discord should notify you.</div>
+  <div class="hint">↕ <b>Drag the gold low/high handles</b> to snap the Fib pull to candle wicks. Drag the <b style="color:var(--cyan)">TAKE PROFIT ALERT</b> line down from 1.618 to choose when Telegram should notify you.</div>
   <div class="footergrid">
     <div class="mini"><h3>Cycle Info</h3><div class="stats"><div class="stat"><span>Impulse</span><b id="impulse">—</b></div><div class="stat"><span>Timeframe</span><b id="tfStat">—</b></div><div class="stat"><span>Source</span><b id="sourceStat">—</b></div><div class="stat"><span>Revision</span><b id="revStat">—</b></div></div></div>
     <div class="mini links"><h3>Token Links</h3><a id="dexBottom" target="_blank" rel="noreferrer">DexScreener ↗</a></div>
@@ -752,7 +880,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     <div class="row gold"><div class="lab" id="goldLab">0.382 (Golden)</div><div class="val" id="goldVal">—</div></div>
     <div class="row entry"><div class="lab" id="entryLab">0.236 (Entry)</div><div class="val" id="entryVal">—</div></div>
     <div class="row"><div class="lab">0.0 <span class="small">(Low)</span></div><div class="val" id="zeroVal">—</div></div>
-    <div class="alertbox"><strong>Discord notification trigger</strong><p id="alertHelp">The alert line starts at the 1.618 extension. Pull it down to notify earlier. The real 1.618 line always stays on the chart.</p></div>
+    <div class="alertbox"><strong>Telegram notification trigger</strong><p id="alertHelp">The alert line starts at the 1.618 extension. Pull it down to notify earlier. The real 1.618 line always stays on the chart.</p></div>
   </div>
   <div class="card"><h2>Quick Actions</h2><div class="actions">
     <button class="btn primary" id="saveBtn" disabled>✓ Save Pull + Alert</button>
@@ -820,7 +948,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     setTimeframeBusy(false);
     els.autoBtn.disabled=!!j.demo;
     if(j.demo){
-      els.saveBtn.textContent='Open from Discord to Save';
+      els.saveBtn.textContent='Open from Telegram to Save';
       els.demoBadge.classList.add('show');
     }
   }
@@ -923,8 +1051,8 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   });
   els.undoBtn.addEventListener('click',()=>{if(!history.length)return;future.push(snapshot());restore(history.pop())});
   els.redoBtn.addEventListener('click',()=>{if(!future.length)return;history.push(snapshot());restore(future.pop())});
-  els.saveBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode does not change the bot. Use Adjust Fib from a Discord card to save.');return;}els.saveBtn.disabled=true;els.saveBtn.textContent='Saving…';try{const res=await fetch(api('/api/fib-editor/save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeframe:activeTf,lowT:low.t,highT:high.t,takeProfitValue:alertValue})});const j=await res.json();if(!res.ok)throw new Error(j.error||'save_failed');data.anchorSource='manual';data.anchorRevision=(data.anchorRevision||1)+1;renderMeta();setDirty(false);toast(j.queued?'Saved — bot will apply it on the next poll.':'Manual pull + Take Profit alert saved.')}catch(err){toast('Save failed: '+err.message);setDirty(true)}finally{els.saveBtn.textContent='✓ Save Pull + Alert';els.saveBtn.disabled=!dirty}});
-  els.autoBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode only. Live Revert to Auto is available from a signed Discord link.');return;}if(!confirm('Revert this cycle to fresh automatic Fib detection?'))return;els.autoBtn.disabled=true;try{const res=await fetch(api('/api/fib-editor/auto'),{method:'POST'});const j=await res.json();if(!res.ok)throw new Error(j.error||'auto_failed');toast(j.queued?'Auto re-detection queued.':'Reverted to auto detection.');setTimeout(()=>location.reload(),1200)}catch(err){toast('Could not revert: '+err.message);els.autoBtn.disabled=false}});
+  els.saveBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode does not change the bot. Open Golden Pocket from Telegram to save.');return;}els.saveBtn.disabled=true;els.saveBtn.textContent='Saving…';try{const res=await fetch(api('/api/fib-editor/save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeframe:activeTf,lowT:low.t,highT:high.t,takeProfitValue:alertValue})});const j=await res.json();if(!res.ok)throw new Error(j.error||'save_failed');data.anchorSource='manual';data.anchorRevision=(data.anchorRevision||1)+1;renderMeta();setDirty(false);toast(j.queued?'Saved — bot will apply it on the next poll.':'Manual pull + Take Profit alert saved.')}catch(err){toast('Save failed: '+err.message);setDirty(true)}finally{els.saveBtn.textContent='✓ Save Pull + Alert';els.saveBtn.disabled=!dirty}});
+  els.autoBtn.addEventListener('click',async()=>{if(data?.demo){toast('Demo mode only. Live Revert to Auto is available from a signed Telegram link.');return;}if(!confirm('Revert this cycle to fresh automatic Fib detection?'))return;els.autoBtn.disabled=true;try{const res=await fetch(api('/api/fib-editor/auto'),{method:'POST'});const j=await res.json();if(!res.ok)throw new Error(j.error||'auto_failed');toast(j.queued?'Auto re-detection queued.':'Reverted to auto detection.');setTimeout(()=>location.reload(),1200)}catch(err){toast('Could not revert: '+err.message);els.autoBtn.disabled=false}});
   addEventListener('resize',()=>{resize();draw()});
   load(qs.get('tf')||null).catch(err=>{setTimeframeBusy(false);toast('Editor could not load: '+err.message);els.symbol.textContent='Fib editor unavailable';els.meta.textContent=err.message});
 })();

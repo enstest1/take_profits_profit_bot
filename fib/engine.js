@@ -42,6 +42,11 @@ export function initStateShell(mode = 'standard', timeframe = null, now = Date.n
     targets: null,
     takeProfitAlert: null,
     lastManualAt: 0,
+    // Telegram-only Golden Pocket mode. evaluate.js enables this only for
+    // /goldenpocket-attached Telegram tokens; Discord leaves it false.
+    telegramGoldenPocket: false,
+    pocketConfirmCount: 0,
+    pocketBypassedAt: null,
     fired: null,
     pending: null,
     heldCount: 0,
@@ -136,6 +141,12 @@ function eventFor(state, lvl, value, now) {
 function sweepFireDownTo(state, lvl, value, now, events) {
   for (const L of downLevels(state)) {
     if (L.value < lvl.value) break;
+    // Telegram's 0.382 pre-buy is confirmation-based. A fast move straight to
+    // 0.236 must NOT synthesize a pre-buy alert on the way through.
+    if (state.telegramGoldenPocket && L.key === 'golden') {
+      if (state.pending) delete state.pending.golden;
+      continue;
+    }
     if (isFired(state, L.key)) continue;
     markFired(state, L.key, now);
     if (state.pending) delete state.pending[L.key];
@@ -143,6 +154,8 @@ function sweepFireDownTo(state, lvl, value, now, events) {
     if (L.ratio === state.entryRatio) {
       state.status = 'target_mode';
       state.heldCount = 0;
+      state.pocketConfirmCount = 0;
+      if (state.telegramGoldenPocket && !state.fired.golden) state.pocketBypassedAt = now;
     }
   }
 }
@@ -159,6 +172,8 @@ export function armCycle(state, det, currentValue, now = Date.now()) {
   state.fired = freshFired();
   state.pending = {};
   state.heldCount = 0;
+  state.pocketConfirmCount = 0;
+  state.pocketBypassedAt = null;
   state.status = 'armed';
   state.detectFails = 0;
   state.lastError = null;
@@ -167,6 +182,17 @@ export function armCycle(state, det, currentValue, now = Date.now()) {
 
   const events = [];
   if (currentValue == null || !Number.isFinite(currentValue)) return events;
+
+  // Telegram Golden Pocket never announces 0.382 at arm time. It must earn the
+  // pre-buy card via two completed 5m closes. If the cycle arms already through
+  // 0.236, emit only the main entry signal.
+  if (state.telegramGoldenPocket) {
+    if (currentValue <= state.entryValue) {
+      const entry = downLevels(state).find((L) => L.ratio === state.entryRatio);
+      if (entry) sweepFireDownTo(state, entry, currentValue, now, events);
+    }
+    return events;
+  }
 
   // Silently mark levels the price has ALREADY passed, then optionally announce the deepest zone.
   if (FIB.ALERT_ON_ARM === 'deepest') {
@@ -235,6 +261,8 @@ export function applyManualAnchors(state, override, currentValue, now = Date.now
   state.fired = freshFired();
   state.pending = {};
   state.heldCount = 0;
+  state.pocketConfirmCount = 0;
+  state.pocketBypassedAt = null;
   state.status = 'armed';
   state.takeProfitAlert = null;
   state.updatedAt = now;
@@ -262,13 +290,21 @@ export function applyManualAnchors(state, override, currentValue, now = Date.now
   }
 
   if (hadEntry) {
-    for (const L of downLevels(state)) markFired(state, L.key, now);
+    for (const L of downLevels(state)) {
+      if (state.telegramGoldenPocket && L.key === 'golden') continue;
+      markFired(state, L.key, now);
+    }
     state.status = 'target_mode';
+    state.pocketBypassedAt = now;
   } else if (currentValue != null && Number.isFinite(currentValue)) {
     for (const L of downLevels(state)) {
+      if (state.telegramGoldenPocket && L.key === 'golden') continue;
       if (currentValue <= L.value) {
         markFired(state, L.key, now);
-        if (L.ratio === state.entryRatio) state.status = 'target_mode';
+        if (L.ratio === state.entryRatio) {
+          state.status = 'target_mode';
+          state.pocketBypassedAt = now;
+        }
       }
     }
   }
@@ -373,6 +409,9 @@ export function liveTick(state, prevValue, value, now = Date.now()) {
 
   // ---- downward: crossings ----
   for (const lvl of downLevels(state)) {
+    // Telegram's golden alert is handled only by telegramGoldenPocketClose()
+    // on completed 5m sampled bars.
+    if (state.telegramGoldenPocket && lvl.key === 'golden') continue;
     if (isFired(state, lvl.key)) continue;
     const nowBelow = value <= lvl.value;
     if (!nowBelow) continue;
@@ -391,6 +430,53 @@ export function liveTick(state, prevValue, value, now = Date.now()) {
     }
   }
 
+  return events;
+}
+
+/**
+ * Telegram Golden Pocket pre-buy confirmation.
+ * Requires consecutive completed 5m closes inside 0.382 → 0.236.
+ * If 0.236 has already been touched, the pre-buy stage is permanently bypassed.
+ */
+export function telegramGoldenPocketClose(state, closeValue, now = Date.now()) {
+  const events = [];
+  if (!state?.telegramGoldenPocket || closeValue == null || !Number.isFinite(closeValue)) return events;
+  if (state.status !== 'armed' && state.status !== 'target_mode') return events;
+
+  const entryFired = !!state.fired?.alerts?.[rkey(state.entryRatio)];
+  if (entryFired || state.status === 'target_mode') {
+    state.pocketConfirmCount = 0;
+    if (!state.fired?.golden && !state.pocketBypassedAt) state.pocketBypassedAt = now;
+    return events;
+  }
+  if (state.fired?.golden) return events;
+
+  const upper = state.levels.goldenUpper;
+  const lower = state.entryValue;
+  const insidePocket = closeValue <= upper && closeValue > lower;
+
+  if (!insidePocket) {
+    state.pocketConfirmCount = 0;
+    if (closeValue <= lower) state.pocketBypassedAt = now;
+    state.updatedAt = now;
+    return events;
+  }
+
+  state.pocketConfirmCount = (state.pocketConfirmCount || 0) + 1;
+  state.updatedAt = now;
+  if (state.pocketConfirmCount >= FIB.TG_PREBUY_CONFIRM_CLOSES) {
+    state.fired.golden = now;
+    state.pocketConfirmCount = 0;
+    events.push({
+      kind: 'golden_prebuy',
+      value: closeValue,
+      level: upper,
+      lower,
+      confirmCloses: FIB.TG_PREBUY_CONFIRM_CLOSES,
+      confirmTimeframe: FIB.TG_PREBUY_TIMEFRAME,
+      at: now,
+    });
+  }
   return events;
 }
 
