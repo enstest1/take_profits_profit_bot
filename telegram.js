@@ -13,6 +13,7 @@ import { startXRadar } from './xradar/index.js';
 import { startXFeed } from './xfeed/index.js';
 import { handleTgXwatch } from './xradar/tgCommands.js';
 import { xwatchNeedsHandlePrompt, xwatchPendingPrefix, xwatchArgsFromPendingReply } from './xradar/tgParse.js';
+import { handleTgGoldenPocket } from './fib/telegramCommand.js';
 
 const tgClient = {};
 
@@ -168,6 +169,10 @@ async function handleUpdate(update) {
       await handleRemoveCommand(chatId, userId, parsed.args);
       return;
     }
+    if (parsed.cmd === '/goldenpocket') {
+      await handleTgGoldenPocket(chatId, userId, parsed.args);
+      return;
+    }
     if (parsed.cmd === '/xwatch') {
       console.log('[tg] /xwatch from ' + userId + ' in ' + chatId + ' args=' + parsed.args.join(' '));
       const admin = await isChatAdmin(chatId, userId);
@@ -240,6 +245,7 @@ async function registerCommands() {
   const commands = [
     { command: 'calls', description: 'Show all tracked tokens' },
     { command: 'remove', description: 'Stop tracking a token (admins)' },
+    { command: 'goldenpocket', description: 'Attach Golden Pocket fib alerts to a tracked token' },
     { command: 'xwatch', description: 'Watch an X account — reply with the handle after tapping' },
   ];
   // Default scope is private chats only — groups need their own scopes or /xwatch never appears in the menu.
@@ -260,7 +266,7 @@ async function registerCommands() {
       console.error('[tg] setMyCommands failed for ' + (scope?.type || 'default') + ':', e.message);
     }
   }
-  console.log('[tg] commands registered: /calls /remove /xwatch (incl. group scopes)');
+  console.log('[tg] commands registered: /calls /remove /goldenpocket /xwatch (incl. group scopes)');
 }
 
 async function boot() {
