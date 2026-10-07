@@ -266,6 +266,7 @@ export async function evaluateFib(client, db, storageKey, entry, live) {
     entry.fib.telegramGoldenPocket = true;
     entry.fib.pocketConfirmCount = 0;
     entry.fib.pocketBypassedAt = null;
+    if (entry.fib.pending) delete entry.fib.pending.golden;
     controlChanged = true;
   }
 
