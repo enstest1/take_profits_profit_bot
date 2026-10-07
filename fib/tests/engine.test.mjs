@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FIB } from '../config.js';
-import { initStateShell, armCycle, liveTick, barClose, recomputeDerived } from '../engine.js';
+import { initStateShell, armCycle, applyManualAnchors, liveTick, barClose, recomputeDerived } from '../engine.js';
 
 // TENDIES-like reference impulse (values are market cap USD). Never hardcoded in prod —
 // this is just a realistic fixture: low $97.94K → high $8.03M.
@@ -185,4 +185,43 @@ test('recomputeDerived keeps entry value in sync when the high slides', () => {
   s.anchors.high.v = HIGH * 2;
   recomputeDerived(s);
   assert.ok(Math.abs(s.entryValue - (LOW + (HIGH * 2 - LOW) * 0.236)) < 1e-6);
+});
+
+
+test('manual pull freezes anchors and a moved take-profit line replaces the 1.618 notification', () => {
+  const { s } = armed('fast');
+  tick(s, HIGH * 0.99, 10_000);
+  tick(s, lvl(0.20), 11_000); // entry armed
+
+  const manualHigh = HIGH * 1.05;
+  const manualLow = LOW * 1.02;
+  const manualRange = manualHigh - manualLow;
+  const manualTp1 = manualLow + 1.618 * manualRange;
+  const custom = manualHigh + (manualTp1 - manualHigh) * 0.45;
+
+  applyManualAnchors(
+    s,
+    {
+      low: { v: manualLow, t: 900_000 },
+      high: { v: manualHigh, t: 2_100_000 },
+      timeframe: '5m',
+      takeProfitValue: custom,
+      at: 12_000,
+    },
+    manualHigh * 0.9,
+    12_000,
+  );
+
+  assert.equal(s.anchorSource, 'manual');
+  assert.equal(s.status, 'target_mode');
+  const frozenHigh = s.anchors.high.v;
+
+  let ev = tick(s, custom * 0.99, 13_000);
+  assert.equal(ev.length, 0);
+  ev = tick(s, custom * 1.01, 14_000);
+  assert.deepEqual(ev.map((e) => e.kind), ['take_profit']);
+  assert.ok(Math.abs(ev[0].fibTarget - manualTp1) < 1e-6);
+
+  tick(s, manualTp1 * 1.01, 15_000);
+  assert.equal(s.anchors.high.v, frozenHigh, 'manual high must not slide');
 });
