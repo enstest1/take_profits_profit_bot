@@ -9,7 +9,6 @@ import { fetchCandles, resolveTopPool } from './geckoTerminal.js';
 import { pairFromDexUrl, updateFibWatch } from './store.js';
 import { ensureDBSchema, loadDB } from '../dbStore.js';
 import { parseStorageKey } from '../chains.js';
-import { fetchDexPairOnChain } from '../dexPair.js';
 
 const EDIT_TTL_SEC = 14 * 24 * 60 * 60;
 const VALID_TF = new Set(['1m', '5m', '15m', '1h', '4h']);
@@ -202,83 +201,158 @@ function pickDemoAnchors(candles) {
   return best;
 }
 
-async function demoStateResponse(tf) {
-  const pickedTf = VALID_TF.has(tf) ? tf : '5m';
+function demoCandles(tf) {
+  const steps = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000 };
+  const step = steps[tf] || steps['5m'];
+  const count = 92;
+  const end = Math.floor((Date.now() - step) / step) * step;
+  const start = end - step * (count - 1);
 
-  // The DexScreener URL identifies the ORBANCY TOKEN, not its LP contract.
-  // Resolve the token to its actual pair first, then request OHLC from that pool.
-  // Candle availability must not depend on DexScreener metadata. Resolve the
-  // GeckoTerminal pool directly from the token first; DexScreener is optional
-  // and is used only for nicer symbol/market-cap scaling when available.
-  const resolved = await resolveTopPool(DEMO_CHAIN, DEMO_TOKEN_ADDRESS);
-  const pair = await fetchDexPairOnChain(DEMO_CHAIN, DEMO_TOKEN_ADDRESS, {
-    retries: 2,
-    timeoutMs: 10_000,
-  }).catch(() => null);
+  const swingLow = 108_000;
+  const swingHigh = 548_000;
+  const entry = swingLow + (swingHigh - swingLow) * 0.236;
 
-  let pool = resolved.error ? null : resolved.poolAddress;
-  if (!pool && pair?.pairAddress) pool = pair.pairAddress;
-  if (!pool) return { status: 502, body: { error: 'demo_pool_unavailable' } };
+  // Shape inspired by the 5m ORBANCY example: launch, choppy consolidation,
+  // deep reset, second expansion, then a pullback. This is deliberately local
+  // demo data so the public editor loads instantly and never depends on an API.
+  const points = [
+    [0, 128_000], [5, 118_000], [9, 132_000], [12, swingLow],
+    [16, 178_000], [18, 260_000], [20, 338_000], [24, 292_000],
+    [30, 326_000], [35, 245_000], [42, 218_000], [48, 228_000],
+    [53, 205_000], [57, 238_000], [62, 314_000], [66, 366_000],
+    [70, 342_000], [74, 430_000], [78, swingHigh], [81, 458_000],
+    [84, 516_000], [87, 402_000], [89, 326_000], [91, 358_000]
+  ];
 
-  let got = await fetchCandles(DEMO_CHAIN, pool, pickedTf, {
-    limit: pickedTf === '1m' ? 180 : 120,
-    fresh: true,
-  });
-
-  // DexScreener and GeckoTerminal can occasionally disagree on the preferred
-  // pool. If the DexScreener pool is not indexed by GT, use GT's own top pool
-  // for the same ORBANCY token rather than blanking the public demo.
-  if (got.error || !got.candles?.length) {
-    const resolved = await resolveTopPool(DEMO_CHAIN, DEMO_TOKEN_ADDRESS);
-    if (!resolved.error && resolved.poolAddress && resolved.poolAddress.toLowerCase() !== String(pool).toLowerCase()) {
-      pool = resolved.poolAddress;
-      got = await fetchCandles(DEMO_CHAIN, pool, pickedTf, {
-        limit: pickedTf === '1m' ? 180 : 120,
-        fresh: true,
-      });
+  const targetAt = (i) => {
+    for (let p = 1; p < points.length; p++) {
+      const a = points[p - 1], b = points[p];
+      if (i <= b[0]) {
+        const u = (i - a[0]) / (b[0] - a[0]);
+        return a[1] + (b[1] - a[1]) * u;
+      }
     }
+    return points.at(-1)[1];
+  };
+
+  let seed = 0x5f3759df ^ step;
+  const rnd = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+
+  const candles = [];
+  let prevClose = 126_000;
+
+  for (let i = 0; i < count; i++) {
+    const target = targetAt(i);
+    const prevTarget = i ? targetAt(i - 1) : target;
+    const structuralMove = target - prevTarget;
+
+    // Realistic candle construction: the open starts near the prior close,
+    // while the close only partially follows the structural move and can oppose it.
+    let open = i === 0
+      ? 126_000
+      : prevClose + (rnd() - 0.5) * Math.max(2_000, prevClose * 0.012);
+
+    const bodyNoise = (rnd() - 0.5) * Math.max(12_000, target * 0.055);
+    let close = open + structuralMove * 0.74 + bodyNoise;
+
+    // Soft pull toward the intended market structure without making straight ramps.
+    close = close * 0.72 + target * 0.28;
+
+    const maxBody = Math.max(8_500, target * 0.075);
+    if (Math.abs(close - open) > maxBody) {
+      close = open + Math.sign(close - open) * maxBody;
+    }
+
+    const wickScale = Math.max(5_500, target * 0.032);
+    let high = Math.max(open, close) + wickScale * (0.28 + rnd() * 1.05);
+    let low = Math.max(1, Math.min(open, close) - wickScale * (0.28 + rnd() * 1.05));
+
+    // Exact structural touches for the demo Fib.
+    if (i === 12) {
+      low = swingLow;
+      open = Math.max(open, swingLow + 11_000);
+      close = Math.max(close, swingLow + 18_000);
+    }
+    if (i === 78) {
+      high = swingHigh;
+      open = Math.min(open, swingHigh - 46_000);
+      close = Math.min(close, swingHigh - 18_000);
+    }
+
+    // One obvious red-zone wick touch before the second expansion.
+    if (i === 53) {
+      low = entry;
+      open = Math.max(open, entry + 19_000);
+      close = Math.max(close, entry + 9_000);
+    }
+
+    // Keep all other bars inside our intended structural extremes.
+    if (i !== 12) low = Math.max(low, swingLow + 2_800);
+    if (i !== 78) high = Math.min(high, swingHigh - 2_800);
+
+    // Maintain valid OHLC after clamping.
+    high = Math.max(high, open, close);
+    low = Math.min(low, open, close);
+
+    const volume =
+      11_000 +
+      rnd() * 26_000 +
+      Math.abs(close - open) * 0.16 +
+      (i >= 15 && i <= 25 ? 58_000 : 0) +
+      (i >= 60 && i <= 81 ? 22_000 : 0);
+
+    candles.push({
+      t: start + i * step,
+      o: open,
+      h: high,
+      l: low,
+      c: close,
+      v: volume,
+    });
+    prevClose = close;
   }
-  if (got.error || !got.candles?.length) {
-    return { status: 502, body: { error: got.error || 'demo_candles_unavailable' } };
-  }
 
-  const px = Number(pair?.price);
-  const mcap = Number(pair?.marketCap ?? pair?.fdv);
-  const factor = Number.isFinite(px) && px > 0 && Number.isFinite(mcap) && mcap > 0 ? mcap / px : null;
-  const candles = factor
-    ? got.candles.map((c) => ({
-        ...c,
-        o: c.o * factor,
-        h: c.h * factor,
-        l: c.l * factor,
-        c: c.c * factor,
-      }))
-    : got.candles;
+  // Reassert exact values after generic validity guards.
+  candles[12].l = swingLow;
+  candles[78].h = swingHigh;
+  candles[53].l = entry;
 
-  const anchors = pickDemoAnchors(candles);
-  if (!anchors) return { status: 502, body: { error: 'demo_anchor_unavailable' } };
+  return { candles, swingLow, swingHigh };
+}
 
+function demoStateResponse(tf) {
+  const pickedTf = VALID_TF.has(tf) ? tf : '5m';
+  const { candles, swingLow, swingHigh } = demoCandles(pickedTf);
+  const lowC = candles[12];
+  const highC = candles[78];
   const last = candles.at(-1);
+
   return {
     status: 200,
     body: {
       demo: true,
-      demoSource: 'live_market',
+      demoSource: 'local_sample',
       key: 'demo',
-      symbol: pair?.symbol || 'ORBANCY',
-      name: pair?.name || 'Orbancy',
+      symbol: 'ORBANCY',
+      name: 'Golden Pocket Demo',
       chain: DEMO_CHAIN,
-      address: pair?.address || DEMO_TOKEN_ADDRESS,
+      address: DEMO_TOKEN_ADDRESS,
       dexUrl: DEMO_DEX_URL,
       cycleId: 2,
       status: 'armed',
       mode: 'standard',
       timeframe: pickedTf,
       fibTimeframe: pickedTf,
-      metric: factor ? 'marketCap' : 'price',
+      metric: 'marketCap',
       anchorSource: 'auto',
       anchorRevision: 1,
-      anchors: { low: anchors.low, high: anchors.high },
+      anchors: {
+        low: { t: lowC.t, v: swingLow },
+        high: { t: highC.t, v: swingHigh },
+      },
       levels: null,
       targets: null,
       takeProfitAlert: null,
@@ -635,11 +709,11 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
 
   function renderMeta(){
     els.symbol.textContent=data.symbol; els.mark.textContent=(data.symbol||'TP').slice(0,2).toUpperCase();
-    els.meta.textContent=data.demo?'LIVE DEMO · real '+activeTf+' ORBANCY candles · drag the Fib anchors and Take Profit alert':(data.chain||'').toUpperCase()+' · '+String(data.address||'').slice(0,12)+'…'+String(data.address||'').slice(-6);
+    els.meta.textContent=data.demo?'PUBLIC DEMO · sample '+activeTf+' ORBANCY-style candles · drag the Fib anchors and Take Profit alert':(data.chain||'').toUpperCase()+' · '+String(data.address||'').slice(0,12)+'…'+String(data.address||'').slice(-6);
     els.chartTitle.textContent=data.symbol+' · '+activeTf+' ('+(data.metric==='price'?'Price':'Market Cap')+')';
     const manual=(data.anchorSource||'auto')==='manual'; els.modePill.textContent=data.demo?'DEMO':(manual?'MANUAL':'AUTO'); els.modePill.classList.toggle('manual',manual||data.demo);
     els.cycle.textContent='Cycle #'+data.cycleId; els.metricLabel.textContent='('+(data.metric==='price'?'Price':'Market Cap')+')';
-    els.tfStat.textContent=activeTf; els.sourceStat.textContent=data.demo?'LIVE MARKET / AUTO':(manual?'MANUAL':'AUTO (ATR)'); els.revStat.textContent=String(data.anchorRevision||1);
+    els.tfStat.textContent=activeTf; els.sourceStat.textContent=data.demo?'DEMO DATA / AUTO':(manual?'MANUAL':'AUTO (ATR)'); els.revStat.textContent=String(data.anchorRevision||1);
     if(data.dexUrl){els.dexTop.href=data.dexUrl;els.dexTop.hidden=false;els.dexBottom.href=data.dexUrl}else{els.dexBottom.style.display='none'}
   }
   function sync(){
