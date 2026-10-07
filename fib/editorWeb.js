@@ -9,12 +9,17 @@ import { fetchCandles, resolveTopPool } from './geckoTerminal.js';
 import { pairFromDexUrl, updateFibWatch } from './store.js';
 import { ensureDBSchema, loadDB } from '../dbStore.js';
 import { parseStorageKey } from '../chains.js';
+import { fetchDexPairOnChain } from '../dexPair.js';
 
 const EDIT_TTL_SEC = 14 * 24 * 60 * 60;
 const VALID_TF = new Set(['1m', '5m', '15m', '1h', '4h']);
 const DEMO_CHAIN = 'robinhood';
 const DEMO_TOKEN_ADDRESS = '0x109b383a42305dc48855b9b791c202002c6b391f';
 const DEMO_DEX_URL = 'https://dexscreener.com/robinhood/' + DEMO_TOKEN_ADDRESS;
+const DEMO_PAIR_CACHE_MS = 6 * 60 * 60_000;
+const DEMO_STATE_CACHE_MS = 5 * 60_000;
+let demoPairCache = { at: 0, pair: null };
+const demoStateCache = new Map();
 
 function secret() {
   return process.env.FIB_EDITOR_SECRET || '';
@@ -323,48 +328,161 @@ function demoCandles(tf) {
   return { candles, swingLow, swingHigh };
 }
 
-function demoStateResponse(tf) {
-  const pickedTf = VALID_TF.has(tf) ? tf : '5m';
-  const { candles, swingLow, swingHigh } = demoCandles(pickedTf);
-  const lowC = candles[12];
-  const highC = candles[78];
-  const last = candles.at(-1);
 
-  return {
-    status: 200,
-    body: {
-      demo: true,
-      demoSource: 'local_sample',
-      key: 'demo',
-      symbol: 'ORBANCY',
-      name: 'Golden Pocket Demo',
-      chain: DEMO_CHAIN,
-      address: DEMO_TOKEN_ADDRESS,
-      dexUrl: DEMO_DEX_URL,
-      cycleId: 2,
-      status: 'armed',
-      mode: 'standard',
-      timeframe: pickedTf,
-      fibTimeframe: pickedTf,
-      metric: 'marketCap',
-      anchorSource: 'auto',
-      anchorRevision: 1,
-      anchors: {
-        low: { t: lowC.t, v: swingLow },
-        high: { t: highC.t, v: swingHigh },
-      },
-      levels: null,
-      targets: null,
-      takeProfitAlert: null,
-      lastValue: last.c,
-      ratios: {
-        goldenUpper: Number(FIB.GOLDEN_UPPER),
-        goldenLower: Number(FIB.GOLDEN_LOWER),
-        entry: Number(Math.min(...FIB.ALERT_RATIOS)),
-      },
-      candles,
+async function cachedDemoPair() {
+  const now = Date.now();
+  if (demoPairCache.pair && now - demoPairCache.at < DEMO_PAIR_CACHE_MS) {
+    return demoPairCache.pair;
+  }
+
+  try {
+    const pair = await fetchDexPairOnChain(DEMO_CHAIN, DEMO_TOKEN_ADDRESS, {
+      retries: 1,
+      timeoutMs: 5_000,
+    });
+    if (pair?.pairAddress) {
+      demoPairCache = { at: now, pair };
+      return pair;
+    }
+  } catch {
+    // Fall through to stale cache / static demo below.
+  }
+
+  return demoPairCache.pair || null;
+}
+
+async function liveDemoState(tf) {
+  const pickedTf = VALID_TF.has(tf) ? tf : '5m';
+  const now = Date.now();
+  const cached = demoStateCache.get(pickedTf);
+  if (cached && now - cached.at < DEMO_STATE_CACHE_MS) return cached.body;
+
+  const pair = await cachedDemoPair();
+  let pool = pair?.pairAddress || null;
+
+  // Resolve from GeckoTerminal only when DexScreener metadata is unavailable.
+  // This path is rare because the pair itself is cached for six hours.
+  if (!pool) {
+    const resolved = await resolveTopPool(DEMO_CHAIN, DEMO_TOKEN_ADDRESS);
+    if (!resolved.error) pool = resolved.poolAddress;
+  }
+  if (!pool) throw new Error('demo_pool_unavailable');
+
+  // IMPORTANT: fresh=false lets GeckoTerminal's existing 10-minute candle cache
+  // serve repeat page loads instantly. The public demo therefore does not hammer
+  // the candle provider when users refresh or switch back to a timeframe.
+  const got = await fetchCandles(DEMO_CHAIN, pool, pickedTf, {
+    limit: pickedTf === '1m' ? 180 : 120,
+    fresh: false,
+  });
+  if (got.error || !got.candles?.length) throw new Error(got.error || 'demo_candles_unavailable');
+
+  const px = Number(pair?.price);
+  const mcap = Number(pair?.marketCap ?? pair?.fdv);
+  const factor =
+    Number.isFinite(px) && px > 0 && Number.isFinite(mcap) && mcap > 0
+      ? mcap / px
+      : null;
+
+  const candles = factor
+    ? got.candles.map((c) => ({
+        ...c,
+        o: c.o * factor,
+        h: c.h * factor,
+        l: c.l * factor,
+        c: c.c * factor,
+      }))
+    : got.candles;
+
+  const anchors = pickDemoAnchors(candles);
+  if (!anchors) throw new Error('demo_anchor_unavailable');
+
+  const body = {
+    demo: true,
+    demoSource: 'cached_market',
+    key: 'demo',
+    symbol: pair?.symbol || 'ORBANCY',
+    name: pair?.name || 'Orbancy',
+    chain: DEMO_CHAIN,
+    address: pair?.address || DEMO_TOKEN_ADDRESS,
+    dexUrl: DEMO_DEX_URL,
+    cycleId: 2,
+    status: 'armed',
+    mode: 'standard',
+    timeframe: pickedTf,
+    fibTimeframe: pickedTf,
+    metric: factor ? 'marketCap' : 'price',
+    anchorSource: 'auto',
+    anchorRevision: 1,
+    anchors: { low: anchors.low, high: anchors.high },
+    levels: null,
+    targets: null,
+    takeProfitAlert: null,
+    lastValue: candles.at(-1).c,
+    ratios: {
+      goldenUpper: Number(FIB.GOLDEN_UPPER),
+      goldenLower: Number(FIB.GOLDEN_LOWER),
+      entry: Number(Math.min(...FIB.ALERT_RATIOS)),
     },
+    candles,
   };
+
+  demoStateCache.set(pickedTf, { at: now, body });
+  return body;
+}
+
+async function demoStateResponse(tf) {
+  const pickedTf = VALID_TF.has(tf) ? tf : '5m';
+
+  try {
+    const body = await liveDemoState(pickedTf);
+    return { status: 200, body };
+  } catch (e) {
+    console.warn('[fib/editor] cached live demo unavailable, using local fallback:', e.message);
+
+    // Never blank the public demo. If a provider is temporarily unavailable,
+    // use the deterministic local sample until the next cached market refresh.
+    const { candles, swingLow, swingHigh } = demoCandles(pickedTf);
+    const lowC = candles[12];
+    const highC = candles[78];
+    const last = candles.at(-1);
+
+    return {
+      status: 200,
+      body: {
+        demo: true,
+        demoSource: 'local_fallback',
+        key: 'demo',
+        symbol: 'ORBANCY',
+        name: 'Golden Pocket Demo',
+        chain: DEMO_CHAIN,
+        address: DEMO_TOKEN_ADDRESS,
+        dexUrl: DEMO_DEX_URL,
+        cycleId: 2,
+        status: 'armed',
+        mode: 'standard',
+        timeframe: pickedTf,
+        fibTimeframe: pickedTf,
+        metric: 'marketCap',
+        anchorSource: 'auto',
+        anchorRevision: 1,
+        anchors: {
+          low: { t: lowC.t, v: swingLow },
+          high: { t: highC.t, v: swingHigh },
+        },
+        levels: null,
+        targets: null,
+        takeProfitAlert: null,
+        lastValue: last.c,
+        ratios: {
+          goldenUpper: Number(FIB.GOLDEN_UPPER),
+          goldenLower: Number(FIB.GOLDEN_LOWER),
+          entry: Number(Math.min(...FIB.ALERT_RATIOS)),
+        },
+        candles,
+      },
+    };
+  }
 }
 
 async function stateResponse(auth, tf) {
@@ -709,11 +827,11 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
 
   function renderMeta(){
     els.symbol.textContent=data.symbol; els.mark.textContent=(data.symbol||'TP').slice(0,2).toUpperCase();
-    els.meta.textContent=data.demo?'PUBLIC DEMO · sample '+activeTf+' ORBANCY-style candles · drag the Fib anchors and Take Profit alert':(data.chain||'').toUpperCase()+' · '+String(data.address||'').slice(0,12)+'…'+String(data.address||'').slice(-6);
+    els.meta.textContent=data.demo?(data.demoSource==='cached_market'?'PUBLIC DEMO · cached real '+activeTf+' ORBANCY candles · drag the Fib anchors and Take Profit alert':'PUBLIC DEMO · fallback '+activeTf+' sample · drag the Fib anchors and Take Profit alert'):(data.chain||'').toUpperCase()+' · '+String(data.address||'').slice(0,12)+'…'+String(data.address||'').slice(-6);
     els.chartTitle.textContent=data.symbol+' · '+activeTf+' ('+(data.metric==='price'?'Price':'Market Cap')+')';
     const manual=(data.anchorSource||'auto')==='manual'; els.modePill.textContent=data.demo?'DEMO':(manual?'MANUAL':'AUTO'); els.modePill.classList.toggle('manual',manual||data.demo);
     els.cycle.textContent='Cycle #'+data.cycleId; els.metricLabel.textContent='('+(data.metric==='price'?'Price':'Market Cap')+')';
-    els.tfStat.textContent=activeTf; els.sourceStat.textContent=data.demo?'DEMO DATA / AUTO':(manual?'MANUAL':'AUTO (ATR)'); els.revStat.textContent=String(data.anchorRevision||1);
+    els.tfStat.textContent=activeTf; els.sourceStat.textContent=data.demo?(data.demoSource==='cached_market'?'CACHED MARKET / AUTO':'FALLBACK DEMO / AUTO'):(manual?'MANUAL':'AUTO (ATR)'); els.revStat.textContent=String(data.anchorRevision||1);
     if(data.dexUrl){els.dexTop.href=data.dexUrl;els.dexTop.hidden=false;els.dexBottom.href=data.dexUrl}else{els.dexBottom.style.display='none'}
   }
   function sync(){
