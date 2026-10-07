@@ -507,7 +507,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
       }
 
       // Never let non-anchor noise steal the selected swing extremes.
-      if(i>18&&i<48) low=Math.max(low,swingLow+2500);
+      if(i!==18&&i<48) low=Math.max(low,swingLow+2500);
       if(i!==48) high=Math.min(high,swingHigh-1800);
       if(i>48&&i!==91) low=Math.max(low,redTag+2600);
 
