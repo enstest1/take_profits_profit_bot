@@ -417,7 +417,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     <div class="alertbox"><strong>Discord notification trigger</strong><p id="alertHelp">The alert line starts at the 1.618 extension. Pull it down to notify earlier. The real 1.618 line always stays on the chart.</p></div>
   </div>
   <div class="card"><h2>Quick Actions</h2><div class="actions">
-    <button class="btn primary" id="saveBtn" disabled>✓ Save Manual Pull</button>
+    <button class="btn primary" id="saveBtn" disabled>✓ Save Pull + Alert</button>
     <button class="btn" id="undoBtn" disabled>↶ Undo Changes</button>
     <button class="btn" id="redoBtn" disabled>↷ Redo Changes</button>
     <button class="btn danger" id="autoBtn" disabled>↻ Revert to Auto</button>
@@ -508,6 +508,21 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     // so the fixed 1.618 remains visually dominant when both start at the same price.
     line(alertValue,'#52d7ff','TAKE PROFIT ALERT',2,[7,5]);
     line(lv.tp1,'#4cff78','1.618',2.8);
+
+    // When the notification starts exactly on 1.618, keep the green Fib line dominant
+    // but expose a cyan grab-tab beneath it so the user can pull the alert downward.
+    const ay=Y(alertValue),ty=Y(lv.tp1),overlap=Math.abs(ay-ty)<9;
+    plot.alertHandle=null;
+    if(overlap){
+      const label='DRAG TP ALERT ↓';
+      ctx.save();ctx.font='800 11px system-ui';
+      const hw=ctx.measureText(label).width+20,hh=26,hx0=left+pw-hw-10,hy0=Math.min(top+ph-30,ay+9);
+      ctx.strokeStyle='#52d7ff';ctx.fillStyle='#07151b';ctx.lineWidth=1.4;
+      roundRect(hx0,hy0,hw,hh,6);ctx.fill();ctx.stroke();
+      ctx.beginPath();ctx.moveTo(hx0+hw/2,ay+1);ctx.lineTo(hx0+hw/2,hy0);ctx.stroke();
+      ctx.fillStyle='#52d7ff';ctx.fillText(label,hx0+10,hy0+17);ctx.restore();
+      plot.alertHandle={x:hx0,y:hy0,w:hw,h:hh};
+    }
     const li=idxForTime(low.t),hi=idxForTime(high.t),lx=X(li),ly=Y(low.v),hx=X(hi),hy=Y(high.v);
     ctx.save();ctx.strokeStyle='#9aa8b3';ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(hx,hy);ctx.stroke();ctx.setLineDash([]);[[lx,ly],[hx,hy]].forEach(([x,y])=>{ctx.fillStyle='#071015';ctx.strokeStyle='#4cff78';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.stroke()});ctx.restore();
     // Current value
@@ -519,7 +534,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   }
 
   function pointerPos(e){const r=canvas.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top}}
-  canvas.addEventListener('pointerdown',e=>{if(!plot||!data)return;const p=pointerPos(e),li=idxForTime(low.t),hi=idxForTime(high.t),d=(x,y)=>Math.hypot(p.x-x,p.y-y),lv=levels();if(d(plot.X(li),plot.Y(low.v))<18)dragging='low';else if(d(plot.X(hi),plot.Y(high.v))<18)dragging='high';else if(Math.abs(p.y-plot.Y(alertValue))<14)dragging='alert';else return;pushHistory();canvas.setPointerCapture(e.pointerId);e.preventDefault()});
+  canvas.addEventListener('pointerdown',e=>{if(!plot||!data)return;const p=pointerPos(e),li=idxForTime(low.t),hi=idxForTime(high.t),d=(x,y)=>Math.hypot(p.x-x,p.y-y),h=plot.alertHandle;const onAlertHandle=h&&p.x>=h.x-8&&p.x<=h.x+h.w+8&&p.y>=h.y-8&&p.y<=h.y+h.h+8;if(d(plot.X(li),plot.Y(low.v))<18)dragging='low';else if(d(plot.X(hi),plot.Y(high.v))<18)dragging='high';else if(onAlertHandle||Math.abs(p.y-plot.Y(alertValue))<14)dragging='alert';else return;pushHistory();canvas.setPointerCapture(e.pointerId);e.preventDefault()});
   canvas.addEventListener('pointermove',e=>{if(!dragging||!plot)return;const p=pointerPos(e);if(dragging==='alert'){const lv=levels();alertValue=Math.max(high.v,Math.min(lv.tp1,plot.V(p.y)))}else{let i=Math.round((p.x-plot.left)/plot.pw*candles.length-.5);i=Math.max(0,Math.min(candles.length-1,i));const c=candles[i];if(dragging==='low'&&c.t<high.t)low={t:c.t,v:c.l};if(dragging==='high'&&c.t>low.t&&c.h>low.v)high={t:c.t,v:c.h};const lv=levels();alertValue=Math.max(high.v,Math.min(lv.tp1,alertValue))}dirty=true;sync();draw();e.preventDefault()});
   canvas.addEventListener('pointerup',e=>{dragging=null;try{canvas.releasePointerCapture(e.pointerId)}catch{}});
   canvas.addEventListener('pointercancel',()=>dragging=null);
@@ -527,7 +542,7 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   root.getElementById('tfs').addEventListener('click',e=>{const b=e.target.closest('.tf');if(!b||b.dataset.tf===activeTf)return;load(b.dataset.tf).catch(err=>toast('Could not load timeframe: '+err.message))});
   els.undoBtn.addEventListener('click',()=>{if(!history.length)return;future.push(snapshot());restore(history.pop())});
   els.redoBtn.addEventListener('click',()=>{if(!future.length)return;history.push(snapshot());restore(future.pop())});
-  els.saveBtn.addEventListener('click',async()=>{els.saveBtn.disabled=true;els.saveBtn.textContent='Saving…';try{const res=await fetch(api('/api/fib-editor/save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeframe:activeTf,lowT:low.t,highT:high.t,takeProfitValue:alertValue})});const j=await res.json();if(!res.ok)throw new Error(j.error||'save_failed');data.anchorSource='manual';data.anchorRevision=(data.anchorRevision||1)+1;renderMeta();setDirty(false);toast(j.queued?'Saved — bot will apply it on the next poll.':'Manual pull + Take Profit alert saved.')}catch(err){toast('Save failed: '+err.message);setDirty(true)}finally{els.saveBtn.textContent='✓ Save Manual Pull';els.saveBtn.disabled=!dirty}});
+  els.saveBtn.addEventListener('click',async()=>{els.saveBtn.disabled=true;els.saveBtn.textContent='Saving…';try{const res=await fetch(api('/api/fib-editor/save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeframe:activeTf,lowT:low.t,highT:high.t,takeProfitValue:alertValue})});const j=await res.json();if(!res.ok)throw new Error(j.error||'save_failed');data.anchorSource='manual';data.anchorRevision=(data.anchorRevision||1)+1;renderMeta();setDirty(false);toast(j.queued?'Saved — bot will apply it on the next poll.':'Manual pull + Take Profit alert saved.')}catch(err){toast('Save failed: '+err.message);setDirty(true)}finally{els.saveBtn.textContent='✓ Save Pull + Alert';els.saveBtn.disabled=!dirty}});
   els.autoBtn.addEventListener('click',async()=>{if(!confirm('Revert this cycle to fresh automatic Fib detection?'))return;els.autoBtn.disabled=true;try{const res=await fetch(api('/api/fib-editor/auto'),{method:'POST'});const j=await res.json();if(!res.ok)throw new Error(j.error||'auto_failed');toast(j.queued?'Auto re-detection queued.':'Reverted to auto detection.');setTimeout(()=>location.reload(),1200)}catch(err){toast('Could not revert: '+err.message);els.autoBtn.disabled=false}});
   addEventListener('resize',()=>{resize();draw()});
   load(qs.get('tf')||null).catch(err=>{toast('Editor could not load: '+err.message);els.symbol.textContent='Fib editor unavailable';els.meta.textContent=err.message});
