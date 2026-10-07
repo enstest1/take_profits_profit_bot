@@ -9,13 +9,13 @@ import { fetchCandles, resolveTopPool } from './geckoTerminal.js';
 import { pairFromDexUrl, updateFibWatch } from './store.js';
 import { ensureDBSchema, loadDB } from '../dbStore.js';
 import { parseStorageKey } from '../chains.js';
-import { fetchDexPairFromPool } from '../dexPair.js';
+import { fetchDexPairOnChain } from '../dexPair.js';
 
 const EDIT_TTL_SEC = 14 * 24 * 60 * 60;
 const VALID_TF = new Set(['1m', '5m', '15m', '1h', '4h']);
 const DEMO_CHAIN = 'robinhood';
-const DEMO_POOL_ADDRESS = '0x109b383a42305dc48855b9b791c202002c6b391f';
-const DEMO_DEX_URL = 'https://dexscreener.com/robinhood/' + DEMO_POOL_ADDRESS;
+const DEMO_TOKEN_ADDRESS = '0x109b383a42305dc48855b9b791c202002c6b391f';
+const DEMO_DEX_URL = 'https://dexscreener.com/robinhood/' + DEMO_TOKEN_ADDRESS;
 
 function secret() {
   return process.env.FIB_EDITOR_SECRET || '';
@@ -205,18 +205,39 @@ function pickDemoAnchors(candles) {
 async function demoStateResponse(tf) {
   const pickedTf = VALID_TF.has(tf) ? tf : '5m';
 
-  // Use the exact ORBANCY pool from the DexScreener reference supplied for the
-  // demo so the candle bodies/wicks are genuine market OHLC, not synthetic art.
-  const pair = await fetchDexPairFromPool(DEMO_CHAIN, DEMO_POOL_ADDRESS, {
+  // The DexScreener URL identifies the ORBANCY TOKEN, not its LP contract.
+  // Resolve the token to its actual pair first, then request OHLC from that pool.
+  const pair = await fetchDexPairOnChain(DEMO_CHAIN, DEMO_TOKEN_ADDRESS, {
     retries: 2,
     timeoutMs: 10_000,
   });
   if (!pair) return { status: 502, body: { error: 'demo_pair_unavailable' } };
 
-  const got = await fetchCandles(DEMO_CHAIN, DEMO_POOL_ADDRESS, pickedTf, {
+  let pool = pair.pairAddress || null;
+  if (!pool) {
+    const resolved = await resolveTopPool(DEMO_CHAIN, DEMO_TOKEN_ADDRESS);
+    if (!resolved.error) pool = resolved.poolAddress;
+  }
+  if (!pool) return { status: 502, body: { error: 'demo_pool_unavailable' } };
+
+  let got = await fetchCandles(DEMO_CHAIN, pool, pickedTf, {
     limit: pickedTf === '1m' ? 180 : 120,
     fresh: true,
   });
+
+  // DexScreener and GeckoTerminal can occasionally disagree on the preferred
+  // pool. If the DexScreener pool is not indexed by GT, use GT's own top pool
+  // for the same ORBANCY token rather than blanking the public demo.
+  if (got.error || !got.candles?.length) {
+    const resolved = await resolveTopPool(DEMO_CHAIN, DEMO_TOKEN_ADDRESS);
+    if (!resolved.error && resolved.poolAddress && resolved.poolAddress.toLowerCase() !== String(pool).toLowerCase()) {
+      pool = resolved.poolAddress;
+      got = await fetchCandles(DEMO_CHAIN, pool, pickedTf, {
+        limit: pickedTf === '1m' ? 180 : 120,
+        fresh: true,
+      });
+    }
+  }
   if (got.error || !got.candles?.length) {
     return { status: 502, body: { error: got.error || 'demo_candles_unavailable' } };
   }
@@ -247,7 +268,7 @@ async function demoStateResponse(tf) {
       symbol: pair.symbol || 'ORBANCY',
       name: pair.name || 'ORBANCY',
       chain: DEMO_CHAIN,
-      address: pair.address || DEMO_POOL_ADDRESS,
+      address: pair.address || DEMO_TOKEN_ADDRESS,
       dexUrl: DEMO_DEX_URL,
       cycleId: 2,
       status: 'armed',
