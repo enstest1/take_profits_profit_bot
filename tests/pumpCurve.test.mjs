@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyLivePumpCap } from '../pumpfunApi.js';
+import { applyLivePumpCap, pumpSpotPrice } from '../pumpfunApi.js';
 
 test('applyLivePumpCap replaces the frozen curve price and drops the pin', () => {
   const token = {
@@ -19,4 +19,13 @@ test('applyLivePumpCap replaces the frozen curve price and drops the pin', () =>
   assert.equal(token.pairAddress, null);
   assert.equal(token.priceSource, 'pump-curve');
   assert.ok(Math.abs(Number(token.price) - 0.000195) < 1e-12);
+});
+
+test('pumpSpotPrice uses the live cap when the curve reserves are stale', () => {
+  const price = pumpSpotPrice({
+    usd_market_cap: 195_000,
+    total_supply: 1_000_000_000_000_000,
+    base_decimals: 6,
+  });
+  assert.ok(Math.abs(price - 0.000195) < 1e-12);
 });

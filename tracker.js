@@ -1,7 +1,7 @@
 /** Platform-neutral auto-track path — shared by Discord and Telegram shells. */
 import { shouldSilenceAlerts } from './alertGate.js';
 import { fetchDexPair, fetchDexPairOnChain, resolveEvmChainToken, tokenDataFromEvmPair, fetchDexPairFromPool } from './dexPair.js';
-import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice, applyLivePumpCap } from './pumpfunApi.js';
+import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice, applyLivePumpCap, pumpSpotPrice } from './pumpfunApi.js';
 import {
   loadDB,
   saveDB,
@@ -221,8 +221,10 @@ export async function fetchTokenData(address, messageText = '', { autotrack = fa
 
   const pump = await fetchPumpFun(address);
   if (pump) {
-    const solPrice = await fetchSolPrice();
-    const pumpPrice = solPrice ? calcPumpFunPrice(pump, solPrice) : null;
+    // usd_market_cap is the scan number. Curve math needs a SOL price and is wrong after migration.
+    const spot = pumpSpotPrice(pump);
+    const solPrice = spot ? null : await fetchSolPrice();
+    const pumpPrice = spot || (solPrice ? calcPumpFunPrice(pump, solPrice) : null);
     return {
       platform: 'pumpfun',
       chain: 'solana',

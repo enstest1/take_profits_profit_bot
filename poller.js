@@ -13,11 +13,12 @@ import { formatB20Badge } from './b20.js';
 import { batchFetch, batchFetchSolana } from './dexBatch.js';
 import { rateLimiter } from './rateLimiter.js';
 import { recordCycle, markSummaryPosted, markCycleStarted } from './cycleStats.js';
-import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice } from './pumpfunApi.js';
+import { fetchPumpFun, fetchSolPrice, calcPumpFunPrice, applyLivePumpCap, pumpSpotPrice } from './pumpfunApi.js';
 import { rebuildCallerStats, updateCallerStatsForUser } from './callerStats.js';
 import { deriveLifecycle, lifecyclePrefix } from './signals/lifecycle.js';
 import { currentMultipleFromLive, multiplesFromLive } from './signals/mult.js';
 import { rebaseCallAnchor, shouldIgnoreCallPin } from './signals/callAnchor.js';
+import { isFrozenPumpCurve } from './pairSelect.js';
 import { evaluateVelocity } from './signals/velocity.js';
 import { evaluateLiquidityDivergence } from './signals/liquidity.js';
 import { evaluateRetest, maybeResetRetestOnAth } from './signals/retest.js';
@@ -246,12 +247,17 @@ async function fetchLiveData(address, entry, solPriceUsd) {
       timeoutMs: 12_000,
     });
   }
+  if (dex?.price && isFrozenPumpCurve(dex)) {
+    // A migrated curve still has a USD print. That number is the old cap.
+    const pump = await fetchPumpFun(address);
+    if (!applyLivePumpCap(dex, pump)) dex = null;
+  }
   if (dex?.price) return dex;
 
-  if (solPriceUsd && entry?.platform === 'pumpfun') {
+  if (entry?.platform === 'pumpfun') {
     const pump = await fetchPumpFun(address);
     if (pump) {
-      const price = calcPumpFunPrice(pump, solPriceUsd);
+      const price = pumpSpotPrice(pump) || (solPriceUsd ? calcPumpFunPrice(pump, solPriceUsd) : null);
       return {
         price,
         marketCap: pump.usd_market_cap || null,

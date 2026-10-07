@@ -39,6 +39,23 @@ export async function fetchPumpFun(address) {
 }
 
 /**
+ * USD price from pump.fun's own market cap. Does not need a SOL/USD quote,
+ * and stays right after migration when the curve reserves are frozen.
+ * @param {object} pump
+ * @returns {number|null}
+ */
+export function pumpSpotPrice(pump) {
+  const mc = Number(pump?.usd_market_cap);
+  if (!(mc > 0)) return null;
+  const decimals = Number(pump?.base_decimals);
+  const dec = Number.isFinite(decimals) && decimals > 0 ? decimals : 6;
+  const rawSupply = Number(pump?.total_supply);
+  const supply = rawSupply > 0 ? rawSupply / 10 ** dec : 1e9;
+  const price = mc / supply;
+  return price > 0 ? price : null;
+}
+
+/**
  * Replace a frozen Dex curve print with pump.fun's live USD cap.
  * Dex keeps the pre-migration pair (Tweetcraft showed 49.8k while the scan was ~195k).
  * Drops pairAddress so that dead pool is not pinned.
@@ -47,14 +64,9 @@ export async function fetchPumpFun(address) {
  * @returns {boolean}
  */
 export function applyLivePumpCap(token, pump) {
+  const price = pumpSpotPrice(pump);
   const mc = Number(pump?.usd_market_cap);
-  if (!token || !(mc > 0)) return false;
-  const decimals = Number(pump.base_decimals);
-  const dec = Number.isFinite(decimals) && decimals > 0 ? decimals : 6;
-  const rawSupply = Number(pump.total_supply);
-  const supply = rawSupply > 0 ? rawSupply / 10 ** dec : 1e9;
-  const price = mc / supply;
-  if (!(price > 0)) return false;
+  if (!token || !(price > 0)) return false;
   token.price = String(price);
   token.marketCap = mc;
   token.fdv = mc;
