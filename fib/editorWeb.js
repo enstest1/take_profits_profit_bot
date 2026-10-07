@@ -120,7 +120,7 @@ function convertCandles(candles, fib) {
   }));
 }
 
-async function candlesFor(key, loc, tf, { fresh = false, limit = 220 } = {}) {
+async function candlesFor(key, loc, tf, { fresh = false, limit = 1000 } = {}) {
   const parsed = parseStorageKey(key);
   const chainId = (loc.entry.chain || parsed.chainId || '').toLowerCase();
   const address = loc.entry.address || parsed.address;
@@ -174,7 +174,7 @@ async function stateResponse(auth, tf) {
     return { status: 409, body: { error: 'cycle_changed', currentCycle: loc.fib.cycleId } };
   }
   const pickedTf = VALID_TF.has(tf) ? tf : (VALID_TF.has(loc.fib.timeframe) ? loc.fib.timeframe : '1h');
-  const got = await candlesFor(auth.key, loc, pickedTf, { fresh: true });
+  const got = await candlesFor(auth.key, loc, pickedTf, { fresh: true, limit: 1000 });
   return { status: 200, body: publicState(auth.key, loc, pickedTf, got.candles) };
 }
 
@@ -251,7 +251,7 @@ async function saveManual(auth, body) {
     return { status: 409, body: { error: 'cycle_changed', currentCycle: loc.fib.cycleId } };
   }
 
-  const got = await candlesFor(auth.key, loc, tf, { fresh: true, limit: 400 });
+  const got = await candlesFor(auth.key, loc, tf, { fresh: true, limit: 1000 });
   const lowC = got.candles.find((c) => Number(c.t) === lowT);
   const highC = got.candles.find((c) => Number(c.t) === highT);
   if (!lowC || !highC) return { status: 409, body: { error: 'anchor_candle_not_found' } };
@@ -452,8 +452,9 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
   function api(path, extra=''){const p=new URLSearchParams(qs); if(extra){const e=new URLSearchParams(extra); for(const [k,v] of e)p.set(k,v);} return path+'?'+p.toString();}
 
   async function load(tf){
-    els.saveBtn.disabled=true; activeTf=tf||activeTf||qs.get('tf')||'1h';
-    const res=await fetch(api('/api/fib-editor/state','tf='+encodeURIComponent(activeTf)),{cache:'no-store'});
+    els.saveBtn.disabled=true; activeTf=tf||activeTf||qs.get('tf')||null;
+    const extra=activeTf?'tf='+encodeURIComponent(activeTf):'';
+    const res=await fetch(api('/api/fib-editor/state',extra),{cache:'no-store'});
     const j=await res.json(); if(!res.ok) throw new Error(j.error||'load_failed');
     data=j; candles=j.candles||[]; activeTf=j.timeframe;
     low={...j.anchors.low}; high={...j.anchors.high};
@@ -502,9 +503,11 @@ button{font:inherit}.topbar{height:72px;border-bottom:1px solid var(--border);di
     const line=(v,col,label,w=1.3,dash=[])=>{const y=Y(v);ctx.save();ctx.strokeStyle=col;ctx.lineWidth=w;ctx.setLineDash(dash);ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(left+pw,y);ctx.stroke();ctx.setLineDash([]);ctx.font='700 12px system-ui';const text=label+'  '+fmt(v),tw=ctx.measureText(text).width+14;ctx.fillStyle='#071015';ctx.strokeStyle=col;ctx.lineWidth=1;roundRect(left+pw-tw-7,y-12,tw,23,5);ctx.fill();ctx.stroke();ctx.fillStyle=col;ctx.fillText(text,left+pw-tw,y+4);ctx.restore()};
     // Golden pocket
     ctx.fillStyle='rgba(245,217,10,.10)';ctx.fillRect(left,Math.min(Y(lv.gold),Y(lv.entry)),pw,Math.abs(Y(lv.gold)-Y(lv.entry)));
-    line(low.v,'#80919e','0.0');line(lv.entry,'#ff4f4f',String(data.ratios.entry),1.4);line(lv.gold,'#f5d90a',String(data.ratios.goldenUpper),1.6);line(high.v,'#dbe5eb','1.0',1.4);line(lv.tp1,'#4cff78','1.618',2.3);
-    // Movable notification trigger: visually distinct from the true 1.618.
+    line(low.v,'#80919e','0.0');line(lv.entry,'#ff4f4f',String(data.ratios.entry),1.4);line(lv.gold,'#f5d90a',String(data.ratios.goldenUpper),1.6);line(high.v,'#dbe5eb','1.0',1.4);
+    // Movable notification trigger is separate from the Fib extension. Draw it first
+    // so the fixed 1.618 remains visually dominant when both start at the same price.
     line(alertValue,'#52d7ff','TAKE PROFIT ALERT',2,[7,5]);
+    line(lv.tp1,'#4cff78','1.618',2.8);
     const li=idxForTime(low.t),hi=idxForTime(high.t),lx=X(li),ly=Y(low.v),hx=X(hi),hy=Y(high.v);
     ctx.save();ctx.strokeStyle='#9aa8b3';ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(hx,hy);ctx.stroke();ctx.setLineDash([]);[[lx,ly],[hx,hy]].forEach(([x,y])=>{ctx.fillStyle='#071015';ctx.strokeStyle='#4cff78';ctx.lineWidth=3;ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();ctx.stroke()});ctx.restore();
     // Current value
